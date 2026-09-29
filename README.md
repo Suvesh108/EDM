@@ -21,14 +21,22 @@
 
 <hr />
 
-## 📱 Android & Desktop (v0.6.7)
+## 📱 Android & Desktop (v0.6.8)
 
-VortexDownloader is an ultra-fast, universal downloading engine powered by a **Hybrid Architecture (Go Core + Python Media Extractor)** with dynamic multi-pipe streaming, native Android direct-to-disk storage, real-time IDM/FDM progress telemetry, 4-tier bot-guard evasion, and a streamlined 7-section Settings control center!
+VortexDownloader is an ultra-fast, universal downloading engine powered by a **Hybrid Architecture (Go Core + Python Media Extractor)** with dynamic multi-pipe streaming, dynamic work-stealing, native Android direct-to-disk storage, real-time IDM/FDM progress telemetry, 4-tier bot-guard evasion, and official browser extension integration!
 
-- **Download APK (v0.6.7)**: [**VortexDownloader-v0.6.7.apk**](release/VortexDownloader-v0.6.7.apk)
-- **Version**: `0.6.7` (Release v0.6.7)
+- **Download APK (v0.6.8)**: [**VortexDownloader-v0.6.8.apk**](release/VortexDownloader-v0.6.8.apk)
+- **Version**: `0.6.8` (Release v0.6.8)
 - **Package ID**: `io.vortexdownloader.app`
-- **What's New in v0.6.7**:
+- **What's New in v0.6.8**:
+  - ⚡ **Dynamic Work-Stealing Multi-Connection Engine**: Idle threads dynamically slice un-downloaded byte ranges in half from slower workers, eliminating tail latency on slow connections.
+  - 💤 **OS Sleep Prevention (Keepalive)**: Automatically inhibits Windows (`SetThreadExecutionState`) and macOS sleep while downloads are running.
+  - 🧲 **Live BitTorrent Tracker Scraping**: Automatically fetches and injects the latest high-speed public trackers from GitHub (`ngosang/trackerslist`).
+  - 🚀 **GitHub Release Turbo Mirrors**: Integrated CDN mirror routing (`ghproxy.net`, `mirror.ghproxy.com`, etc.) for high-speed release downloads.
+  - 📺 **HLS / M3U8 Adaptive Streaming Inspector**: Master & media playlist parsing with multi-bitrate variant extraction and AES-128 key detection.
+  - 🔌 **Aria2 JSON-RPC 2.0 Protocol Emulator**: Native `/jsonrpc` endpoint supporting `aria2.addUri`, `aria2.tellStatus`, and `aria2.tellActive`.
+  - 🧩 **Official Chromium Browser Extension (Manifest V3)**: Media sniffer, floating action capture widget, context menus, and one-tap send to Vortex.
+  - 📁 **Filename Conflict Resolution**: Configurable collision policy (`overwrite`, `rename`/`keep_both`).
   - 🚀 **Zero-RAM Native Downloader (`VortexNativePlugin`)**: Slices out JavaScript Base64 buffering and streams downloads directly to disk, completely eliminating Out-Of-Memory crashes on 100MB–1GB+ files.
   - 📁 **Public Storage & MediaStore Auto-Indexing**: Saves directly to `Download/VortexDownloader` so downloaded videos, songs, and files immediately appear in the user's Gallery, VLC, and File Manager.
   - 🎬 **One-Tap Play / Open & Share**: Added direct "Play / Open" and "Share" buttons to completed tasks in the dashboard.

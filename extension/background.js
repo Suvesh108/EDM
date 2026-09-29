@@ -114,7 +114,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const res = await fetch(`${target}/api/health`, { signal: AbortSignal.timeout(2500) });
         if (res.ok) {
           const data = await res.json();
-          sendResponse({ online: true, version: data.service || "v0.6.7" });
+          sendResponse({ online: true, version: data.service || "v0.6.8" });
         } else {
           sendResponse({ online: false });
         }

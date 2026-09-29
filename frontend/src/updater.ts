@@ -1,7 +1,7 @@
 import { Filesystem, Directory } from '@capacitor/filesystem';
 import { registerPlugin, Capacitor } from '@capacitor/core';
 
-export const APP_VERSION = 'v0.6.7';
+export const APP_VERSION = 'v0.6.8';
 
 export interface UpdateProgressData {
   percent: number;
