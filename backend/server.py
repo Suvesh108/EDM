@@ -27,9 +27,26 @@ from feature_packs.ftp_pack import FtpPack
 from feature_packs.github_pack import GitHubPack
 from feature_packs.huggingface_pack import HuggingFacePack
 from feature_packs.ed2k_pack import Ed2kPack
+from feature_packs.m3u8_pack import M3u8Pack
+from feature_packs.bili_pack import BiliPack
+from feature_packs.yt_dlp_pack import YtDlpPack
+from feature_packs.aria2_rpc import Aria2RpcService
 from plugins.plugin_manager import plugin_manager
+import keepalive
 
 from contextlib import asynccontextmanager
+
+def resolve_unique_path(directory: str, filename: str, policy: str = "rename") -> str:
+    """Resolve file name conflicts according to policy ('overwrite', 'rename', 'skip')."""
+    target = os.path.join(directory, filename)
+    if policy == "overwrite" or not os.path.exists(target):
+        return target
+    base, ext = os.path.splitext(filename)
+    counter = 1
+    while os.path.exists(target):
+        target = os.path.join(directory, f"{base} ({counter}){ext}")
+        counter += 1
+    return target
 
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
@@ -84,6 +101,10 @@ ftp_jobs: Dict[str, Dict[str, Any]] = {}
 github_pack = GitHubPack()
 huggingface_pack = HuggingFacePack()
 ed2k_pack = Ed2kPack()
+m3u8_pack = M3u8Pack()
+bili_pack = BiliPack()
+yt_dlp_pack = YtDlpPack()
+aria2_rpc_service = Aria2RpcService()
 
 def is_valid_external_url(raw_url: str) -> bool:
     try:
@@ -116,9 +137,19 @@ def add_job_log(job: Dict[str, Any], log_type: str, message: str):
 # 0. Health check
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "service": "VortexDownloader Universal Engine v0.6.6 (Python Core)"}
+    return {"status": "ok", "service": "VortexDownloader Universal Engine v0.6.7 (Python Core)"}
 
-# 1. Probe URL
+# Aria2 JSON-RPC 2.0 Compatibility Endpoint (for browser extensions)
+@app.post("/jsonrpc")
+@app.post("/api/jsonrpc")
+async def handle_jsonrpc(req: Request):
+    try:
+        body = await req.json()
+        return aria2_rpc_service.handle_request(body)
+    except Exception as e:
+        return {"jsonrpc": "2.0", "error": {"code": -32700, "message": f"Parse error: {str(e)}"}, "id": None}
+
+# 1. Probe URL with TLS Impersonation (Bypasses Cloudflare / Anti-Bot)
 @app.get("/api/probe")
 async def probe(url: str = Query(...)):
     if not is_valid_external_url(url):
@@ -133,9 +164,39 @@ async def probe(url: str = Query(...)):
             "isDirectFile": False
         }
 
+    # 1. Try TLS-impersonated browser probe via curl_cffi
+    try:
+        from curl_cffi import requests as cffi_requests
+        res = cffi_requests.head(url, impersonate="chrome120", timeout=10, allow_redirects=True)
+        content_length = int(res.headers.get("content-length", 0))
+        accept_ranges = res.headers.get("accept-ranges", "").lower() == "bytes"
+        content_type = res.headers.get("content-type", "application/octet-stream")
+
+        if content_length <= 0:
+            try:
+                res_range = cffi_requests.get(url, headers={"Range": "bytes=0-0"}, impersonate="chrome120", timeout=8)
+                cr = res_range.headers.get("content-range", "")
+                if "/" in cr:
+                    content_length = int(cr.split("/")[-1])
+                    accept_ranges = True
+            except Exception:
+                pass
+
+        is_direct = content_length > 0 and "text/html" not in content_type.lower()
+        return {
+            "type": "direct" if is_direct else "stream",
+            "supportsRanges": accept_ranges,
+            "contentLength": content_length,
+            "contentType": content_type,
+            "isDirectFile": is_direct
+        }
+    except Exception:
+        pass
+
+    # 2. Secondary fallback via httpx
     try:
         async with httpx.AsyncClient(timeout=6.0, follow_redirects=True) as client:
-            res = await client.head(url, headers={'User-Agent': 'Mozilla/5.0'})
+            res = await client.head(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/134.0.0.0 Safari/537.36'})
             content_length = int(res.headers.get("content-length", 0))
             accept_ranges = res.headers.get("accept-ranges") == "bytes"
             content_type = res.headers.get("content-type", "application/octet-stream")
@@ -157,37 +218,44 @@ async def probe(url: str = Query(...)):
             "isDirectFile": False
         }
 
-# 2. Extract Info
+# 2. Extract Info (Supports 4K, 2K, 1080p, 720p and direct stream metadata)
 @app.get("/api/info")
 async def get_info(url: str = Query(...)):
     if not is_valid_external_url(url):
         raise HTTPException(status_code=400, detail="Valid HTTP/HTTPS URL parameter is required.")
 
-    # Call extract_info in worker thread
     loop = asyncio.get_event_loop()
     try:
-        # Capture stdout from extract_info
-        import io
-        from contextlib import redirect_stdout
-        f = io.StringIO()
-        with redirect_stdout(f):
-            extract_info(url)
-        raw_output = f.getvalue().strip()
-        data = json.loads(raw_output)
-        if "error" in data:
+        # First try primary extractor
+        data = await loop.run_in_executor(None, extract_info, url)
+        if data and "error" not in data:
+            return data
+
+        # Fallback to extractor_service
+        try:
+            sys.path.insert(0, os.path.join(BASE_DIR, 'extractor'))
+            from extractor_service import perform_extraction
+            fallback_data = await loop.run_in_executor(None, perform_extraction, url)
+            if fallback_data:
+                return fallback_data
+        except Exception:
+            pass
+
+        if data and "error" in data:
             raise HTTPException(status_code=400, detail=data["error"])
-        return data
+        raise HTTPException(status_code=500, detail="Failed to parse metadata.")
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to extract media metadata: {str(e)}")
 
-# 3. Stream Extraction Download
+# 3. Stream Extraction Download (Thread-Safe Callback Progress)
 class DownloadPayload(BaseModel):
     url: str
     formatId: str
     title: str
     format: str
+    conflictPolicy: Optional[str] = "rename"
 
 @app.post("/api/download")
 async def trigger_download(payload: DownloadPayload, background_tasks: BackgroundTasks):
@@ -198,7 +266,7 @@ async def trigger_download(payload: DownloadPayload, background_tasks: Backgroun
     sanitized_title = re.sub(r'[^a-zA-Z0-9_-]', '_', payload.title)[:80]
     extension = re.sub(r'[^a-z0-9]', '', payload.format.lower())[:10] or 'mp4'
     file_name = f"{sanitized_title}_{job_id}.{extension}"
-    file_path = os.path.abspath(os.path.join(TEMP_DIR, file_name))
+    file_path = resolve_unique_path(TEMP_DIR, file_name, payload.conflictPolicy or "rename")
 
     job = {
         'id': job_id,
@@ -217,51 +285,28 @@ async def trigger_download(payload: DownloadPayload, background_tasks: Backgroun
     jobs[job_id] = job
     add_job_log(job, 'info', f"Initialized extraction for job {job_id}")
 
+    def on_job_progress(percent, speed, eta, status):
+        job['progress'] = int(percent)
+        job['speed'] = speed
+        job['eta'] = eta
+        if status == 'completed':
+            job['status'] = 'completed'
+            job['progress'] = 100
+            add_job_log(job, 'success', 'Download finished.')
+        elif status == 'stitching':
+            job['progress'] = 99
+            add_job_log(job, 'info', 'Multiplex container downloading completed. Compiling streams...')
+
     def run_download():
+        keepalive.hold()
         try:
-            # Custom stdout hook to capture progress lines
-            class ProgressStdout:
-                def write(self, text):
-                    lines = text.split('\n')
-                    for line in lines:
-                        clean = line.strip()
-                        if not clean:
-                            continue
-                        if clean.startswith('[PROGRESS]'):
-                            match = re.search(r'\[PROGRESS\]\s+([\d.]+)%\s+\|\s+SPEED:\s+([^\s]+ [^\s]+)\s+\|\s+ETA:\s+([^\s]+)', clean)
-                            if match:
-                                job['progress'] = int(float(match.group(1)))
-                                job['speed'] = match.group(2)
-                                job['eta'] = match.group(3)
-                            elif 'Stitching' in clean:
-                                job['progress'] = 99
-                                add_job_log(job, 'success', 'Multiplex container downloading completed. Compiling streams...')
-                        elif clean.startswith('[STATUS]'):
-                            add_job_log(job, 'info', clean.replace('[STATUS]', '').strip())
-                        elif clean.startswith('[SUCCESS]'):
-                            add_job_log(job, 'success', 'Download finished.')
-                            job['status'] = 'completed'
-                            job['progress'] = 100
-                        elif clean.startswith('[ERROR]'):
-                            err_msg = clean.replace('[ERROR]', '').strip()
-                            add_job_log(job, 'error', err_msg)
-                            job['status'] = 'error'
-                            job['error'] = err_msg
-
-                def flush(self):
-                    pass
-
-            old_stdout = sys.stdout
-            sys.stdout = ProgressStdout()
-            try:
-                download_media(payload.url, payload.formatId, file_path)
-            finally:
-                sys.stdout = old_stdout
+            download_media(payload.url, payload.formatId, file_path, progress_callback=on_job_progress)
 
             if job['status'] != 'completed' and not job.get('error'):
                 if os.path.exists(file_path):
                     job['status'] = 'completed'
                     job['progress'] = 100
+                    add_job_log(job, 'success', 'Download completed successfully.')
                 else:
                     job['status'] = 'error'
                     job['error'] = 'Download did not produce expected output file.'
@@ -269,6 +314,8 @@ async def trigger_download(payload: DownloadPayload, background_tasks: Backgroun
             job['status'] = 'error'
             job['error'] = str(e)
             add_job_log(job, 'error', str(e))
+        finally:
+            keepalive.release()
 
     background_tasks.add_task(run_download)
     return {"jobId": job_id}
@@ -308,6 +355,7 @@ class ChunkPayload(BaseModel):
     title: Optional[str] = 'direct_file'
     threads: Optional[int] = 16
     destinationDir: Optional[str] = None
+    conflictPolicy: Optional[str] = 'rename'
 
 @app.post("/api/chunk-download")
 async def chunk_download(payload: ChunkPayload, background_tasks: BackgroundTasks):
@@ -331,7 +379,8 @@ async def chunk_download(payload: ChunkPayload, background_tasks: BackgroundTask
         except Exception:
             target_dir = TEMP_DIR
 
-    file_path = os.path.abspath(os.path.join(target_dir, file_name))
+    file_path = resolve_unique_path(target_dir, file_name, payload.conflictPolicy or 'rename')
+    file_name = os.path.basename(file_path)
 
     initial_progress = {
         'totalBytes': 0,
@@ -367,6 +416,7 @@ async def chunk_download(payload: ChunkPayload, background_tasks: BackgroundTask
     }
 
     async def run_chunk():
+        keepalive.hold()
         try:
             await downloader.start()
         except Exception as e:
@@ -374,6 +424,8 @@ async def chunk_download(payload: ChunkPayload, background_tasks: BackgroundTask
                 chunk_jobs[job_id]['progress']['status'] = 'error'
                 chunk_jobs[job_id]['progress']['error'] = str(e)
                 on_prog(chunk_jobs[job_id]['progress'])
+        finally:
+            keepalive.release()
 
     background_tasks.add_task(run_chunk)
 
@@ -666,6 +718,12 @@ async def github_inspect(payload: UrlPayload):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/github/accelerate")
+async def github_accelerate(url: str = Query(...)):
+    if not is_valid_external_url(url):
+        raise HTTPException(status_code=400, detail="Valid GitHub URL required.")
+    return {"mirrors": github_pack.get_accelerated_urls(url)}
+
 # 9. Hugging Face Pack
 @app.post("/api/huggingface/inspect")
 async def huggingface_inspect(payload: UrlPayload):
@@ -700,6 +758,37 @@ async def ed2k_inspect(payload: UrlPayload):
         'type': 'ed2k',
         'info': info
     }
+
+# 11. Bilibili Pack
+@app.get("/api/bili/qr/generate")
+async def bili_qr_generate():
+    res = await bili_pack.generate_qr_login()
+    if not res.get('success'):
+        raise HTTPException(status_code=500, detail=res.get('error', 'Failed to generate QR code'))
+    return res
+
+@app.get("/api/bili/qr/poll")
+async def bili_qr_poll(qrcodeKey: str = Query(...)):
+    return await bili_pack.poll_qr_status(qrcodeKey)
+
+@app.get("/api/bili/resolutions")
+async def bili_resolutions():
+    return {"resolutions": bili_pack.get_supported_resolutions()}
+
+# 12. M3U8 Adaptive Streaming Pack
+@app.post("/api/m3u8/inspect")
+async def m3u8_inspect(payload: UrlPayload):
+    if not is_valid_external_url(payload.url):
+        raise HTTPException(status_code=400, detail="Valid URL required.")
+    try:
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+            res = await client.get(payload.url)
+            if res.status_code != 200:
+                raise HTTPException(status_code=res.status_code, detail="Failed to fetch m3u8 manifest")
+            info = m3u8_pack.parse_manifest(res.text, payload.url)
+            return {"type": "m3u8", **info}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 # 11. Plugins
 @app.get("/api/plugins")

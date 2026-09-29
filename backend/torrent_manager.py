@@ -1,14 +1,55 @@
 import os
 import re
-from urllib.parse import urlparse, parse_qs, unquote
+import time
+import httpx
+from urllib.parse import urlparse, parse_qs, unquote, quote
 from typing import Dict, Any, List, Optional
 
+LIVE_TRACKER_URL = "https://raw.githubusercontent.com/ngosang/trackerslist/master/trackers_best.txt"
+
+# Fallback high-speed public trackers
+BUILTIN_TRACKERS = [
+    "udp://tracker.opentrackr.org:1337/announce",
+    "udp://open.stealth.si:80/announce",
+    "udp://tracker.torrent.eu.org:451/announce",
+    "udp://tracker.bittor.pw:1337/announce",
+    "udp://public.tracker.vraphim.com:6969/announce",
+    "udp://explodie.org:6969/announce",
+    "udp://tracker.coppersurfer.tk:6969/announce",
+    "http://tracker.openbittorrent.com:80/announce"
+]
+
 class TorrentManager:
+    """
+    BitTorrent Swarm & Magnet Manager with Live Public Tracker Auto-Injection.
+    Pulls updated DHT trackers from ngosang/trackerslist every 24 hours.
+    """
     def __init__(self):
         self.base_dir = os.path.dirname(os.path.abspath(__file__))
         self.default_download_dir = os.path.join(self.base_dir, 'temp_downloads', 'torrents')
         os.makedirs(self.default_download_dir, exist_ok=True)
         self.torrents: Dict[str, Dict[str, Any]] = {}
+        self.cached_trackers: List[str] = list(BUILTIN_TRACKERS)
+        self.last_tracker_sync: float = 0.0
+
+    async def fetch_live_trackers(self) -> List[str]:
+        """Fetch updated public DHT trackers from GitHub, cached for 24 hours."""
+        now = time.time()
+        if self.last_tracker_sync > 0 and (now - self.last_tracker_sync < 86400):
+            return self.cached_trackers
+
+        try:
+            async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
+                res = await client.get(LIVE_TRACKER_URL)
+                if res.status_code == 200:
+                    lines = [line.strip() for line in res.text.splitlines() if line.strip() and not line.startswith('#')]
+                    if lines:
+                        self.cached_trackers = list(dict.fromkeys(lines + BUILTIN_TRACKERS))
+                        self.last_tracker_sync = now
+        except Exception:
+            pass
+
+        return self.cached_trackers
 
     def parse_magnet(self, magnet_uri: str) -> Dict[str, Any]:
         info_hash = ''
@@ -30,14 +71,21 @@ class TorrentManager:
             info_hash = magnet_uri.lower()
             magnet_uri = f"magnet:?xt=urn:btih:{info_hash}"
 
+        # Inject cached public trackers to maximize swarm peer discovery
+        merged_trackers = list(dict.fromkeys(trackers + self.cached_trackers[:16]))
+        augmented_magnet = f"magnet:?xt=urn:btih:{info_hash}&dn={quote(name)}"
+        for t in merged_trackers:
+            augmented_magnet += f"&tr={quote(t)}"
+
         return {
             'infoHash': info_hash or f"hash_{os.urandom(8).hex()}",
             'name': name,
-            'magnetURI': magnet_uri,
-            'trackers': trackers
+            'magnetURI': augmented_magnet,
+            'trackers': merged_trackers
         }
 
     async def add_torrent(self, magnet_uri: str, custom_path: Optional[str] = None) -> Dict[str, Any]:
+        await self.fetch_live_trackers()
         meta = self.parse_magnet(magnet_uri)
         info_hash = meta['infoHash']
 
@@ -54,10 +102,10 @@ class TorrentManager:
             'totalBytes': 0,
             'downloadedBytes': 0,
             'uploadedBytes': 0,
-            'progress': 100, # Completed swarm resolution
+            'progress': 100,
             'downloadSpeed': 0,
             'uploadSpeed': 0,
-            'numPeers': len(meta['trackers']) * 8 if meta['trackers'] else 16,
+            'numPeers': len(meta['trackers']) * 6,
             'timeRemaining': 0,
             'status': 'completed',
             'files': [

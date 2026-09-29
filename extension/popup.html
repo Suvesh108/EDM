@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Vortex Downloader</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="popup-container">
+    <!-- Header -->
+    <header class="header">
+      <div class="logo-group">
+        <img src="icons/icon32.png" alt="Vortex" class="logo-icon">
+        <div class="title-meta">
+          <span class="app-title">VORTEX<span class="highlight">CORE</span></span>
+          <span class="app-ver">v0.6.7 Extension</span>
+        </div>
+      </div>
+      <div id="statusBadge" class="status-badge checking">
+        <span class="status-dot"></span>
+        <span id="statusText">Checking...</span>
+      </div>
+    </header>
+
+    <!-- Navigation Tabs -->
+    <div class="nav-tabs">
+      <button class="tab-btn active" data-tab="snifferTab">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"></circle>
+          <polygon points="10 8 16 12 10 16 10 8"></polygon>
+        </svg>
+        Page Media
+      </button>
+      <button class="tab-btn" data-tab="quickTab">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+          <polyline points="7 10 12 15 17 10"></polyline>
+          <line x1="12" y1="15" x2="12" y2="3"></line>
+        </svg>
+        Quick URL
+      </button>
+      <button class="tab-btn" data-tab="settingsTab">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+        </svg>
+        Settings
+      </button>
+    </div>
+
+    <!-- Tab 1: Page Sniffer -->
+    <div id="snifferTab" class="tab-content active">
+      <div class="action-bar">
+        <span class="section-title">Detected Media Streams</span>
+        <button id="rescanBtn" class="small-btn">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <polyline points="23 4 23 10 17 10"></polyline>
+            <polyline points="1 20 1 14 7 14"></polyline>
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+          </svg>
+          Rescan
+        </button>
+      </div>
+
+      <div id="mediaList" class="media-list">
+        <div class="empty-state">
+          <span>Scanning current tab for media...</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab 2: Quick URL -->
+    <div id="quickTab" class="tab-content">
+      <div class="form-group">
+        <label for="quickUrlInput">Target Media / Stream URL</label>
+        <textarea id="quickUrlInput" placeholder="Paste YouTube, Video, Direct File, or Magnet URL..." rows="3"></textarea>
+      </div>
+
+      <div class="form-group">
+        <label for="qualitySelect">Preferred Quality / Preset</label>
+        <select id="qualitySelect">
+          <option value="best">⚡ Best Available (4K / 2K / 1080p)</option>
+          <option value="1080">1080p FHD (.mp4)</option>
+          <option value="720">720p HD (.mp4)</option>
+          <option value="bestaudio">HQ Audio MP3 (320 kbps)</option>
+          <option value="bestaudio-m4a">Lossless Audio M4A (192 kbps)</option>
+        </select>
+      </div>
+
+      <button id="quickDownloadBtn" class="primary-btn">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+          <polyline points="7 10 12 15 17 10"></polyline>
+          <line x1="12" y1="15" x2="12" y2="3"></line>
+        </svg>
+        Download with Vortex
+      </button>
+      <div id="quickFeedback" class="feedback-msg"></div>
+    </div>
+
+    <!-- Tab 3: Settings -->
+    <div id="settingsTab" class="tab-content">
+      <div class="setting-row">
+        <div class="setting-info">
+          <span class="setting-title">Intercept Browser Downloads</span>
+          <span class="setting-desc">Auto-forward standard file downloads to Vortex</span>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="interceptToggle">
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <span class="setting-title">Floating Download Button</span>
+          <span class="setting-desc">Show quick download button on hover over videos</span>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="floatingBtnToggle">
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="form-group" style="margin-top: 12px;">
+        <label for="backendInput">Vortex Engine Backend URL</label>
+        <input type="text" id="backendInput" value="http://localhost:8000">
+      </div>
+
+      <button id="saveSettingsBtn" class="secondary-btn">Save Settings</button>
+    </div>
+
+    <!-- Footer -->
+    <footer class="footer">
+      <button id="openWebAppBtn" class="link-btn">
+        <span>Open Vortex Web Interface</span>
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+          <polyline points="15 3 21 3 21 9"></polyline>
+          <line x1="10" y1="14" x2="21" y2="3"></line>
+        </svg>
+      </button>
+    </footer>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

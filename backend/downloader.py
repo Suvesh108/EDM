@@ -66,6 +66,10 @@ def get_cookie_opts():
         'Sec-CH-UA-Platform': '"Windows"',
     }
 
+    # Remote components to pull up-to-date JS player decryptors
+    cookie_opts['remote_components'] = {'ejs:github'}
+    cookie_opts['js_runtimes'] = {'node': {}}
+
     # 1. Custom cookies.txt path from env or local backend dir
     cookie_file = os.getenv('YTDLP_COOKIES_PATH', 'cookies.txt')
     if os.path.isfile(cookie_file):
@@ -205,51 +209,50 @@ def extract_info(url):
                 "originalUrl": url,
                 "formats": parsed_formats
             }
-            print(json.dumps(result))
+            return result
             
     except Exception as e:
-        print(json.dumps({"error": str(e)}))
+        return {"error": str(e)}
 
-_stream_progress_state = {'last_percent': 0.0}
-
-def download_progress_hook(d):
-    if d['status'] == 'downloading':
-        total = d.get('total_bytes') or d.get('total_bytes_estimate') or 0
-        downloaded = d.get('downloaded_bytes') or 0
-        
-        raw_percent = 0.0
-        if total > 0:
-            raw_percent = (downloaded / total) * 100.0
+def create_progress_hook(progress_callback=None):
+    last_percent = [0.0]
+    def hook(d):
+        if d['status'] == 'downloading':
+            total = d.get('total_bytes') or d.get('total_bytes_estimate') or 0
+            downloaded = d.get('downloaded_bytes') or 0
+            raw_percent = 0.0
+            if total > 0:
+                raw_percent = (downloaded / total) * 100.0
+                
+            info = d.get('info_dict') or {}
+            vcodec = info.get('vcodec')
+            acodec = info.get('acodec')
             
-        # Detect if this is video-only or audio-only in a multi-stream download
-        info = d.get('info_dict') or {}
-        vcodec = info.get('vcodec')
-        acodec = info.get('acodec')
-        
-        if vcodec and vcodec != 'none' and acodec == 'none':
-            # Video stream: 0% to 88% of total package
-            effective_percent = min(88.0, raw_percent * 0.88)
-        elif acodec and acodec != 'none' and (not vcodec or vcodec == 'none'):
-            # Audio stream: 88% to 99% of total package
-            effective_percent = min(99.0, 88.0 + (raw_percent * 0.11))
-        else:
-            effective_percent = min(99.0, raw_percent)
+            if vcodec and vcodec != 'none' and acodec == 'none':
+                effective_percent = min(88.0, raw_percent * 0.88)
+            elif acodec and acodec != 'none' and (not vcodec or vcodec == 'none'):
+                effective_percent = min(99.0, 88.0 + (raw_percent * 0.11))
+            else:
+                effective_percent = min(99.0, raw_percent)
+                
+            if effective_percent > last_percent[0]:
+                last_percent[0] = effective_percent
+            else:
+                effective_percent = last_percent[0]
+                
+            speed = d.get('speed')
+            speed_str = format_speed(speed)
+            eta = d.get('eta')
+            eta_str = f"{int(eta)}s" if eta else "--"
             
-        if effective_percent > _stream_progress_state['last_percent']:
-            _stream_progress_state['last_percent'] = effective_percent
-        else:
-            effective_percent = _stream_progress_state['last_percent']
-            
-        speed = d.get('speed')
-        speed_str = format_speed(speed)
-        
-        eta = d.get('eta')
-        eta_str = f"{eta}s" if eta else "Unknown"
-        
-        # Output clean parsing markers for server
-        print(f"[PROGRESS] {effective_percent:.1f}% | SPEED: {speed_str} | ETA: {eta_str}", flush=True)
-    elif d['status'] == 'finished':
-        print("[PROGRESS] 99.0% | Stitching and compiling streams...", flush=True)
+            if progress_callback:
+                progress_callback(round(effective_percent, 1), speed_str, eta_str, 'downloading')
+            print(f"[PROGRESS] {effective_percent:.1f}% | SPEED: {speed_str} | ETA: {eta_str}", flush=True)
+        elif d['status'] == 'finished':
+            if progress_callback:
+                progress_callback(99.0, 'Muxing', '0s', 'stitching')
+            print("[PROGRESS] 99.0% | Stitching and compiling streams...", flush=True)
+    return hook
 
 def ensure_mp4_compatibility(file_path):
     """Ensures MP4 has H.264/AAC and +faststart so any native media player plays it smoothly without jitter."""
@@ -286,7 +289,7 @@ def ensure_mp4_compatibility(file_path):
     except Exception as e:
         print(f"[WARNING] Compatibility check warning: {e}", flush=True)
 
-def download_media(url, format_id, output_path):
+def download_media(url, format_id, output_path, progress_callback=None):
     # Setup download options
     output_path = os.path.abspath(output_path)
     base_dir = os.path.dirname(output_path)
@@ -295,12 +298,9 @@ def download_media(url, format_id, output_path):
 
     format_id_str = str(format_id).strip()
     is_audio = any(a in format_id_str.lower() for a in ['audio', 'mp3', 'm4a', 'aac']) or output_path.lower().endswith(('.mp3', '.m4a'))
-    
-    global _stream_progress_state
-    _stream_progress_state['last_percent'] = 0.0
 
     ydl_opts = {
-        'progress_hooks': [download_progress_hook],
+        'progress_hooks': [create_progress_hook(progress_callback)],
         'outtmpl': outtmpl_path,
         'quiet': True,
         'no_warnings': True,
@@ -407,7 +407,8 @@ if __name__ == "__main__":
     
     if cmd == "info":
         url = sys.argv[2]
-        extract_info(url)
+        res = extract_info(url)
+        print(json.dumps(res))
     elif cmd == "download":
         if len(sys.argv) < 5:
             print("Usage: python downloader.py download [url] [format_id] [output_path]")

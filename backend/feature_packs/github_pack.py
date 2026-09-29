@@ -92,3 +92,20 @@ class GitHubPack:
                 'zipballUrl': data.get('zipball_url'),
                 'assets': assets
             }
+
+    MIRRORS = [
+        "https://ghproxy.net/",
+        "https://mirror.ghproxy.com/",
+        "https://gh-proxy.com/",
+        "https://hub.gitmirror.com/"
+    ]
+
+    def get_accelerated_urls(self, raw_url: str) -> List[Dict[str, str]]:
+        """Return direct URL along with high-speed CDN acceleration mirrors."""
+        res = [{'label': 'Direct (GitHub Global CDN)', 'url': raw_url}]
+        for m in self.MIRRORS:
+            res.append({
+                'label': f"Turbo Mirror ({urlparse(m).hostname})",
+                'url': f"{m}{raw_url}"
+            })
+        return res

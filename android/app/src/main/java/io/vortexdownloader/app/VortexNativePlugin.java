@@ -64,6 +64,10 @@ public class VortexNativePlugin extends Plugin {
             request.setDescription("Vortex Downloader High-Speed Stream");
             request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
             
+            // Add browser stealth headers to evade bot/CDN block
+            request.addRequestHeader("User-Agent", "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Mobile Safari/537.36");
+            request.addRequestHeader("Accept", "*/*");
+
             // Allow mobile network and Wi-Fi
             request.setAllowedOverMetered(true);
             request.setAllowedOverRoaming(true);
@@ -132,7 +136,9 @@ public class VortexNativePlugin extends Plugin {
                 URL url = new URL(downloadUrl);
                 conn = (HttpURLConnection) url.openConnection();
                 conn.setInstanceFollowRedirects(true);
-                conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36");
+                conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Mobile Safari/537.36");
+                conn.setRequestProperty("Accept", "*/*");
+                conn.setRequestProperty("Accept-Language", "en-US,en;q=0.9");
                 conn.connect();
 
                 // Handle redirects
@@ -147,7 +153,9 @@ public class VortexNativePlugin extends Plugin {
                     url = new URL(loc);
                     conn = (HttpURLConnection) url.openConnection();
                     conn.setInstanceFollowRedirects(true);
-                    conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36");
+                    conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Mobile Safari/537.36");
+                    conn.setRequestProperty("Accept", "*/*");
+                    conn.setRequestProperty("Accept-Language", "en-US,en;q=0.9");
                     conn.connect();
                     status = conn.getResponseCode();
                     redirects++;

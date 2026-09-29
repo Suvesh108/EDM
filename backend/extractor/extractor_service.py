@@ -65,6 +65,8 @@ def get_base_opts():
         'quiet': True,
         'no_warnings': True,
         'noplaylist': True,
+        # Remote components to pull up-to-date JS player decryptors
+        'remote_components': {'ejs:github'},
         # Enable Node.js for YouTube nsig signature deciphering (enables 720p, 1080p, 2K, 4K)
         'js_runtimes': {'node': {}},
         'http_headers': {
@@ -143,119 +145,119 @@ def perform_extraction(url):
     if not info:
         raise Exception("No metadata returned by yt-dlp")
 
-        # If search result or playlist entry
-        if 'entries' in info and info['entries']:
-            info = info['entries'][0]
+    # If search result or playlist entry
+    if 'entries' in info and info['entries']:
+        info = info['entries'][0]
 
-        title = info.get('title') or 'Extracted Media'
-        duration = format_duration(info.get('duration'))
-        creator = info.get('uploader') or info.get('channel') or info.get('creator') or 'Web Stream'
+    title = info.get('title') or 'Extracted Media'
+    duration = format_duration(info.get('duration'))
+    creator = info.get('uploader') or info.get('channel') or info.get('creator') or 'Web Stream'
 
-        thumbnails = info.get('thumbnails', [])
-        thumbnail = thumbnails[-1].get('url', '') if thumbnails else info.get('thumbnail', '')
+    thumbnails = info.get('thumbnails', [])
+    thumbnail = thumbnails[-1].get('url', '') if thumbnails else info.get('thumbnail', '')
 
-        formats_list = info.get('formats', [])
-        parsed_formats = []
+    formats_list = info.get('formats', [])
+    parsed_formats = []
 
-        # Filter video formats with height
-        video_formats = [f for f in formats_list if f.get('height') and f.get('vcodec') != 'none']
+    # Filter video formats with height
+    video_formats = [f for f in formats_list if f.get('height') and f.get('vcodec') != 'none']
 
-        # Sort descending by height, favoring h264/avc codecs for universal compatibility
-        def sort_key(f):
-            h = f.get('height') or 0
-            vcodec = (f.get('vcodec') or '').lower()
-            is_h264 = 1 if (vcodec.startswith(('avc1', 'h264', 'mp4v')) or 'h264' in vcodec) else 0
-            tbr = f.get('tbr') or 0
-            return (h, is_h264, tbr)
+    # Sort descending by height, favoring h264/avc codecs for universal compatibility
+    def sort_key(f):
+        h = f.get('height') or 0
+        vcodec = (f.get('vcodec') or '').lower()
+        is_h264 = 1 if (vcodec.startswith(('avc1', 'h264', 'mp4v')) or 'h264' in vcodec) else 0
+        tbr = f.get('tbr') or 0
+        return (h, is_h264, tbr)
 
-        video_formats.sort(key=sort_key, reverse=True)
-        seen_buckets = set()
+    video_formats.sort(key=sort_key, reverse=True)
+    seen_buckets = set()
 
-        for f in video_formats:
-            height = f.get('height')
-            if not height:
-                continue
+    for f in video_formats:
+        height = f.get('height')
+        if not height:
+            continue
 
-            if height >= 2160:
-                res_label = "4K UHD (2160p)"
-                res_bucket = 2160
-            elif height >= 1440:
-                res_label = "2K QHD (1440p)"
-                res_bucket = 1440
-            elif height >= 1080:
-                res_label = "1080p FHD"
-                res_bucket = 1080
-            elif height >= 720:
-                res_label = "720p HD"
-                res_bucket = 720
-            elif height >= 480:
-                res_label = "480p SD"
-                res_bucket = 480
-            elif height >= 360:
-                res_label = "360p"
-                res_bucket = 360
-            elif height >= 240:
-                res_label = "240p"
-                res_bucket = 240
-            else:
-                res_label = f"{height}p"
-                res_bucket = height
+        if height >= 2160:
+            res_label = "4K UHD (2160p)"
+            res_bucket = 2160
+        elif height >= 1440:
+            res_label = "2K QHD (1440p)"
+            res_bucket = 1440
+        elif height >= 1080:
+            res_label = "1080p FHD"
+            res_bucket = 1080
+        elif height >= 720:
+            res_label = "720p HD"
+            res_bucket = 720
+        elif height >= 480:
+            res_label = "480p SD"
+            res_bucket = 480
+        elif height >= 360:
+            res_label = "360p"
+            res_bucket = 360
+        elif height >= 240:
+            res_label = "240p"
+            res_bucket = 240
+        else:
+            res_label = f"{height}p"
+            res_bucket = height
 
-            if res_bucket in seen_buckets:
-                continue
-            seen_buckets.add(res_bucket)
+        if res_bucket in seen_buckets:
+            continue
+        seen_buckets.add(res_bucket)
 
-            vsize = f.get('filesize') or f.get('filesize_approx')
-            asize = 128 * 1024 * (info.get('duration', 0) or 0) / 8
-            total_size = (vsize + asize) if vsize else None
-
-            parsed_formats.append({
-                "id": str(f.get('format_id')),
-                "format": "MP4",
-                "resolution": res_label,
-                "size": format_size(total_size),
-                "bitrate": f"{int(f.get('tbr', 0))} kbps" if f.get('tbr') else "Variable",
-                "directUrl": f.get('url', ''),
-                "targetExtension": "mp4"
-            })
-
-        if not parsed_formats:
-            parsed_formats.append({
-                "id": "best",
-                "format": "MP4",
-                "resolution": "Best Video Stream",
-                "size": "Adaptive Stream",
-                "bitrate": "Variable",
-                "directUrl": info.get('url', ''),
-                "targetExtension": "mp4"
-            })
+        vsize = f.get('filesize') or f.get('filesize_approx')
+        asize = 128 * 1024 * (info.get('duration', 0) or 0) / 8
+        total_size = (vsize + asize) if vsize else None
 
         parsed_formats.append({
-            "id": "bestaudio",
-            "format": "MP3",
-            "resolution": "Audio 320kbps (MP3)",
-            "size": format_size(320 * 1024 * (info.get('duration', 0) or 0) / 8) if info.get('duration') else "Adaptive Size",
-            "bitrate": "320 kbps",
-            "targetExtension": "mp3"
-        })
-        parsed_formats.append({
-            "id": "bestaudio-m4a",
-            "format": "M4A",
-            "resolution": "Audio 192kbps (AAC/M4A)",
-            "size": format_size(192 * 1024 * (info.get('duration', 0) or 0) / 8) if info.get('duration') else "Adaptive Size",
-            "bitrate": "192 kbps",
-            "targetExtension": "m4a"
+            "id": str(f.get('format_id')),
+            "format": "MP4",
+            "resolution": res_label,
+            "size": format_size(total_size),
+            "bitrate": f"{int(f.get('tbr', 0))} kbps" if f.get('tbr') else "Variable",
+            "directUrl": f.get('url', ''),
+            "targetExtension": "mp4"
         })
 
-        return {
-            "title": title,
-            "duration": duration,
-            "creator": creator,
-            "thumbnail": thumbnail,
-            "originalUrl": url,
-            "formats": parsed_formats,
-            "isLive": info.get('is_live', False)
-        }
+    if not parsed_formats:
+        parsed_formats.append({
+            "id": "best",
+            "format": "MP4",
+            "resolution": "Best Video Stream",
+            "size": "Adaptive Stream",
+            "bitrate": "Variable",
+            "directUrl": info.get('url', ''),
+            "targetExtension": "mp4"
+        })
+
+    parsed_formats.append({
+        "id": "bestaudio",
+        "format": "MP3",
+        "resolution": "Audio 320kbps (MP3)",
+        "size": format_size(320 * 1024 * (info.get('duration', 0) or 0) / 8) if info.get('duration') else "Adaptive Size",
+        "bitrate": "320 kbps",
+        "targetExtension": "mp3"
+    })
+    parsed_formats.append({
+        "id": "bestaudio-m4a",
+        "format": "M4A",
+        "resolution": "Audio 192kbps (AAC/M4A)",
+        "size": format_size(192 * 1024 * (info.get('duration', 0) or 0) / 8) if info.get('duration') else "Adaptive Size",
+        "bitrate": "192 kbps",
+        "targetExtension": "m4a"
+    })
+
+    return {
+        "title": title,
+        "duration": duration,
+        "creator": creator,
+        "thumbnail": thumbnail,
+        "originalUrl": url,
+        "formats": parsed_formats,
+        "isLive": info.get('is_live', False)
+    }
 
 # In-memory progress tracker
 live_jobs = {}

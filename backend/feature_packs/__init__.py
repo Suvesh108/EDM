@@ -2,5 +2,18 @@ from .ftp_pack import FtpPack
 from .github_pack import GitHubPack
 from .huggingface_pack import HuggingFacePack
 from .ed2k_pack import Ed2kPack
+from .m3u8_pack import M3u8Pack
+from .bili_pack import BiliPack
+from .yt_dlp_pack import YtDlpPack
+from .aria2_rpc import Aria2RpcService
 
-__all__ = ["FtpPack", "GitHubPack", "HuggingFacePack", "Ed2kPack"]
+__all__ = [
+    "FtpPack",
+    "GitHubPack",
+    "HuggingFacePack",
+    "Ed2kPack",
+    "M3u8Pack",
+    "BiliPack",
+    "YtDlpPack",
+    "Aria2RpcService"
+]

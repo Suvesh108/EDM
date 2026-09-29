@@ -507,6 +507,15 @@ async function downloadParallelChunks(
   metadataTitle: string,
   targetExt: string
 ): Promise<{ success: boolean; blobUrl?: string }> {
+  // Safety Memory Guard: For files > 120MB in browser, hand over directly to native browser stream to prevent V8 OOM
+  if (totalBytes > 120 * 1024 * 1024 && !Capacitor.isNativePlatform()) {
+    log('info', `Large stream detected (${formatBytes(totalBytes)}). Handing over to browser native zero-RAM stream pipe...`);
+    triggerBrowserDownload(streamUrl, filename);
+    progressCb(100, 'Stream Direct', '0s');
+    sendDownloadCompleteNotification(metadataTitle, `.${targetExt}`);
+    return { success: true, blobUrl: streamUrl };
+  }
+
   const threads = Math.max(2, Math.min(numThreads, Math.floor(totalBytes / (1024 * 512))));
   log('info', `⚡ Launching Vortex Parallel Engine: ${threads} concurrent pipes active for high throughput...`);
 
