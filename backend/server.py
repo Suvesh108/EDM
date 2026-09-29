@@ -28,7 +28,6 @@ from feature_packs.github_pack import GitHubPack
 from feature_packs.huggingface_pack import HuggingFacePack
 from feature_packs.ed2k_pack import Ed2kPack
 from feature_packs.m3u8_pack import M3u8Pack
-from feature_packs.bili_pack import BiliPack
 from feature_packs.yt_dlp_pack import YtDlpPack
 from feature_packs.aria2_rpc import Aria2RpcService
 from plugins.plugin_manager import plugin_manager
@@ -102,7 +101,6 @@ github_pack = GitHubPack()
 huggingface_pack = HuggingFacePack()
 ed2k_pack = Ed2kPack()
 m3u8_pack = M3u8Pack()
-bili_pack = BiliPack()
 yt_dlp_pack = YtDlpPack()
 aria2_rpc_service = Aria2RpcService()
 
@@ -759,23 +757,7 @@ async def ed2k_inspect(payload: UrlPayload):
         'info': info
     }
 
-# 11. Bilibili Pack
-@app.get("/api/bili/qr/generate")
-async def bili_qr_generate():
-    res = await bili_pack.generate_qr_login()
-    if not res.get('success'):
-        raise HTTPException(status_code=500, detail=res.get('error', 'Failed to generate QR code'))
-    return res
-
-@app.get("/api/bili/qr/poll")
-async def bili_qr_poll(qrcodeKey: str = Query(...)):
-    return await bili_pack.poll_qr_status(qrcodeKey)
-
-@app.get("/api/bili/resolutions")
-async def bili_resolutions():
-    return {"resolutions": bili_pack.get_supported_resolutions()}
-
-# 12. M3U8 Adaptive Streaming Pack
+# 11. M3U8 Adaptive Streaming Pack
 @app.post("/api/m3u8/inspect")
 async def m3u8_inspect(payload: UrlPayload):
     if not is_valid_external_url(payload.url):

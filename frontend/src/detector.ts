@@ -110,7 +110,6 @@ export function detectFileCategory(url: string): CategorySpec {
     cleanUrl.includes('vimeo.com') ||
     cleanUrl.includes('dailymotion.com') ||
     cleanUrl.includes('twitch.tv') ||
-    cleanUrl.includes('bilibili.com') ||
     cleanUrl.includes('reddit.com/r/') ||
     cleanUrl.includes('facebook.com') ||
     cleanUrl.includes('fb.watch')
