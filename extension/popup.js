@@ -146,7 +146,7 @@ document.addEventListener("DOMContentLoaded", () => {
     chrome.storage.sync.set({
       interceptDownloads: interceptToggle.checked,
       showFloatingButton: floatingBtnToggle.checked,
-      backendUrl: backendInput.value.trim() || "http://localhost:8000"
+      backendUrl: backendInput.value.trim() || "http://localhost:5001"
     }, () => {
       saveSettingsBtn.textContent = "Saved ✓";
       setTimeout(() => saveSettingsBtn.textContent = "Save Settings", 1500);
@@ -157,7 +157,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // 6. Open Web App
   openWebAppBtn.addEventListener("click", () => {
     chrome.storage.sync.get("backendUrl", ({ backendUrl }) => {
-      const url = "http://localhost:5173";
+      const url = "http://localhost:3000";
       chrome.tabs.create({ url });
     });
   });

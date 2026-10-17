@@ -1,27 +1,36 @@
 import re
 import httpx
 from urllib.parse import urlparse
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
+
+GITHUB_HOSTS = {
+    "api.github.com",
+    "codeload.github.com",
+    "gist.github.com",
+    "gist.githubusercontent.com",
+    "github-releases.githubusercontent.com",
+    "media.githubusercontent.com",
+    "objects.githubusercontent.com",
+    "raw.githubusercontent.com",
+    "raw.github.com",
+    "release-assets.githubusercontent.com",
+}
 
 class GitHubPack:
     def parse_url(self, raw_url: str) -> Dict[str, Any]:
-        parsed = urlparse(raw_url)
-        hostname = (parsed.hostname or '').lower()
+        parsed = urlparse(raw_url.strip())
+        hostname = (parsed.hostname or '').lower().removeprefix("www.")
 
-        if hostname != 'github.com' and hostname != 'raw.githubusercontent.com':
+        if hostname not in GITHUB_HOSTS and hostname != 'github.com':
             return {'isGitHub': False}
 
         path = parsed.path.strip('/')
         parts = path.split('/')
 
-        if len(parts) < 2:
-            return {'isGitHub': False}
-
-        owner = parts[0]
-        repo = parts[1]
-
-        # Raw file link
-        if hostname == 'raw.githubusercontent.com':
+        # Direct raw/asset download URLs from CDN hosts
+        if hostname in GITHUB_HOSTS:
+            owner = parts[0] if len(parts) > 0 else 'github'
+            repo = parts[1] if len(parts) > 1 else 'asset'
             return {
                 'isGitHub': True,
                 'type': 'raw',
@@ -30,8 +39,22 @@ class GitHubPack:
                 'directUrl': raw_url
             }
 
-        # Releases
-        if len(parts) >= 4 and parts[2] == 'releases':
+        if len(parts) < 2:
+            return {'isGitHub': False}
+
+        owner = parts[0]
+        repo = parts[1]
+
+        # Raw file / blob link on github.com
+        if len(parts) >= 4 and parts[2] in ('raw', 'releases'):
+            if parts[2] == 'raw':
+                return {
+                    'isGitHub': True,
+                    'type': 'raw',
+                    'owner': owner,
+                    'repo': repo,
+                    'directUrl': raw_url
+                }
             if parts[3] == 'tag' and len(parts) >= 5:
                 return {
                     'isGitHub': True,
@@ -48,6 +71,24 @@ class GitHubPack:
                     'repo': repo,
                     'directUrl': raw_url
                 }
+            if parts[3] == 'latest' and len(parts) >= 6 and parts[4] == 'download':
+                return {
+                    'isGitHub': True,
+                    'type': 'release-direct',
+                    'owner': owner,
+                    'repo': repo,
+                    'directUrl': raw_url
+                }
+
+        # Archive tarball / zipball
+        if len(parts) >= 3 and parts[2] == 'archive':
+            return {
+                'isGitHub': True,
+                'type': 'archive',
+                'owner': owner,
+                'repo': repo,
+                'directUrl': raw_url
+            }
 
         return {
             'isGitHub': True,
@@ -64,11 +105,11 @@ class GitHubPack:
         )
 
         headers = {
-            'User-Agent': 'VortexDownloader/0.6.1',
+            'User-Agent': 'VortexDownloader/0.6.8',
             'Accept': 'application/vnd.github.v3+json'
         }
 
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
             res = await client.get(url, headers=headers)
             if res.status_code != 200:
                 raise Exception(f"GitHub API error: HTTP {res.status_code}")

@@ -333,6 +333,14 @@ class SegmentedDownloader:
                     async for part in response.aiter_bytes(chunk_size=64 * 1024):
                         if self.is_cancelled:
                             break
+
+                        # Boundary safeguard: respect shrunken chunk bounds if stolen by another worker
+                        remaining = chunk['end'] - (chunk['start'] + chunk['current']) + 1
+                        if remaining <= 0:
+                            break
+                        if len(part) > remaining:
+                            part = part[:remaining]
+
                         part_len = len(part)
                         
                         # Thread-safe write to pre-allocated file position
@@ -342,7 +350,7 @@ class SegmentedDownloader:
                                 self.file_handle.write(part)
 
                         chunk['current'] += part_len
-                        chunk['percent'] = int((chunk['current'] / chunk['total']) * 100)
+                        chunk['percent'] = int((chunk['current'] / chunk['total']) * 100) if chunk['total'] > 0 else 100
                         
                         async with self.progress_lock:
                             self.downloaded_bytes += part_len
@@ -355,6 +363,9 @@ class SegmentedDownloader:
                         if now - self.last_save_time > 3.0:
                             self.last_save_time = now
                             self._save_record()
+
+                        if chunk['start'] + chunk['current'] > chunk['end']:
+                            break
 
                 if chunk['current'] >= chunk['total']:
                     chunk['status'] = 'completed'

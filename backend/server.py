@@ -80,7 +80,7 @@ async def lifespan(app: FastAPI):
     yield
     task.cancel()
 
-app = FastAPI(title="VortexDownloader Universal Engine", version="0.6.8", lifespan=lifespan)
+app = FastAPI(title="VortexDownloader Universal Engine", version="0.6.9", lifespan=lifespan)
 
 # CORS Middleware
 app.add_middleware(
@@ -135,7 +135,7 @@ def add_job_log(job: Dict[str, Any], log_type: str, message: str):
 # 0. Health check
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "service": "VortexDownloader Universal Engine v0.6.8 (Python Core)"}
+    return {"status": "ok", "service": "VortexDownloader Universal Engine v0.6.9 (Python Core)"}
 
 # Aria2 JSON-RPC 2.0 Compatibility Endpoint (for browser extensions)
 @app.post("/jsonrpc")
@@ -738,7 +738,11 @@ async def huggingface_inspect(payload: UrlPayload):
         }
 
     try:
-        model_info = await huggingface_pack.inspect_model(parsed.get('modelId', ''), parsed.get('revision', 'main'))
+        model_info = await huggingface_pack.inspect_model(
+            parsed.get('modelId', ''),
+            parsed.get('revision', 'main'),
+            parsed.get('repoType', 'model')
+        )
         return {
             'type': 'model',
             'modelInfo': model_info

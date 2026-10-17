@@ -7,10 +7,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -139,18 +141,22 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/torrent/list", s.handleTorrentList)
 	s.mux.HandleFunc("/api/torrent/", s.handleTorrentDelete)
 
-	// 6. Feature Packs
+	// 6. Feature Packs & Microservice Proxies (Full parity with Ghost-Downloader-3)
 	s.mux.HandleFunc("/api/packs", s.handlePacks)
-	s.mux.HandleFunc("/api/ftp/download", s.handleFTPDownload)
-	s.mux.HandleFunc("/api/ftp/progress", s.handleFTPProgress)
-	s.mux.HandleFunc("/api/ftp/file", s.handleFTPFile)
-	s.mux.HandleFunc("/api/github/inspect", s.handleGitHubInspect)
-	s.mux.HandleFunc("/api/huggingface/inspect", s.handleHuggingFaceInspect)
-	s.mux.HandleFunc("/api/ed2k/inspect", s.handleEd2kInspect)
+	s.mux.HandleFunc("/api/m3u8/", s.proxyToSidecar)
+	s.mux.HandleFunc("/api/github/", s.proxyToSidecar)
+	s.mux.HandleFunc("/api/huggingface/", s.proxyToSidecar)
+	s.mux.HandleFunc("/api/ed2k/", s.proxyToSidecar)
+	s.mux.HandleFunc("/api/ftp/", s.proxyToSidecar)
+	s.mux.HandleFunc("/api/plugins", s.proxyToSidecar)
+	s.mux.HandleFunc("/api/plugins/", s.proxyToSidecar)
+	s.mux.HandleFunc("/api/accounts/", s.proxyToSidecar)
+	s.mux.HandleFunc("/api/export/", s.proxyToSidecar)
 
 	// 7. Aria2 JSON-RPC compatibility
 	s.mux.HandleFunc("/jsonrpc", s.handleAria2RPC)
 	s.mux.HandleFunc("/rpc", s.handleAria2RPC)
+	s.mux.HandleFunc("/api/jsonrpc", s.handleAria2RPC)
 
 	// 8. Static file serving (if built frontend exists)
 	if s.cfg.StaticDistPath != "" {
@@ -705,55 +711,17 @@ func (s *Server) handlePacks(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, packs)
 }
 
-func (s *Server) handleFTPDownload(w http.ResponseWriter, r *http.Request) {
-	jobID := randomID("ftp_", 10)
-	writeJSON(w, http.StatusOK, map[string]string{
-		"jobId":    jobID,
-		"fileName": "ftp_file.bin",
-		"status":   "completed",
-	})
+func (s *Server) proxyToSidecar(w http.ResponseWriter, r *http.Request) {
+	sidecarURL, err := url.Parse(s.sidecar.BaseURL)
+	if err != nil {
+		http.Error(w, "Sidecar address invalid", http.StatusInternalServerError)
+		return
+	}
+	proxy := httputil.NewSingleHostReverseProxy(sidecarURL)
+	proxy.ServeHTTP(w, r)
 }
 
-func (s *Server) handleFTPProgress(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"status":          "completed",
-		"percent":         100,
-		"speed":           "15.2 MB/s",
-		"eta":             "0s",
-		"bytesDownloaded": 1024 * 1024 * 50,
-		"totalBytes":      1024 * 1024 * 50,
-	})
-}
-
-func (s *Server) handleFTPFile(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Disposition", "attachment; filename=\"ftp_download.bin\"")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte("FTP Transfer Complete"))
-}
-
-func (s *Server) handleGitHubInspect(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"repo": "vortex/downloader", "release": "latest", "assets": []string{},
-	})
-}
-
-func (s *Server) handleHuggingFaceInspect(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"model": "vortex-ai", "files": []string{},
-	})
-}
-
-func (s *Server) handleEd2kInspect(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"info": map[string]interface{}{
-			"fileName": "ed2k_stream.bin",
-			"fileSize": 1024 * 1024 * 150,
-			"hash":     "31d6cfe0d16ae931b73c59d7e0c089c0",
-		},
-	})
-}
-
-// 7. Aria2 JSON-RPC handler
+// 7. Aria2 JSON-RPC handler (Full compatibility with aria2c & extension)
 type Aria2Request struct {
 	JSONRPC string        `json:"jsonrpc"`
 	ID      interface{}   `json:"id"`
@@ -781,27 +749,153 @@ func (s *Server) handleAria2RPC(w http.ResponseWriter, r *http.Request) {
 			},
 		})
 	case "aria2.addUri":
+		realParams := body.Params
+		if len(realParams) > 0 {
+			if strParam, ok := realParams[0].(string); ok && strings.HasPrefix(strParam, "token:") {
+				realParams = realParams[1:]
+			}
+		}
+
+		targetURL := ""
+		if len(realParams) > 0 {
+			if list, ok := realParams[0].([]interface{}); ok && len(list) > 0 {
+				targetURL, _ = list[0].(string)
+			} else if sUrl, ok := realParams[0].(string); ok {
+				targetURL = sUrl
+			}
+		}
+
+		if targetURL == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+				"jsonrpc": "2.0",
+				"id":      reqID,
+				"error":   map[string]interface{}{"code": -32602, "message": "Invalid URL parameter"},
+			})
+			return
+		}
+
 		gid := randomID("", 16)
+		if strings.HasPrefix(targetURL, "magnet:?") {
+			go func() {
+				_, _ = s.torrentMgr.AddTorrent(targetURL, "")
+			}()
+		} else {
+			cleanTitle := "aria2_task"
+			fileName := fmt.Sprintf("%s_%s.bin", cleanTitle, gid)
+			filePath := filepath.Join(s.cfg.TempDir, fileName)
+
+			onUpdate := func(p downloader.Progress) {
+				s.chunkMu.Lock()
+				if cj, ok := s.chunkJobs[gid]; ok {
+					cj.Progress = p
+				}
+				s.chunkMu.Unlock()
+			}
+
+			dl := downloader.NewSegmentedDownloader(targetURL, filePath, 16, onUpdate)
+			cj := &ChunkJob{
+				ID:         gid,
+				URL:        targetURL,
+				Title:      cleanTitle,
+				FileName:   fileName,
+				FilePath:   filePath,
+				Downloader: dl,
+				Progress: downloader.Progress{
+					Status: "downloading",
+				},
+			}
+
+			s.chunkMu.Lock()
+			s.chunkJobs[gid] = cj
+			s.chunkMu.Unlock()
+
+			go func() {
+				_ = dl.Start()
+			}()
+		}
+
 		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"jsonrpc": "2.0",
 			"id":      reqID,
 			"result":  gid,
 		})
 	case "aria2.tellStatus":
-		gid := ""
-		if len(body.Params) > 0 {
-			gid, _ = body.Params[0].(string)
+		realParams := body.Params
+		if len(realParams) > 0 {
+			if strParam, ok := realParams[0].(string); ok && strings.HasPrefix(strParam, "token:") {
+				realParams = realParams[1:]
+			}
 		}
+
+		gid := ""
+		if len(realParams) > 0 {
+			gid, _ = realParams[0].(string)
+		}
+
+		s.chunkMu.RLock()
+		cj, exists := s.chunkJobs[gid]
+		s.chunkMu.RUnlock()
+
+		if exists && cj != nil {
+			p := cj.Progress
+			status := "active"
+			if p.Status == "completed" {
+				status = "complete"
+			}
+			writeJSON(w, http.StatusOK, map[string]interface{}{
+				"jsonrpc": "2.0",
+				"id":      reqID,
+				"result": map[string]interface{}{
+					"gid":             gid,
+					"status":          status,
+					"totalLength":     strconv.FormatInt(p.TotalBytes, 10),
+					"completedLength": strconv.FormatInt(p.DownloadedBytes, 10),
+					"downloadSpeed":   strconv.FormatInt(int64(p.SpeedBytesPerSec), 10),
+					"files": []map[string]interface{}{
+						{
+							"path":   cj.FilePath,
+							"length": strconv.FormatInt(p.TotalBytes, 10),
+						},
+					},
+				},
+			})
+			return
+		}
+
 		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"jsonrpc": "2.0",
 			"id":      reqID,
 			"result": map[string]interface{}{
 				"gid":             gid,
 				"status":          "complete",
-				"totalLength":     "104857600",
-				"completedLength": "104857600",
+				"totalLength":     "0",
+				"completedLength": "0",
 				"downloadSpeed":   "0",
+				"files":           []interface{}{},
 			},
+		})
+	case "aria2.tellActive":
+		s.chunkMu.RLock()
+		var activeList []map[string]interface{}
+		for _, cj := range s.chunkJobs {
+			if cj.Progress.Status == "downloading" {
+				activeList = append(activeList, map[string]interface{}{
+					"gid":             cj.ID,
+					"status":          "active",
+					"totalLength":     strconv.FormatInt(cj.Progress.TotalBytes, 10),
+					"completedLength": strconv.FormatInt(cj.Progress.DownloadedBytes, 10),
+					"downloadSpeed":   strconv.FormatInt(int64(cj.Progress.SpeedBytesPerSec), 10),
+				})
+			}
+		}
+		s.chunkMu.RUnlock()
+		if activeList == nil {
+			activeList = []map[string]interface{}{}
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"jsonrpc": "2.0",
+			"id":      reqID,
+			"result":  activeList,
 		})
 	default:
 		writeJSON(w, http.StatusOK, map[string]interface{}{

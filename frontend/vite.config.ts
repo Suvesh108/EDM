@@ -17,6 +17,14 @@ export default defineConfig(() => {
           target: 'http://localhost:5001',
           changeOrigin: true,
         },
+        '/jsonrpc': {
+          target: 'http://localhost:5001',
+          changeOrigin: true,
+        },
+        '/rpc': {
+          target: 'http://localhost:5001',
+          changeOrigin: true,
+        },
       },
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
       // Do not modify—file watching is disabled to prevent flickering during agent edits.

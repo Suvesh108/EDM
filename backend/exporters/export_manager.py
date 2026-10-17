@@ -29,7 +29,7 @@ class ExportManager:
         now_iso = datetime.now(timezone.utc).isoformat()
         return f"""<?xml version="1.0" encoding="UTF-8"?>
 <metalink xmlns="urn:ietf:params:xml:ns:metalink">
-  <generator>Vortex Downloader 0.6.1</generator>
+  <generator>Vortex Downloader 0.6.9</generator>
   <published>{now_iso}</published>
 {files_xml}
 </metalink>"""
@@ -70,7 +70,7 @@ echo "All Vortex downloads completed successfully."
     @staticmethod
     def to_json(tasks: List[Dict[str, Any]]) -> str:
         data = {
-            "version": "0.6.1",
+            "version": "0.6.9",
             "generator": "Vortex Downloader",
             "exportedAt": datetime.now(timezone.utc).isoformat(),
             "totalTasks": len(tasks),

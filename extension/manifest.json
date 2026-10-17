@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Vortex Downloader - Universal Media Sniffer & Stream Core",
   "short_name": "Vortex Downloader",
-  "version": "0.6.8",
+  "version": "0.6.9",
   "description": "High-speed media sniffer, video/audio downloader, and IDM-style stream accelerator seamlessly connected to Vortex Downloader.",
   "icons": {
     "16": "icons/icon16.png",

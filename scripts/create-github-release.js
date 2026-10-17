@@ -25,7 +25,7 @@ async function run() {
 
   const owner = 'Suvesh108';
   const repo = 'vortex';
-  const tag = process.argv[2] || 'v0.2';
+  const tag = process.argv[2] || 'v0.6.9';
   const versionNum = tag.replace(/^v/i, '');
 
   console.log(`Checking existing release for tag ${tag}...`);
@@ -46,15 +46,13 @@ async function run() {
 - **Android APK (Direct Install)**: \`VortexDownloader-${tag}.apk\`
 
 ✨ **What's New in ${tag}**:
-- 🚀 **Zero-RAM Native Downloader (\`VortexNativePlugin\`)**: Slices out JavaScript Base64 buffering and streams downloads directly to disk, completely eliminating Out-Of-Memory crashes on 100MB–1GB+ files.
-- 📁 **Public Storage & MediaStore Auto-Indexing**: Saves directly to \`Download/VortexDownloader\` so downloaded videos, songs, and files immediately appear in the user's Gallery, VLC, and File Manager.
-- 🎬 **One-Tap Play / Open & Share**: Added direct "Play / Open" and "Share" buttons to completed tasks in the dashboard.
-- 🌐 **Inbuilt Private Browser Enhancements**: Browser no longer abruptly closes upon queueing a download; added full-screen HTML5 video playback and mixed-content support.
-- 🔙 **Android Hardware Back-Button Support**: Intelligently closes active modals (\`AddTaskModal\`, \`SettingsModal\`, \`Vault\`) on back press before minimizing the app.
-- 📲 **Android "Share to Vortex" Target**: Send video links directly from YouTube, Chrome, TikTok, and Twitter via the Android Share sheet.
-- 🌐 **Cleartext HTTP Support**: Added \`usesCleartextTraffic="true"\` and network state permissions for local Wi-Fi backend streaming and HTTP CDN mirrors.
-- 🧹 **UI Path Sanitization**: Removed desktop-hardcoded Windows paths and added a dedicated Backend URL setting in Engine settings for mobile LAN connectivity.
-- ⚙️ **Hybrid Go Core + Python Extractor**: Ultra-fast Go networking engine on port 5001 paired with zero-overhead Python sidecar on port 5002 for high-concurrency downloads.
+- 🚀 **Ghost Downloader 3 Core Architecture Parity**: Full architectural alignment with Ghost Downloader 3 feature packs (HTTP, BitTorrent, YouTube, M3U8, GitHub, HuggingFace, ED2k, FTP, FFmpeg).
+- 🧩 **Enhanced HuggingFace & GitHub Packs**: Added support for single-segment model repo IDs (e.g., \`bert-base-uncased\`, \`gpt2\`), datasets, spaces, direct blob resolvers, and GitHub release asset CDN routing with mirror acceleration.
+- ⚡ **Race-Condition-Free Work-Stealing Downloader**: Fixed chunk boundary collision and double byte counting in multi-pipe segmented downloader.
+- 🔌 **Upgraded Hybrid Go Gateway & Aria2 JSON-RPC**: Reverse proxy routes in Go gateway (\`:5001\`) to Python sidecar (\`:5002\`) for all packs, accounts, plugins, and exporters with native execution of \`aria2.addUri\`, \`aria2.tellStatus\`, and \`aria2.tellActive\`.
+- 🐳 **Production Docker Multi-Stage Engine**: Standalone multi-stage Python 3.11 container bundling built React frontend assets and static-ffmpeg.
+- 📱 **Mobile & Extension Integration**: Updated Manifest V3 Chromium extension and Android Capacitor build with zero-latency backend discovery.
+- 🛡️ **Defensive Error Handling & Invariant Verification**: Stabilized Real-Debrid token management, plugin resolutions, and batch exporters across both Go Core and Python backends.
 `;
 
   if (getRes.status === 200) {

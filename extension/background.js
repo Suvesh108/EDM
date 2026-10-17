@@ -3,8 +3,8 @@
  * Manages context menus, browser download interception, and backend synchronization.
  */
 
-const DEFAULT_BACKEND_URL = "http://localhost:8000";
-const WEB_APP_URL = "http://localhost:5173";
+const DEFAULT_BACKEND_URL = "http://localhost:5001";
+const WEB_APP_URL = "http://localhost:3000";
 
 // Initialize Context Menus
 chrome.runtime.onInstalled.addListener(() => {
@@ -114,7 +114,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const res = await fetch(`${target}/api/health`, { signal: AbortSignal.timeout(2500) });
         if (res.ok) {
           const data = await res.json();
-          sendResponse({ online: true, version: data.service || "v0.6.8" });
+          sendResponse({ online: true, version: data.service || "v0.6.9" });
         } else {
           sendResponse({ online: false });
         }

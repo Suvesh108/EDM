@@ -21,14 +21,21 @@
 
 <hr />
 
-## 📱 Android & Desktop (v0.6.8)
+## 📱 Android & Desktop (v0.6.9)
 
 VortexDownloader is an ultra-fast, universal downloading engine powered by a **Hybrid Architecture (Go Core + Python Media Extractor)** with dynamic multi-pipe streaming, dynamic work-stealing, native Android direct-to-disk storage, real-time IDM/FDM progress telemetry, 4-tier bot-guard evasion, and official browser extension integration!
 
-- **Download APK (v0.6.8)**: [**VortexDownloader-v0.6.8.apk**](release/VortexDownloader-v0.6.8.apk)
-- **Version**: `0.6.8` (Release v0.6.8)
+- **Download APK (v0.6.9)**: [**VortexDownloader-v0.6.9.apk**](release/VortexDownloader-v0.6.9.apk)
+- **Version**: `0.6.9` (Release v0.6.9)
 - **Package ID**: `io.vortexdownloader.app`
-- **What's New in v0.6.8**:
+- **What's New in v0.6.9**:
+  - 🚀 **Ghost Downloader 3 Core Architecture Parity**: Full architectural parity with Ghost Downloader 3 feature packs (HTTP, BitTorrent, YouTube, M3U8, GitHub, HuggingFace, ED2k, FTP, FFmpeg).
+  - 🧩 **Enhanced HuggingFace & GitHub Packs**: Added support for single-segment model repo IDs (e.g. `bert-base-uncased`), datasets, spaces, direct blob resolvers, and GitHub release asset CDN routing with mirror acceleration.
+  - ⚡ **Race-Condition-Free Work-Stealing Downloader**: Fixed chunk boundary overlap and byte re-downloading in multi-pipe segmented downloader.
+  - 🔌 **Upgraded Hybrid Go Gateway & Aria2 JSON-RPC**: Reverse proxy routes in Go gateway (`:5001`) to Python sidecar (`:5002`) for all packs, accounts, plugins, and exporters with native execution of `aria2.addUri`, `aria2.tellStatus`, and `aria2.tellActive`.
+  - 🐳 **Production Docker Multi-Stage Engine**: Standalone multi-stage Python 3.11 container bundling built React frontend assets and static-ffmpeg.
+  - 📱 **Mobile & Extension Integration**: Updated Manifest V3 Chromium extension and Android Capacitor build with zero-latency backend discovery.
+  - 🛡️ **Defensive Error Handling & Invariant Verification**: Stabilized Real-Debrid token management, plugin resolutions, and batch exporters across both Go Core and Python backends.
   - ⚡ **Dynamic Work-Stealing Multi-Connection Engine**: Idle threads dynamically slice un-downloaded byte ranges in half from slower workers, eliminating tail latency on slow connections.
   - 💤 **OS Sleep Prevention (Keepalive)**: Automatically inhibits Windows (`SetThreadExecutionState`) and macOS sleep while downloads are running.
   - 🧲 **Live BitTorrent Tracker Scraping**: Automatically fetches and injects the latest high-speed public trackers from GitHub (`ngosang/trackerslist`).
