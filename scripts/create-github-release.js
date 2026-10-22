@@ -40,21 +40,22 @@ async function run() {
     headers
   });
 
-  const releaseBody = `## 💻 VortexDownloader ${tag} - Windows Setup Installer & Android APK
+  const releaseBody = `## 💻 VortexDownloader ${tag} - 100% Rust Engine & Monochrome UI Release
 
-- 🖥️ **Windows Installer**: \`VortexDownloader-Setup-${tag}.exe\` (Official Windows Setup wizard with Start Menu shortcut, Desktop icon, uninstaller, and URL protocol handler)
+- 🖥️ **Windows Installer**: \`VortexDownloader-Setup-${tag}.exe\` (5.6 MB - Official Windows Setup wizard with Start Menu shortcut, Desktop icon, uninstaller, and URL protocol handler)
 - 📱 **Android APK (Direct Install)**: \`VortexDownloader-${tag}.apk\`
 
 ✨ **What's New in ${tag}**:
-- 🖥️ **Official Windows Setup Installer**: Full installer wizard with desktop & start menu shortcuts, automatic local browser startup (\`http://localhost:5001\`), and uninstaller support.
-- 🐍 **Complete Python + HTMX Architecture Rewrite**: Pure Python core powered by FastAPI, Jinja2, and HTMX. Zero Node/Vite build steps and zero Go gateway proxy bottlenecks.
-- 🎯 **100% Mathematically Accurate Progress Tracking**: Eliminated the 95% jump bug with automated byte-range probing (\`Range: bytes=0-1\`) and real downloaded payload accounting.
+- 🦀 **100% Pure Rust Native Engine**: Rebuilt from scratch in high-concurrency Rust with Tokio, Axum, Reqwest, and SQLite WAL persistence. Dropped binary installer size from 46MB to 5.6MB!
+- 🎨 **Brand-New Monochrome UI/UX Design System**: Complete visual redesign adopting an obsidian dark palette (\`#09090b\` / \`#121214\`) with intentional semantic component colors (cyber cyan active downloads, emerald completion, amber pause states, and vibrant category tags).
+- ⚡ **IDM-Grade Dynamic Half-Split Chunk Engine**: True dynamic work-stealing that cuts the largest remaining chunk in half at the midpoint when workers idle, eliminating connection tail latency.
+- 🎯 **100% Mathematically Accurate Progress Telemetry**: Automated byte-range probing (\`Range: bytes=0-1\`), real payload accounting, and live Server-Sent Events (SSE) telemetry.
 - ⚙️ **Comprehensive Settings & Automation Suite**:
-  - Pre-allocated threads (1–64) and dynamic Auto Speed Boost thread monitor.
+  - Pre-allocated parallel threads (1–64) and dynamic Auto Speed Boost thread monitor.
   - 8 Automatic Category Sorting Rules (Video, Audio, Images, Subtitles, Documents, Archives, Programs, Other).
   - Windows Registry protocol & extension integration (\`vortex://\`, \`.torrent\`, \`.magnet\`, \`.ed2k\`, \`ftp://\`, \`.m3u8\`, \`.mpd\`).
   - Aria2 JSON-RPC 2.0 browser extension pairing with custom token support.
-- 🧲 **Multi-Protocol & Host Extraction**: Native support for YouTube, TikTok, Vimeo, HLS/M3U8 streams, BitTorrent, and 16 direct host decoders (TeraBox, Streamtape, DoodStream, etc.).
+- 🧲 **Multi-Protocol & Host Extraction**: Native support for YouTube, TikTok, Vimeo, HLS/M3U8 streams, BitTorrent, and 16 direct host decoders.
 `;
 
   if (getRes.status === 200) {

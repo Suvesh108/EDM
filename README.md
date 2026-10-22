@@ -23,14 +23,15 @@
 
 ## 💻 Windows Desktop & 📱 Android (v0.6.9)
 
-VortexDownloader is an ultra-fast, universal downloading engine rewritten entirely in **Python + HTMX** with dynamic multi-pipe streaming, intelligent work-stealing, category auto-sorting, Windows registry protocol/extension integration, real-time IDM/FDM progress telemetry, and Aria2 JSON-RPC 2.0 extension compatibility!
+VortexDownloader is an ultra-fast, universal downloading engine rewritten entirely in **100% Rust** (`tokio` + `axum` + `reqwest` + `rusqlite` WAL) featuring a brand-new **Obsidian Monochrome Design System** with intentional semantic component colors, IDM-grade dynamic half-split chunk work-stealing, 8 category auto-sorting rules, Windows registry protocol/extension integration, and Aria2 JSON-RPC 2.0 extension compatibility!
 
-- **Download Windows Installer (v0.6.9)**: [**VortexDownloader-Setup-v0.6.9.exe**](release/VortexDownloader-Setup-v0.6.9.exe) *(Official Windows Setup wizard with Start Menu shortcut, Desktop icon, uninstaller, and URL protocol handler)*
+- **Download Windows Installer (v0.6.9)**: [**VortexDownloader-Setup-v0.6.9.exe**](release/VortexDownloader-Setup-v0.6.9.exe) *(5.6 MB Official Windows Setup wizard with Start Menu shortcut, Desktop icon, uninstaller, and URL protocol handler)*
 - **Download APK (v0.6.9)**: [**VortexDownloader-v0.6.9.apk**](release/VortexDownloader-v0.6.9.apk)
 - **Version**: `0.6.9` (Release v0.6.9)
 - **What's New in v0.6.9**:
-  - 🖥️ **Official Windows Setup Installer**: Built `release/VortexDownloader-Setup-v0.6.9.exe` installer with Start Menu integration, desktop shortcut, uninstaller, and protocol registration.
-  - 🐍 **Complete Python + HTMX Engine Rewrite**: Fast, responsive dashboard with zero build overhead, real-time polling updates, and persistent SQLite WAL database.
+  - 🦀 **100% Native Rust Architecture**: Single self-contained binary (`target/release/vortex-downloader.exe`) with embedded frontend assets (`rust-embed`), reducing installer size from 46MB down to 5.6MB.
+  - 🎨 **Brand-New Monochrome + Component Color UI/UX**: Completely redesigned obsidian dark theme (`#09090b` / `#121214`) accented with intentional semantic colors (cyber cyan active downloads, emerald completion, amber pause states, and vibrant category tags).
+  - ⚡ **IDM-Grade Dynamic Half-Split Work-Stealing**: Real-time half-splitting of slowest chunk range to eliminate tail latency and write directly to zero-copy sparse file on disk.
   - ⚙️ **Comprehensive Settings & Automation Suite**:
     - Pre-allocated threads (1–64) and Auto Speed Boost thread monitor.
     - 8 Automatic Category Sorting Rules (Video, Audio, Images, Subtitles, Documents, Archives, Programs, Other).
