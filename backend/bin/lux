@@ -1,5 +1,0 @@
-#!/bin/sh
-# Vortex Downloader Bundled Core: lux v0.24.1
-# Category: Go-Fast Stream Extractor
-# High-concurrency Go video stream extractor and downloader.
-echo "[VORTEX_CORE] lux v0.24.1 initialized for execution."

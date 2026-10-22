@@ -1,0 +1,777 @@
+<!-- Settings View Dashboard -->
+<div class="w-full max-w-4xl mx-auto space-y-6 pb-12">
+
+  <!-- Header -->
+  <div class="flex items-center justify-between pb-3 border-b border-white/[0.08]">
+    <div>
+      <h2 class="font-hanken font-bold text-base text-white">Settings & Preferences</h2>
+      <p class="text-xs text-gray-400 font-mono">Engine tuning, categorization rules, system integrations & personalization</p>
+    </div>
+    <div class="flex items-center space-x-2">
+      <button
+        type="button"
+        onclick="saveAllSettings()"
+        class="px-4 py-1.5 rounded-xl bg-[#3ea6ff] hover:bg-[#3192e4] text-black font-bold text-xs font-sans transition-colors cursor-pointer shadow-md shadow-[#3ea6ff]/20 flex items-center space-x-1.5"
+      >
+        <svg class="w-4 h-4 fill-current" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
+        <span>Save All Settings</span>
+      </button>
+    </div>
+  </div>
+
+  <form id="settings-form" class="space-y-6">
+
+    <!-- 1. GENERAL SETTINGS -->
+    <div class="bg-[#242426] p-5 rounded-2xl border border-white/[0.06] space-y-4">
+      <div class="flex items-center space-x-2 text-white font-hanken font-bold text-sm border-b border-white/[0.06] pb-2">
+        <svg class="w-4 h-4 text-[#3ea6ff]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+        <span>General Engine & Download Rules</span>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <!-- 1. Pre-Allocated Threads Slider -->
+        <div class="space-y-1.5 bg-[#18181b] p-3.5 rounded-xl border border-white/[0.06]">
+          <div class="flex items-center justify-between text-xs">
+            <span class="text-gray-300 font-medium">Pre-Allocated Threads (Pipes)</span>
+            <span id="set-threads-val" class="font-mono text-[#3ea6ff] font-bold">{{ settings.default_threads or '16' }} Pipes</span>
+          </div>
+          <p class="text-[11px] text-gray-500 font-sans">More parallel threads speed up segmented downloads via IDM halving.</p>
+          <div class="flex items-center space-x-2 pt-1">
+            <span class="text-[10px] font-mono text-gray-500">1</span>
+            <input
+              type="range"
+              name="default_threads"
+              min="1"
+              max="64"
+              value="{{ settings.default_threads or '16' }}"
+              oninput="document.getElementById('set-threads-val').innerText = this.value + ' Pipes'"
+              class="flex-1 accent-[#3ea6ff] h-1.5 bg-gray-700 rounded-lg cursor-pointer"
+            />
+            <span class="text-[10px] font-mono text-gray-500">64</span>
+          </div>
+        </div>
+
+        <!-- 2. Auto Speed Boost -->
+        <div class="space-y-1.5 bg-[#18181b] p-3.5 rounded-xl border border-white/[0.06] flex flex-col justify-between">
+          <div class="flex items-start justify-between">
+            <div>
+              <span class="text-xs text-gray-300 font-medium block">Auto Speed Boost</span>
+              <p class="text-[11px] text-gray-500 font-sans mt-0.5">Intelligently monitors thread efficiency and dynamically allocates additional worker pipes to boost download speed.</p>
+            </div>
+            <label class="relative inline-flex items-center cursor-pointer shrink-0 ml-3 mt-1">
+              <input
+                type="checkbox"
+                name="auto_speed_boost"
+                value="true"
+                {% if settings.auto_speed_boost == 'true' or not settings.auto_speed_boost %}checked{% endif %}
+                class="sr-only peer"
+              />
+              <div class="w-9 h-5 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#3ea6ff]"></div>
+            </label>
+          </div>
+          <div class="flex items-center space-x-1.5 text-[10px] font-mono text-cyan-400">
+            <span class="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse"></span>
+            <span>IDM Halving Dynamic Work-Stealing Active</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 3. Download Path & 4. Duplicate Files Policy -->
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <!-- Default Download Path -->
+        <div class="space-y-1.5 bg-[#18181b] p-3.5 rounded-xl border border-white/[0.06]">
+          <div class="flex items-center justify-between text-xs">
+            <span class="text-gray-300 font-medium">Default Download Path</span>
+            <button
+              type="button"
+              onclick="openDownloadDir()"
+              class="text-[11px] font-mono text-[#3ea6ff] hover:underline flex items-center space-x-1 cursor-pointer"
+            >
+              <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+              <span>Open Folder</span>
+            </button>
+          </div>
+          <input
+            type="text"
+            name="download_dir"
+            id="download-dir-input"
+            value="{{ settings.download_dir or '' }}"
+            placeholder="C:\Users\Downloads\Vortex"
+            class="w-full bg-[#141416] border border-white/[0.08] focus:border-[#3ea6ff] rounded-xl px-3 py-1.5 text-xs font-mono text-white focus:outline-none"
+          />
+          <p class="text-[10px] text-gray-500 font-mono">Root directory for all incoming downloads and category subfolders.</p>
+        </div>
+
+        <!-- Duplicate Files Policy -->
+        <div class="space-y-1.5 bg-[#18181b] p-3.5 rounded-xl border border-white/[0.06]">
+          <label class="block text-xs text-gray-300 font-medium">Duplicate Files Action</label>
+          <select
+            name="conflict_policy"
+            class="w-full bg-[#141416] border border-white/[0.08] focus:border-[#3ea6ff] rounded-xl px-3 py-2 text-xs text-white font-sans focus:outline-none cursor-pointer"
+          >
+            <option value="keepboth" {% if settings.conflict_policy == 'keepboth' or settings.conflict_policy == 'rename' %}selected{% endif %}>
+              Keep Both (Auto-Rename with (1), (2) suffix)
+            </option>
+            <option value="overwrite" {% if settings.conflict_policy == 'overwrite' %}selected{% endif %}>
+              Overwrite (Replace existing file on disk)
+            </option>
+            <option value="ask" {% if settings.conflict_policy == 'ask' %}selected{% endif %}>
+              Ask Every Time (Prompt for decision)
+            </option>
+          </select>
+          <p class="text-[10px] text-gray-500 font-sans">Behavior when a file with the identical name already exists in target folder.</p>
+        </div>
+      </div>
+
+      <!-- 5. Proxy Configuration Panel -->
+      <div class="bg-[#18181b] p-3.5 rounded-xl border border-white/[0.06] space-y-3">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center space-x-2">
+            <svg class="w-4 h-4 text-purple-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
+            <span class="text-xs text-gray-200 font-medium">Network Proxy Configuration</span>
+          </div>
+          <label class="relative inline-flex items-center cursor-pointer shrink-0">
+            <input
+              type="checkbox"
+              name="proxy_enabled"
+              id="proxy-enabled-toggle"
+              value="true"
+              {% if settings.proxy_enabled == 'true' %}checked{% endif %}
+              onchange="toggleProxyFields(this.checked)"
+              class="sr-only peer"
+            />
+            <div class="w-9 h-5 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-purple-600"></div>
+          </label>
+        </div>
+
+        <div id="proxy-fields" class="{% if settings.proxy_enabled != 'true' %}hidden{% endif %} pt-2 grid grid-cols-1 sm:grid-cols-4 gap-2.5">
+          <div>
+            <label class="block text-[10px] font-mono text-gray-400 mb-1">Protocol</label>
+            <select
+              name="proxy_type"
+              class="w-full bg-[#141416] border border-white/[0.08] rounded-xl px-2.5 py-1.5 text-xs text-white font-mono focus:outline-none"
+            >
+              <option value="http" {% if settings.proxy_type == 'http' %}selected{% endif %}>HTTP</option>
+              <option value="https" {% if settings.proxy_type == 'https' %}selected{% endif %}>HTTPS</option>
+              <option value="socks5" {% if settings.proxy_type == 'socks5' %}selected{% endif %}>SOCKS5</option>
+            </select>
+          </div>
+          <div class="sm:col-span-2">
+            <label class="block text-[10px] font-mono text-gray-400 mb-1">Proxy Host / IP</label>
+            <input
+              type="text"
+              name="proxy_host"
+              value="{{ settings.proxy_host or '127.0.0.1' }}"
+              placeholder="127.0.0.1"
+              class="w-full bg-[#141416] border border-white/[0.08] rounded-xl px-3 py-1.5 text-xs font-mono text-white focus:outline-none"
+            />
+          </div>
+          <div>
+            <label class="block text-[10px] font-mono text-gray-400 mb-1">Port</label>
+            <input
+              type="text"
+              name="proxy_port"
+              value="{{ settings.proxy_port or '7890' }}"
+              placeholder="7890"
+              class="w-full bg-[#141416] border border-white/[0.08] rounded-xl px-3 py-1.5 text-xs font-mono text-white focus:outline-none"
+            />
+          </div>
+        </div>
+      </div>
+
+      <!-- 6. Download Categorization Rules Panel -->
+      <div class="bg-[#18181b] p-3.5 rounded-xl border border-white/[0.06] space-y-3">
+        <div class="flex items-center justify-between">
+          <div>
+            <span class="text-xs text-gray-200 font-medium block">Automatic Download Categorization Rules</span>
+            <p class="text-[11px] text-gray-500 font-sans mt-0.5">Creates dedicated category subfolders in your download path based on file extension.</p>
+          </div>
+          <label class="relative inline-flex items-center cursor-pointer shrink-0 ml-3">
+            <input
+              type="checkbox"
+              name="auto_categorize_folders"
+              value="true"
+              {% if settings.auto_categorize_folders == 'true' or not settings.auto_categorize_folders %}checked{% endif %}
+              class="sr-only peer"
+            />
+            <div class="w-9 h-5 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-500"></div>
+          </label>
+        </div>
+
+        <!-- 8 Canonical Categories Matrix -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2 pt-2">
+          <!-- Video -->
+          <div class="bg-[#141416] p-2.5 rounded-xl border border-white/[0.04] space-y-1">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-bold text-amber-400 font-mono">/video</span>
+              <span class="text-[10px] px-1.5 py-0.2 rounded bg-amber-500/10 text-amber-400 font-mono">20 ext</span>
+            </div>
+            <p class="text-[10px] font-mono text-gray-400 break-words line-clamp-2" title=".mp4, .mkv, .avi, .mov, .wmv, .flv, .webm, .m4v, .mpg, .mpeg, .3gp, .ts, .m2ts, .mts, .vob, .ogv, .divx, .asf, .rmvb, .f4v">
+              .mp4, .mkv, .avi, .mov, .flv, .webm...
+            </p>
+          </div>
+
+          <!-- Audio -->
+          <div class="bg-[#141416] p-2.5 rounded-xl border border-white/[0.04] space-y-1">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-bold text-orange-400 font-mono">/audio</span>
+              <span class="text-[10px] px-1.5 py-0.2 rounded bg-orange-500/10 text-orange-400 font-mono">12 ext</span>
+            </div>
+            <p class="text-[10px] font-mono text-gray-400 break-words line-clamp-2" title=".mp3, .flac, .wav, .aac, .ogg, .wma, .m4a, .opus, .aiff, .alac, .mid, .midi">
+              .mp3, .flac, .wav, .aac, .m4a, .opus...
+            </p>
+          </div>
+
+          <!-- Image -->
+          <div class="bg-[#141416] p-2.5 rounded-xl border border-white/[0.04] space-y-1">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-bold text-emerald-400 font-mono">/image</span>
+              <span class="text-[10px] px-1.5 py-0.2 rounded bg-emerald-500/10 text-emerald-400 font-mono">13 ext</span>
+            </div>
+            <p class="text-[10px] font-mono text-gray-400 break-words line-clamp-2" title=".jpg, .jpeg, .png, .gif, .bmp, .webp, .svg, .tiff, .tif, .ico, .heic, .heif, .avif">
+              .jpg, .png, .gif, .webp, .svg, .avif...
+            </p>
+          </div>
+
+          <!-- Subtitles -->
+          <div class="bg-[#141416] p-2.5 rounded-xl border border-white/[0.04] space-y-1">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-bold text-yellow-400 font-mono">/subtitles</span>
+              <span class="text-[10px] px-1.5 py-0.2 rounded bg-yellow-500/10 text-yellow-400 font-mono">10 ext</span>
+            </div>
+            <p class="text-[10px] font-mono text-gray-400 break-words line-clamp-2" title=".srt, .ass, .ssa, .sub, .vtt, .sbv, .idx, .sup, .smi, .lrc">
+              .srt, .ass, .ssa, .sub, .vtt, .lrc...
+            </p>
+          </div>
+
+          <!-- Documents -->
+          <div class="bg-[#141416] p-2.5 rounded-xl border border-white/[0.04] space-y-1">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-bold text-sky-400 font-mono">/documents</span>
+              <span class="text-[10px] px-1.5 py-0.2 rounded bg-sky-500/10 text-sky-400 font-mono">19 ext</span>
+            </div>
+            <p class="text-[10px] font-mono text-gray-400 break-words line-clamp-2" title=".pdf, .doc, .docx, .xls, .xlsx, .ppt, .pptx, .txt, .rtf, .odt, .ods, .odp, .csv, .md, .tex, .epub, .mobi, .pages, .wps">
+              .pdf, .docx, .xlsx, .pptx, .txt, .md...
+            </p>
+          </div>
+
+          <!-- Archives -->
+          <div class="bg-[#141416] p-2.5 rounded-xl border border-white/[0.04] space-y-1">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-bold text-purple-400 font-mono">/archives</span>
+              <span class="text-[10px] px-1.5 py-0.2 rounded bg-purple-500/10 text-purple-400 font-mono">24 ext</span>
+            </div>
+            <p class="text-[10px] font-mono text-gray-400 break-words line-clamp-2" title=".zip, .rar, .7z, .tar, .gz, .bz2, .xz, .zst, .lz, .lzma, .cab, .iso, .img, .dmg, .tgz, .tbz2, .txz, .br, .arj, .ace, .lzh, .cpio, .deb, .rpm">
+              .zip, .rar, .7z, .tar.gz, .iso, .dmg...
+            </p>
+          </div>
+
+          <!-- Program -->
+          <div class="bg-[#141416] p-2.5 rounded-xl border border-white/[0.04] space-y-1">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-bold text-rose-400 font-mono">/program</span>
+              <span class="text-[10px] px-1.5 py-0.2 rounded bg-rose-500/10 text-rose-400 font-mono">21 ext</span>
+            </div>
+            <p class="text-[10px] font-mono text-gray-400 break-words line-clamp-2" title=".exe, .msi, .msu, .msp, .appx, .msix, .appxbundle, .msixbundle, .bat, .cmd, .com, .scr, .sys, .dll, .ocx, .jar, .apk, .app, .deb, .rpm, .pkg">
+              .exe, .msi, .bat, .jar, .apk, .pkg...
+            </p>
+          </div>
+
+          <!-- Other -->
+          <div class="bg-[#141416] p-2.5 rounded-xl border border-white/[0.04] space-y-1">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-bold text-gray-300 font-mono">/other</span>
+              <span class="text-[10px] px-1.5 py-0.2 rounded bg-gray-500/10 text-gray-400 font-mono">Fallback</span>
+            </div>
+            <p class="text-[10px] font-mono text-gray-500 break-words">
+              All unclassified & custom binaries
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 2. INTEGRATION SETTINGS -->
+    <div class="bg-[#242426] p-5 rounded-2xl border border-white/[0.06] space-y-4">
+      <div class="flex items-center space-x-2 text-white font-hanken font-bold text-sm border-b border-white/[0.06] pb-2">
+        <svg class="w-4 h-4 text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>
+        <span>System & Protocol Integrations</span>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <!-- 1. URL Scheme vortex:// -->
+        <div class="bg-[#18181b] p-3 rounded-xl border border-white/[0.06] flex items-center justify-between">
+          <div class="min-w-0 pr-3">
+            <span class="text-xs font-medium text-gray-200 block">Launch via vortex:// URL Scheme</span>
+            <span class="text-[10px] text-gray-500 font-sans">Allows browser extensions to launch Vortex via application link.</span>
+          </div>
+          <label class="relative inline-flex items-center cursor-pointer shrink-0">
+            <input
+              type="checkbox"
+              name="protocol_vortex_enabled"
+              value="true"
+              {% if settings.protocol_vortex_enabled == 'true' or not settings.protocol_vortex_enabled %}checked{% endif %}
+              onchange="toggleIntegrationFeature('protocol_vortex', this.checked)"
+              class="sr-only peer"
+            />
+            <div class="w-9 h-5 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-500"></div>
+          </label>
+        </div>
+
+        <!-- 2. .torrent File Association -->
+        <div class="bg-[#18181b] p-3 rounded-xl border border-white/[0.06] flex items-center justify-between">
+          <div class="min-w-0 pr-3">
+            <span class="text-xs font-medium text-gray-200 block">Open .torrent Files Automatically</span>
+            <span class="text-[10px] text-gray-500 font-sans">Register Vortex as default desktop handler for .torrent files.</span>
+          </div>
+          <label class="relative inline-flex items-center cursor-pointer shrink-0">
+            <input
+              type="checkbox"
+              name="assoc_torrent_enabled"
+              value="true"
+              {% if settings.assoc_torrent_enabled == 'true' or not settings.assoc_torrent_enabled %}checked{% endif %}
+              onchange="toggleIntegrationFeature('assoc_torrent', this.checked)"
+              class="sr-only peer"
+            />
+            <div class="w-9 h-5 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-500"></div>
+          </label>
+        </div>
+
+        <!-- 3. magnet: Link Handler -->
+        <div class="bg-[#18181b] p-3 rounded-xl border border-white/[0.06] flex items-center justify-between">
+          <div class="min-w-0 pr-3">
+            <span class="text-xs font-medium text-gray-200 block">Intercept magnet: Links Automatically</span>
+            <span class="text-[10px] text-gray-500 font-sans">Associates magnet:? URIs directly with the Vortex engine.</span>
+          </div>
+          <label class="relative inline-flex items-center cursor-pointer shrink-0">
+            <input
+              type="checkbox"
+              name="assoc_magnet_enabled"
+              value="true"
+              {% if settings.assoc_magnet_enabled == 'true' or not settings.assoc_magnet_enabled %}checked{% endif %}
+              onchange="toggleIntegrationFeature('assoc_magnet', this.checked)"
+              class="sr-only peer"
+            />
+            <div class="w-9 h-5 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-500"></div>
+          </label>
+        </div>
+
+        <!-- 4. ed2k:// Link Handler -->
+        <div class="bg-[#18181b] p-3 rounded-xl border border-white/[0.06] flex items-center justify-between">
+          <div class="min-w-0 pr-3">
+            <span class="text-xs font-medium text-gray-200 block">Intercept eD2k Links Automatically</span>
+            <span class="text-[10px] text-gray-500 font-sans">Captures and parses ed2k:// URIs with MD4 hashing.</span>
+          </div>
+          <label class="relative inline-flex items-center cursor-pointer shrink-0">
+            <input
+              type="checkbox"
+              name="assoc_ed2k_enabled"
+              value="true"
+              {% if settings.assoc_ed2k_enabled == 'true' %}checked{% endif %}
+              onchange="toggleIntegrationFeature('assoc_ed2k', this.checked)"
+              class="sr-only peer"
+            />
+            <div class="w-9 h-5 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-500"></div>
+          </label>
+        </div>
+
+        <!-- 5. FTP / FTPS Protocol Handler -->
+        <div class="bg-[#18181b] p-3 rounded-xl border border-white/[0.06] flex items-center justify-between">
+          <div class="min-w-0 pr-3">
+            <span class="text-xs font-medium text-gray-200 block">Intercept FTP / FTPS Links Automatically</span>
+            <span class="text-[10px] text-gray-500 font-sans">Opens ftp:// and ftps:// links in Vortex high-speed pipes.</span>
+          </div>
+          <label class="relative inline-flex items-center cursor-pointer shrink-0">
+            <input
+              type="checkbox"
+              name="assoc_ftp_enabled"
+              value="true"
+              {% if settings.assoc_ftp_enabled == 'true' %}checked{% endif %}
+              onchange="toggleIntegrationFeature('assoc_ftp', this.checked)"
+              class="sr-only peer"
+            />
+            <div class="w-9 h-5 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-500"></div>
+          </label>
+        </div>
+
+        <!-- 6. .m3u8 / .m3u / .mpd Playlists -->
+        <div class="bg-[#18181b] p-3 rounded-xl border border-white/[0.06] flex items-center justify-between">
+          <div class="min-w-0 pr-3">
+            <span class="text-xs font-medium text-gray-200 block">Associate .m3u8, .m3u & .mpd Streams</span>
+            <span class="text-[10px] text-gray-500 font-sans">Sets Vortex as primary handler for HLS/DASH manifest streams.</span>
+          </div>
+          <label class="relative inline-flex items-center cursor-pointer shrink-0">
+            <input
+              type="checkbox"
+              name="assoc_hls_enabled"
+              value="true"
+              {% if settings.assoc_hls_enabled == 'true' %}checked{% endif %}
+              onchange="toggleIntegrationFeature('assoc_hls', this.checked)"
+              class="sr-only peer"
+            />
+            <div class="w-9 h-5 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-500"></div>
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <!-- 3. BROWSER EXTENSION & ARIA2 RPC -->
+    <div class="bg-[#242426] p-5 rounded-2xl border border-white/[0.06] space-y-4">
+      <div class="flex items-center space-x-2 text-white font-hanken font-bold text-sm border-b border-white/[0.06] pb-2">
+        <svg class="w-4 h-4 text-sky-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
+        <span>Browser Extension & Aria2 JSON-RPC 2.0 Engine</span>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <!-- 1. Enable Extension Toggle -->
+        <div class="space-y-2 bg-[#18181b] p-3.5 rounded-xl border border-white/[0.06] flex flex-col justify-between">
+          <div class="flex items-start justify-between">
+            <div>
+              <span class="text-xs text-gray-200 font-medium block">Enable Browser Extension</span>
+              <p class="text-[11px] text-gray-500 font-sans mt-0.5">Allows Chrome, Firefox, Edge, and Brave extensions to intercept downloads seamlessly.</p>
+            </div>
+            <label class="relative inline-flex items-center cursor-pointer shrink-0 ml-3">
+              <input
+                type="checkbox"
+                name="browser_extension_enabled"
+                value="true"
+                {% if settings.browser_extension_enabled == 'true' or not settings.browser_extension_enabled %}checked{% endif %}
+                class="sr-only peer"
+              />
+              <div class="w-9 h-5 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#3ea6ff]"></div>
+            </label>
+          </div>
+          <div class="text-[10px] font-mono text-gray-400 flex items-center space-x-2">
+            <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+            <span>RPC Endpoint: <span class="text-white">http://localhost:5001/jsonrpc</span></span>
+          </div>
+        </div>
+
+        <!-- 2. Pair Secret Token -->
+        <div class="space-y-1.5 bg-[#18181b] p-3.5 rounded-xl border border-white/[0.06]">
+          <div class="flex items-center justify-between text-xs">
+            <span class="text-gray-300 font-medium">Extension Pair Secret Token</span>
+            <span class="text-[10px] font-mono text-gray-500">token:{{ settings.aria2_secret[:8] }}...</span>
+          </div>
+          <div class="flex space-x-2">
+            <input
+              type="text"
+              name="aria2_secret"
+              id="aria2-secret-input"
+              value="{{ settings.aria2_secret or 'vortex-rpc-token-2026' }}"
+              readonly
+              class="flex-1 bg-[#141416] border border-white/[0.08] rounded-xl px-3 py-1.5 text-xs font-mono text-white focus:outline-none"
+            />
+            <button
+              type="button"
+              onclick="copyToClipboard(document.getElementById('aria2-secret-input').value, 'Secret token copied!')"
+              class="px-2.5 py-1.5 rounded-xl bg-[#2b2b2e] hover:bg-white/[0.1] text-gray-300 text-xs font-mono transition-colors cursor-pointer"
+              title="Copy Pair Token"
+            >
+              Copy
+            </button>
+            <button
+              type="button"
+              onclick="regeneratePairToken()"
+              class="px-2.5 py-1.5 rounded-xl bg-sky-500/15 hover:bg-sky-500/25 border border-sky-500/30 text-sky-300 text-xs font-mono transition-colors cursor-pointer"
+              title="Regenerate High-Entropy Token"
+            >
+              New
+            </button>
+          </div>
+          <p class="text-[10px] text-gray-500 font-sans">Paste this token into the browser extension configuration modal.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- 4. PERSONALIZATION -->
+    <div class="bg-[#242426] p-5 rounded-2xl border border-white/[0.06] space-y-4">
+      <div class="flex items-center space-x-2 text-white font-hanken font-bold text-sm border-b border-white/[0.06] pb-2">
+        <svg class="w-4 h-4 text-rose-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"></circle><path d="m4.93 4.93 4.24 4.24"></path><path d="m14.83 9.17 4.24-4.24"></path><path d="m14.83 14.83 4.24 4.24"></path><path d="m9.17 14.83-4.24 4.24"></path><circle cx="12" cy="12" r="4"></circle></svg>
+        <span>Personalization & Interface Aesthetics</span>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <!-- Theme Variant -->
+        <div class="space-y-1.5 bg-[#18181b] p-3.5 rounded-xl border border-white/[0.06]">
+          <label class="block text-xs text-gray-300 font-medium">Dark Theme Variant</label>
+          <select
+            name="theme_variant"
+            class="w-full bg-[#141416] border border-white/[0.08] rounded-xl px-3 py-2 text-xs text-white focus:outline-none cursor-pointer"
+          >
+            <option value="oled" {% if settings.theme_variant == 'oled' or not settings.theme_variant %}selected{% endif %}>OLED Pure Black (#202020 Desktop Native)</option>
+            <option value="navy" {% if settings.theme_variant == 'navy' %}selected{% endif %}>Obsidian Navy (#0f172a Deep)</option>
+            <option value="slate" {% if settings.theme_variant == 'slate' %}selected{% endif %}>Industrial Slate (#1e293b Charcoal)</option>
+          </select>
+        </div>
+
+        <!-- Accent Color Picker -->
+        <div class="space-y-1.5 bg-[#18181b] p-3.5 rounded-xl border border-white/[0.06]">
+          <label class="block text-xs text-gray-300 font-medium">Accent Glow Palette</label>
+          <div class="flex items-center space-x-3 pt-1">
+            {% for color, name in [('#3ea6ff', 'Electric Cyan'), ('#10b981', 'Emerald'), ('#a855f7', 'Cyber Purple'), ('#f59e0b', 'Amber Gold'), ('#f43f5e', 'Neon Rose')] %}
+            <label class="cursor-pointer">
+              <input
+                type="radio"
+                name="accent_color"
+                value="{{ color }}"
+                {% if (settings.accent_color or '#3ea6ff') == color %}checked{% endif %}
+                class="sr-only peer"
+              />
+              <div class="w-6 h-6 rounded-full border-2 border-transparent peer-checked:border-white transition-all shadow-md" style="background-color: {{ color }};" title="{{ name }}"></div>
+            </label>
+            {% endfor %}
+          </div>
+        </div>
+
+        <!-- Audio Chimes -->
+        <div class="space-y-1.5 bg-[#18181b] p-3 rounded-xl border border-white/[0.06] flex items-center justify-between">
+          <div>
+            <span class="text-xs text-gray-200 font-medium block">Audio Chimes</span>
+            <span class="text-[10px] text-gray-500 font-sans">Plays modern harmonic sound chime upon download finish.</span>
+          </div>
+          <label class="relative inline-flex items-center cursor-pointer shrink-0">
+            <input
+              type="checkbox"
+              name="sound_chimes_enabled"
+              value="true"
+              {% if settings.sound_chimes_enabled == 'true' or not settings.sound_chimes_enabled %}checked{% endif %}
+              class="sr-only peer"
+            />
+            <div class="w-9 h-5 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-rose-500"></div>
+          </label>
+        </div>
+
+        <!-- Desktop Notifications -->
+        <div class="space-y-1.5 bg-[#18181b] p-3 rounded-xl border border-white/[0.06] flex items-center justify-between">
+          <div>
+            <span class="text-xs text-gray-200 font-medium block">Desktop Notifications</span>
+            <span class="text-[10px] text-gray-500 font-sans">Displays native system notification alerts when tasks finish.</span>
+          </div>
+          <label class="relative inline-flex items-center cursor-pointer shrink-0">
+            <input
+              type="checkbox"
+              name="desktop_notifications_enabled"
+              value="true"
+              {% if settings.desktop_notifications_enabled == 'true' or not settings.desktop_notifications_enabled %}checked{% endif %}
+              class="sr-only peer"
+            />
+            <div class="w-9 h-5 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-rose-500"></div>
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <!-- 5. ABOUT & UPDATES -->
+    <div class="bg-[#242426] p-5 rounded-2xl border border-white/[0.06] space-y-4">
+      <div class="flex items-center justify-between border-b border-white/[0.06] pb-2">
+        <div class="flex items-center space-x-2 text-white font-hanken font-bold text-sm">
+          <svg class="w-4 h-4 text-[#3ea6ff]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+          <span>About Vortex Downloader</span>
+        </div>
+        <span class="px-2 py-0.5 rounded text-[10px] font-mono bg-[#3ea6ff]/20 text-[#3ea6ff] border border-[#3ea6ff]/30 font-bold">
+          v0.6.9 Pro Engine
+        </span>
+      </div>
+
+      <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-[#18181b] p-4 rounded-xl border border-white/[0.06]">
+        <div class="space-y-1">
+          <h4 class="font-hanken font-bold text-sm text-white flex items-center space-x-2">
+            <span>Vortex Downloader Universal Core</span>
+            <span class="px-1.5 py-0.2 rounded text-[9px] font-mono bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">Release Stable</span>
+          </h4>
+          <p class="text-xs text-gray-400 font-sans">High-concurrency Python + HTMX engine with 16-pipe IDM work-stealing, yt-dlp media extraction, and full Aria2 JSON-RPC 2.0 integration.</p>
+          <div class="text-[10px] font-mono text-gray-500 pt-1">
+            Built with FastAPI, Jinja2, HTMX, Tailwind CSS, yt-dlp, FFmpeg, httpx, and SQLite WAL mode.
+          </div>
+        </div>
+
+        <button
+          type="button"
+          onclick="checkForUpdate()"
+          id="btn-check-update"
+          class="px-4 py-2 rounded-xl bg-[#2b2b2e] hover:bg-[#343438] active:scale-95 text-white font-mono text-xs font-medium transition-all cursor-pointer border border-white/[0.08] shadow-sm shrink-0 flex items-center space-x-1.5"
+        >
+          <svg class="w-3.5 h-3.5 text-sky-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+          <span>Check for Update</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- 6. PREMIUM DEBRID ACCOUNT -->
+    <div class="bg-[#242426] p-5 rounded-2xl border border-white/[0.06] space-y-3">
+      <div class="flex items-center space-x-2 text-white font-hanken font-bold text-sm border-b border-white/[0.06] pb-2">
+        <svg class="w-4 h-4 text-purple-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
+        <span>Premium Cloud Host Unrestrictor (Real-Debrid)</span>
+      </div>
+
+      <div class="space-y-1.5 bg-[#18181b] p-3.5 rounded-xl border border-white/[0.06]">
+        <label class="block text-xs font-mono text-gray-300">Real-Debrid API Key (Unthrottled Host Link Resolution)</label>
+        <div class="flex space-x-2">
+          <input
+            type="password"
+            name="real_debrid_key"
+            id="real-debrid-input"
+            value="{{ settings.real_debrid_key or '' }}"
+            placeholder="Enter Real-Debrid API token..."
+            class="flex-1 bg-[#141416] border border-white/[0.08] focus:border-[#3ea6ff] rounded-xl px-3 py-1.5 text-xs font-mono text-white focus:outline-none"
+          />
+          <button
+            type="button"
+            onclick="verifyDebrid()"
+            class="px-3.5 py-1.5 rounded-xl bg-purple-500/20 hover:bg-purple-500 text-purple-300 hover:text-white border border-purple-500/30 text-xs font-mono transition-colors cursor-pointer"
+          >
+            Verify Key
+          </button>
+        </div>
+        <p id="debrid-verify-msg" class="text-[11px] font-mono text-gray-500">Unlocks 1 Gbps direct pipes for Rapidgator, 1Fichier, Uptobox, Mega, and 80+ hosts.</p>
+      </div>
+    </div>
+
+    <!-- 7. OPEN DATA SOVEREIGNTY EXPORTERS -->
+    <div class="bg-[#242426] p-5 rounded-2xl border border-white/[0.06] space-y-3">
+      <div class="flex items-center space-x-2 text-white font-hanken font-bold text-sm border-b border-white/[0.06] pb-2">
+        <svg class="w-4 h-4 text-sky-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+        <span>Data Sovereignty & Open Task Export</span>
+      </div>
+
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+        <a
+          href="/api/export/curl"
+          download="vortex_downloads.sh"
+          class="p-3 rounded-xl bg-[#18181b] hover:bg-[#3ea6ff]/10 border border-white/[0.06] hover:border-[#3ea6ff]/30 text-center transition-colors cursor-pointer group"
+        >
+          <div class="font-mono text-xs font-bold text-white group-hover:text-[#3ea6ff]">cURL Script</div>
+          <div class="text-[10px] text-gray-500 font-mono mt-0.5">.sh batch script</div>
+        </a>
+
+        <a
+          href="/api/export/aria2"
+          download="vortex_aria2.txt"
+          class="p-3 rounded-xl bg-[#18181b] hover:bg-emerald-500/10 border border-white/[0.06] hover:border-emerald-500/30 text-center transition-colors cursor-pointer group"
+        >
+          <div class="font-mono text-xs font-bold text-white group-hover:text-emerald-400">aria2 Input</div>
+          <div class="text-[10px] text-gray-500 font-mono mt-0.5">.txt batch list</div>
+        </a>
+
+        <a
+          href="/api/export/metalink"
+          download="vortex_downloads.meta4"
+          class="p-3 rounded-xl bg-[#18181b] hover:bg-purple-500/10 border border-white/[0.06] hover:border-purple-500/30 text-center transition-colors cursor-pointer group"
+        >
+          <div class="font-mono text-xs font-bold text-white group-hover:text-purple-400">Metalink 4.0</div>
+          <div class="text-[10px] text-gray-500 font-mono mt-0.5">.meta4 XML</div>
+        </a>
+
+        <a
+          href="/api/export/json"
+          download="vortex_backup.json"
+          class="p-3 rounded-xl bg-[#18181b] hover:bg-amber-500/10 border border-white/[0.06] hover:border-amber-500/30 text-center transition-colors cursor-pointer group"
+        >
+          <div class="font-mono text-xs font-bold text-white group-hover:text-amber-400">JSON Backup</div>
+          <div class="text-[10px] text-gray-500 font-mono mt-0.5">Full task dump</div>
+        </a>
+      </div>
+    </div>
+
+  </form>
+</div>
+
+<script>
+  function saveAllSettings() {
+    const form = document.getElementById('settings-form');
+    const data = new FormData(form);
+    fetch('/api/settings/update', {
+      method: 'POST',
+      body: data
+    }).then(r => {
+      if (r.ok) showToast("Settings updated successfully!", 'success');
+      else showToast("Failed to save settings", 'error');
+    }).catch(() => showToast("Failed to save settings", 'error'));
+  }
+
+  function toggleProxyFields(show) {
+    const fields = document.getElementById('proxy-fields');
+    if (fields) {
+      if (show) fields.classList.remove('hidden');
+      else fields.classList.add('hidden');
+    }
+  }
+
+  function openDownloadDir() {
+    fetch('/api/settings/open-download-dir', { method: 'POST' }).then(r => {
+      if (r.ok) showToast("Download directory opened in Explorer", 'info');
+      else showToast("Could not open download directory", 'error');
+    }).catch(() => showToast("Could not open download directory", 'error'));
+  }
+
+  function toggleIntegrationFeature(feature, enabled) {
+    const formData = new FormData();
+    formData.append('feature', feature);
+    formData.append('enabled', enabled);
+    fetch('/api/settings/integration/toggle', {
+      method: 'POST',
+      body: formData
+    }).then(r => r.json()).then(data => {
+      if (data.success) {
+        showToast(`${feature.replace('_', ' ')} ${enabled ? 'enabled' : 'disabled'}!`, 'success');
+      } else {
+        showToast(`Could not change ${feature}`, 'error');
+      }
+    }).catch(() => showToast(`Failed to update integration`, 'error'));
+  }
+
+  function regeneratePairToken() {
+    if (confirm("Regenerate extension pairing secret? You will need to update the token in your browser extension.")) {
+      fetch('/api/settings/regenerate-token', { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+          if (data.token) {
+            document.getElementById('aria2-secret-input').value = data.token;
+            showToast("New pair secret generated!", 'success');
+          }
+        }).catch(() => showToast("Failed to generate token", 'error'));
+    }
+  }
+
+  function checkForUpdate() {
+    const btn = document.getElementById('btn-check-update');
+    const orig = btn.innerHTML;
+    btn.innerHTML = `<span class="animate-spin mr-1">↻</span> Checking...`;
+    fetch('/api/system/check-update')
+      .then(r => r.json())
+      .then(data => {
+        btn.innerHTML = orig;
+        showToast(data.message, 'success');
+      })
+      .catch(() => {
+        btn.innerHTML = orig;
+        showToast("You are on the latest Vortex Downloader version.", 'info');
+      });
+  }
+
+  function verifyDebrid() {
+    const key = document.getElementById('real-debrid-input').value.trim();
+    if (!key) {
+      showToast("Please enter an API key", 'error');
+      return;
+    }
+    const msg = document.getElementById('debrid-verify-msg');
+    msg.innerText = "Verifying with Real-Debrid API...";
+    fetch('/api/accounts/debrid', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider: 'real_debrid', apiKey: key })
+    }).then(r => r.json()).then(data => {
+      if (data.success) {
+        msg.innerHTML = `<span class="text-emerald-400 font-bold">Verified! Account: ${data.username || 'Premium'} (Days left: ${data.days_left || 'Active'})</span>`;
+        showToast("Real-Debrid account verified!", 'success');
+      } else {
+        msg.innerHTML = `<span class="text-red-400 font-bold">Verification failed: ${data.error || 'Invalid API Token'}</span>`;
+        showToast("Invalid Real-Debrid key", 'error');
+      }
+    }).catch(() => {
+      msg.innerHTML = `<span class="text-red-400 font-bold">Could not connect to Real-Debrid API</span>`;
+    });
+  }
+</script>

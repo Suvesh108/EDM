@@ -9,4 +9,11 @@ coverage/
 __pycache__/
 *.pyc
 backend/temp_downloads/
+backend/data/*.db
+backend/data/*.db-shm
+backend/data/*.db-wal
+*.vrec
+*.part
+*.tmp
 *.exe
+!release/VortexDownloader.exe

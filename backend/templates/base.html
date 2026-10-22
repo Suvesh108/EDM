@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VortexDownloader - Universal Media & Multi-Pipe Turbo Downloader</title>
+
+  <!-- Browser Tab Favicon / Logo -->
+  <link rel="icon" type="image/png" sizes="64x64" href="/static/assets/favicon.png?v=2" />
+  <link rel="shortcut icon" href="/static/assets/favicon.ico?v=2" />
+  <link rel="apple-touch-icon" href="/static/assets/apple-touch-icon.png?v=2" />
+
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            vortex: {
+              accent: '#3ea6ff',
+              dark: '#202020',
+              canvas: '#272727',
+              surface: '#1a1a1c',
+              border: '#2b2b30',
+              cyan: '#00F0FF',
+              emerald: '#00FF88',
+              amber: '#FFB800',
+              red: '#FF1A35'
+            }
+          },
+          fontFamily: {
+            hanken: ['"Hanken Grotesk"', 'sans-serif'],
+            sans: ['Inter', 'sans-serif'],
+            mono: ['"Geist Mono"', 'monospace']
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- HTMX & SSE Extension -->
+  <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+  <script src="https://unpkg.com/htmx-ext-sse@2.2.2/sse.js"></script>
+
+  <!-- Custom Styles & Scripts -->
+  <link rel="stylesheet" href="/static/css/vortex.css" />
+  <script src="/static/js/vortex.js"></script>
+</head>
+<body class="h-screen w-screen bg-[#202020] text-[#f0edf1] font-sans flex flex-col overflow-hidden select-none">
+
+  <!-- 1. Top Windows App Bar -->
+  <header class="h-12 bg-[#202020] border-b border-white/[0.06] flex items-center justify-between px-4 select-none shrink-0 z-20">
+    <!-- Brand / Title -->
+    <div class="flex items-center space-x-2.5">
+      <img src="/static/assets/logo.png" alt="Vortex" class="w-6 h-6 object-contain rounded" onerror="this.src='/static/assets/favicon.png'"/>
+      <span class="font-hanken font-bold text-sm tracking-tight text-white flex items-center space-x-1.5">
+        <span>VortexDownloader</span>
+        <span class="px-1.5 py-0.5 rounded text-[10px] font-mono bg-sky-500/20 text-[#3ea6ff] border border-sky-500/30 font-semibold">v0.6.9</span>
+      </span>
+    </div>
+
+    <!-- Centered Search Bar -->
+    <div class="flex-1 max-w-md mx-6">
+      <div class="relative flex items-center">
+        <svg class="w-3.5 h-3.5 absolute left-3 text-gray-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <circle cx="11" cy="11" r="8"></circle>
+          <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+        </svg>
+        <input
+          type="text"
+          id="global-search"
+          name="search"
+          placeholder="Search tasks, URLs, or domains..."
+          hx-get="/partials/tasks/list"
+          hx-trigger="keyup changed delay:200ms"
+          hx-target="#tasks-list-container"
+          hx-include="[name='filter']"
+          class="w-full bg-[#2a2a2d] hover:bg-[#323236] focus:bg-[#1a1a1c] border border-white/[0.08] focus:border-[#3ea6ff] rounded-xl pl-9 pr-3 py-1.5 text-xs text-gray-100 placeholder-gray-500 transition-colors"
+        />
+      </div>
+    </div>
+
+    <!-- Right Header Actions -->
+    <div class="flex items-center space-x-2">
+      <!-- Aria2 RPC Status Button -->
+      <button onclick="openModal('aria2-modal')" class="flex items-center space-x-1.5 px-2.5 py-1 rounded-lg bg-sky-500/10 hover:bg-sky-500/20 border border-sky-500/30 text-sky-400 text-xs font-mono transition-colors cursor-pointer" title="Aria2 JSON-RPC Status">
+        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+        <span>Aria2 RPC</span>
+      </button>
+
+      <!-- Quick New Task Button -->
+      <button onclick="openModal('add-task-modal')" class="flex items-center space-x-1 px-3 py-1 rounded-lg bg-[#3ea6ff] hover:bg-[#3192e4] text-black text-xs font-bold font-sans transition-colors cursor-pointer shadow-md shadow-[#3ea6ff]/20">
+        <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+        <span>New Task</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- 2. Main Window Frame: Sidebar Nav + Inset Canvas -->
+  <div class="flex-1 flex min-h-0 overflow-hidden bg-[#202020]">
+    <!-- Left Navigation Rail -->
+    <aside class="w-20 bg-transparent flex flex-col items-center py-2.5 px-2 justify-between select-none shrink-0 z-30">
+      <div class="flex flex-col items-center space-y-2 w-full">
+        <!-- Tasks Nav Button -->
+        <button
+          hx-get="/views/tasks"
+          hx-target="#main-viewport"
+          hx-swap="innerHTML"
+          class="nav-btn w-16 h-16 rounded-xl flex flex-col items-center justify-center space-y-0.5 cursor-pointer relative transition-all group bg-[#38383c] text-[#3ea6ff] shadow-lg shadow-[#3ea6ff]/10"
+          id="nav-tasks"
+          onclick="setActiveNav('nav-tasks')"
+        >
+          <div class="nav-indicator absolute left-0 top-1/2 -translate-y-1/2 w-1.5 h-7 bg-[#3ea6ff] rounded-r-full shadow-sm shadow-[#3ea6ff]/80"></div>
+          <svg class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 3v12" /><polyline points="8 11 12 15 16 11" /><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />
+          </svg>
+          <span class="text-[11px] font-sans font-medium tracking-tight">Tasks</span>
+        </button>
+
+        <!-- New Task Modal Launcher -->
+        <button
+          onclick="openModal('add-task-modal')"
+          class="w-16 h-16 rounded-xl flex flex-col items-center justify-center space-y-0.5 text-gray-400 hover:text-[#3ea6ff] hover:bg-[#3ea6ff]/10 hover:border hover:border-[#3ea6ff]/30 transition-colors cursor-pointer group"
+        >
+          <svg class="w-6 h-6 stroke-[2.2] group-hover:text-[#3ea6ff] transition-transform group-hover:rotate-90 duration-200" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line>
+          </svg>
+          <span class="text-[11px] font-sans font-medium tracking-tight group-hover:text-white transition-colors">New task</span>
+        </button>
+
+        <!-- Inbuilt Browser & Sniffer Button -->
+        <button
+          onclick="openModal('browser-modal')"
+          class="w-16 h-16 rounded-xl flex flex-col items-center justify-center space-y-0.5 text-gray-400 hover:text-emerald-400 hover:bg-emerald-500/10 cursor-pointer transition-colors group"
+          title="Inbuilt Browser & Sniffer"
+        >
+          <svg class="w-6 h-6 stroke-[2] group-hover:text-emerald-400 group-hover:rotate-45 transition-transform duration-300" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+          </svg>
+          <span class="text-[11px] font-sans tracking-tight group-hover:text-white transition-colors">Browser</span>
+        </button>
+
+        <!-- BitTorrent Swarm Button -->
+        <button
+          onclick="openModal('torrent-modal')"
+          class="w-16 h-16 rounded-xl flex flex-col items-center justify-center space-y-0.5 text-gray-400 hover:text-cyan-400 hover:bg-cyan-500/10 cursor-pointer transition-colors group"
+          title="BitTorrent & Swarm P2P"
+        >
+          <svg class="w-6 h-6 stroke-[2] group-hover:text-cyan-400 group-hover:scale-110 transition-transform duration-200" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <circle cx="12" cy="12" r="2"></circle><path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.82a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14"></path>
+          </svg>
+          <span class="text-[11px] font-sans tracking-tight group-hover:text-white transition-colors">Swarm</span>
+        </button>
+
+        <!-- Secret Vault Button -->
+        <button
+          hx-get="/views/vault"
+          hx-target="#main-viewport"
+          hx-swap="innerHTML"
+          class="nav-btn w-16 h-16 rounded-xl flex flex-col items-center justify-center space-y-0.5 text-gray-400 hover:text-purple-400 hover:bg-white/[0.06] cursor-pointer relative transition-colors"
+          id="nav-vault"
+          onclick="setActiveNav('nav-vault')"
+          title="Secret Private Vault"
+        >
+          <div class="nav-indicator hidden absolute left-0 top-1/2 -translate-y-1/2 w-1.5 h-7 bg-[#3ea6ff] rounded-r-full shadow-sm shadow-[#3ea6ff]/80"></div>
+          <svg class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+          </svg>
+          <span class="text-[11px] font-sans tracking-tight">Vault</span>
+        </button>
+      </div>
+
+      <!-- Settings Button (Bottom) -->
+      <div class="w-full flex justify-center pb-1">
+        <button
+          hx-get="/views/settings"
+          hx-target="#main-viewport"
+          hx-swap="innerHTML"
+          class="nav-btn w-16 h-16 rounded-xl flex flex-col items-center justify-center space-y-0.5 text-gray-400 hover:text-white hover:bg-white/[0.06] cursor-pointer relative transition-colors"
+          id="nav-settings"
+          onclick="setActiveNav('nav-settings')"
+          title="Settings & Feature Packs"
+        >
+          <div class="nav-indicator hidden absolute left-0 top-1/2 -translate-y-1/2 w-1.5 h-7 bg-[#3ea6ff] rounded-r-full shadow-sm shadow-[#3ea6ff]/80"></div>
+          <svg class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+          </svg>
+          <span class="text-[11px] font-sans tracking-tight">Settings</span>
+        </button>
+      </div>
+    </aside>
+
+    <!-- Inset Rounded Content Viewport -->
+    <main id="main-viewport" class="flex-1 min-w-0 bg-[#272727] rounded-tl-2xl border-t border-l border-white/[0.08] overflow-y-auto px-5 py-4 shadow-inner">
+      {% block content %}
+      <!-- Tasks View will be rendered here by default -->
+      {% endblock %}
+    </main>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div id="toast-container" class="fixed bottom-4 right-4 z-50 flex flex-col space-y-2 pointer-events-none"></div>
+
+  <!-- Modals Container (Populated via partials) -->
+  <div id="modal-container">
+    {% include "partials/modals/add_task_modal.html" %}
+    {% include "partials/modals/aria2_modal.html" %}
+    {% include "partials/modals/browser_modal.html" %}
+    {% include "partials/modals/torrent_modal.html" %}
+  </div>
+
+  <script>
+    function setActiveNav(activeId) {
+      document.querySelectorAll('.nav-btn').forEach(btn => {
+        btn.classList.remove('bg-[#38383c]', 'text-[#3ea6ff]', 'shadow-lg', 'shadow-[#3ea6ff]/10');
+        btn.classList.add('text-gray-400');
+        const ind = btn.querySelector('.nav-indicator');
+        if (ind) ind.classList.add('hidden');
+      });
+      const active = document.getElementById(activeId);
+      if (active) {
+        active.classList.add('bg-[#38383c]', 'text-[#3ea6ff]', 'shadow-lg', 'shadow-[#3ea6ff]/10');
+        active.classList.remove('text-gray-400');
+        const ind = active.querySelector('.nav-indicator');
+        if (ind) ind.classList.remove('hidden');
+      }
+    }
+  </script>
+</body>
+</html>

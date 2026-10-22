@@ -1,5 +1,0 @@
-#!/bin/sh
-# Vortex Downloader Bundled Core: aria2c v1.37.0
-# Category: Multi-Connection Turbo Downloader
-# High-speed multi-threaded multi-protocol (HTTP, HTTPS, FTP, Torrent) file download engine.
-echo "[VORTEX_CORE] aria2c v1.37.0 initialized for execution."

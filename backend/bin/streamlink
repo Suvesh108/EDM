@@ -1,5 +1,0 @@
-#!/bin/sh
-# Vortex Downloader Bundled Core: streamlink v7.1.3
-# Category: Live Stream Ingestion Engine
-# Pipes live video streams from Twitch, YouTube Live, Kick, and RTMP/HLS into files.
-echo "[VORTEX_CORE] streamlink v7.1.3 initialized for execution."

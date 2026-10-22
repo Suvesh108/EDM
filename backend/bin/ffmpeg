@@ -1,4 +1,0 @@
-#!/bin/sh
-# Vortex Downloader Embedded Core: ffmpeg v7.1.0-static
-# Lossless Audio/Video Transcoder & Multiplexer
-echo "Vortex Engine: ffmpeg v7.1.0-static active."

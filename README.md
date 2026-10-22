@@ -21,14 +21,21 @@
 
 <hr />
 
-## 📱 Android & Desktop (v0.6.9)
+## 💻 Windows Desktop & 📱 Android (v0.6.9)
 
-VortexDownloader is an ultra-fast, universal downloading engine powered by a **Hybrid Architecture (Go Core + Python Media Extractor)** with dynamic multi-pipe streaming, dynamic work-stealing, native Android direct-to-disk storage, real-time IDM/FDM progress telemetry, 4-tier bot-guard evasion, and official browser extension integration!
+VortexDownloader is an ultra-fast, universal downloading engine rewritten entirely in **Python + HTMX** with dynamic multi-pipe streaming, intelligent work-stealing, category auto-sorting, Windows registry protocol/extension integration, real-time IDM/FDM progress telemetry, and Aria2 JSON-RPC 2.0 extension compatibility!
 
+- **Download Windows Executable (v0.6.9)**: [**VortexDownloader.exe**](release/VortexDownloader.exe) *(Portable standalone binary — double-click to launch)*
 - **Download APK (v0.6.9)**: [**VortexDownloader-v0.6.9.apk**](release/VortexDownloader-v0.6.9.apk)
 - **Version**: `0.6.9` (Release v0.6.9)
-- **Package ID**: `io.vortexdownloader.app`
 - **What's New in v0.6.9**:
+  - 🖥️ **Windows Standalone Portable Executable**: Built `release/VortexDownloader.exe` with bundled templates, assets, and auto-browser launcher (`http://localhost:5001`).
+  - 🐍 **Complete Python + HTMX Engine Rewrite**: Fast, responsive dashboard with zero build overhead, real-time polling updates, and persistent SQLite WAL database.
+  - ⚙️ **Comprehensive Settings & Automation Suite**:
+    - Pre-allocated threads (1–64) and Auto Speed Boost thread monitor.
+    - 8 Automatic Category Sorting Rules (Video, Audio, Images, Subtitles, Documents, Archives, Programs, Other).
+    - Windows Registry Integrations (`vortex://` protocol, `.torrent`, `.magnet`, `.ed2k`, `ftp://`, `.m3u8` / `.mpd` associations).
+    - Aria2 JSON-RPC 2.0 browser extension pairing with custom token support.
   - 🚀 **Ghost Downloader 3 Core Architecture Parity**: Full architectural parity with Ghost Downloader 3 feature packs (HTTP, BitTorrent, YouTube, M3U8, GitHub, HuggingFace, ED2k, FTP, FFmpeg).
   - 🧩 **Enhanced HuggingFace & GitHub Packs**: Added support for single-segment model repo IDs (e.g. `bert-base-uncased`), datasets, spaces, direct blob resolvers, and GitHub release asset CDN routing with mirror acceleration.
   - ⚡ **Race-Condition-Free Work-Stealing Downloader**: Fixed chunk boundary overlap and byte re-downloading in multi-pipe segmented downloader.
@@ -102,34 +109,25 @@ The signed APK will be generated at `android/app/build/outputs/apk/release/app-r
 - **Zero Ads, Zero Telemetry**: Clean, sandboxed extraction without referral bloat or trackers.
 - **Sleek React Dashboard**: Modern glassmorphic interface, dark mode, terminal logs, and history caching.
 
-## 🚀 Installation & Setup
+## 🚀 Installation & Setup (Unified Pure Python + HTMX Engine)
+
+VortexDownloader is now 100% written in **Python + HTMX**, eliminating Node/Vite build friction and Go proxy bottlenecks while preserving the authentic dark desktop dashboard!
 
 ### Prerequisites
-- [Node.js](https://nodejs.org/) (v18+)
-- [Python 3.8+](https://www.python.org/)
+- [Python 3.10+](https://www.python.org/)
 
-### 1. Clone & Install
+### 1. Install Dependencies
 ```bash
-# Clone the repository
-git clone https://github.com/Suvesh108/vortex.git
-cd vortex
-
-# Install Node dependencies (includes frontend & backend packages)
-npm install
+pip install -r backend/requirements.txt
 ```
 
-### 2. Install Python Core Dependencies
-Vortex requires `yt-dlp` and `static-ffmpeg` to process media correctly.
+### 2. Run Vortex Downloader
+Launch the entire system (FastAPI backend + HTMX frontend + Aria2 JSON-RPC 2.0):
 ```bash
-pip install yt-dlp static-ffmpeg
+python run.py
 ```
-
-### 3. Run the Development Environment
-Start both the Vite frontend and Express backend concurrently:
-```bash
-npm run dev
-```
-The application will be accessible at `http://localhost:3000`.
+- **Web Dashboard**: `http://localhost:5001`
+- **Aria2 JSON-RPC 2.0**: `http://localhost:5001/jsonrpc` (Secret token: `vortex-rpc-token-2026`)
 
 ## 🌐 Cloud Deployment
 

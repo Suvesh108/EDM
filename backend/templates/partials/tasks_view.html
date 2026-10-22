@@ -1,0 +1,93 @@
+<!-- Tasks View Dashboard -->
+<div class="w-full max-w-5xl mx-auto space-y-4">
+
+  <!-- 1. Tasks Toolbar -->
+  <div class="flex items-center justify-between pb-3 border-b border-white/[0.08]">
+    <!-- Left: Segmented Filter Tabs -->
+    <div class="flex items-center space-x-1.5 bg-[#1a1a1c] p-1 rounded-xl border border-white/[0.06]">
+      <button
+        hx-get="/partials/tasks/list?filter=all"
+        hx-target="#tasks-list-container"
+        class="filter-pill px-3 py-1 rounded-lg text-xs font-sans font-medium transition-colors bg-[#38383c] text-[#3ea6ff]"
+        onclick="setFilterPill(this)"
+      >
+        All
+      </button>
+      <button
+        hx-get="/partials/tasks/list?filter=downloading"
+        hx-target="#tasks-list-container"
+        class="filter-pill px-3 py-1 rounded-lg text-xs font-sans font-medium text-gray-400 hover:text-white transition-colors"
+        onclick="setFilterPill(this)"
+      >
+        Downloading
+      </button>
+      <button
+        hx-get="/partials/tasks/list?filter=completed"
+        hx-target="#tasks-list-container"
+        class="filter-pill px-3 py-1 rounded-lg text-xs font-sans font-medium text-gray-400 hover:text-white transition-colors"
+        onclick="setFilterPill(this)"
+      >
+        Completed
+      </button>
+    </div>
+
+    <!-- Right: Global Actions & Telemetry -->
+    <div class="flex items-center space-x-3">
+      <!-- Live Global Speed Counter -->
+      <div id="global-speed-badge" class="flex items-center space-x-1.5 px-3 py-1 rounded-xl bg-sky-500/10 border border-sky-500/20 text-[#3ea6ff] font-mono text-xs font-bold">
+        <svg class="w-3.5 h-3.5 text-sky-400 animate-pulse" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+        <span id="global-speed-text">0.0 B/s</span>
+      </div>
+
+      <!-- Start All Button -->
+      <button
+        hx-post="/api/tasks/start-all"
+        hx-target="#tasks-list-container"
+        class="flex items-center space-x-1 px-3 py-1 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-400 text-xs font-sans font-medium transition-colors cursor-pointer"
+        title="Start / Resume All Downloads"
+      >
+        <svg class="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+        <span>Start All</span>
+      </button>
+
+      <!-- Pause All Button -->
+      <button
+        hx-post="/api/tasks/pause-all"
+        hx-target="#tasks-list-container"
+        class="flex items-center space-x-1 px-3 py-1 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-400 text-xs font-sans font-medium transition-colors cursor-pointer"
+        title="Pause All Active Downloads"
+      >
+        <svg class="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>
+        <span>Pause All</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- 2. Active Downloading Tasks Section (Live HTMX Poller) -->
+  <div
+    id="active-downloads-container"
+    hx-get="/partials/tasks/active"
+    hx-trigger="load, every 800ms"
+    hx-swap="innerHTML"
+    class="space-y-3"
+  >
+    <!-- Live Active Downloading Cards Injected Here -->
+  </div>
+
+  <!-- 3. Completed & Stored Tasks List Container -->
+  <div id="tasks-list-container" hx-trigger="refreshTasks from:body" hx-get="/partials/tasks/list" hx-swap="innerHTML" class="space-y-2.5">
+    {% include "partials/tasks_list.html" %}
+  </div>
+
+</div>
+
+<script>
+  function setFilterPill(elem) {
+    document.querySelectorAll('.filter-pill').forEach(p => {
+      p.classList.remove('bg-[#38383c]', 'text-[#3ea6ff]');
+      p.classList.add('text-gray-400');
+    });
+    elem.classList.add('bg-[#38383c]', 'text-[#3ea6ff]');
+    elem.classList.remove('text-gray-400');
+  }
+</script>

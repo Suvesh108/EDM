@@ -1,5 +1,0 @@
-#!/bin/sh
-# Vortex Downloader Bundled Core: gallery-dl v1.28.5
-# Category: Image & Album Scraper
-# Bulk image, gallery, and album downloader for Pinterest, Reddit, Instagram, Imgur, DeviantArt.
-echo "[VORTEX_CORE] gallery-dl v1.28.5 initialized for execution."

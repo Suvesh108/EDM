@@ -1,5 +1,0 @@
-#!/bin/sh
-# Vortex Downloader Bundled Core: you-get v0.4.1650
-# Category: Universal Web Media Tool
-# Lightweight command-line media scraper for web multimedia streams.
-echo "[VORTEX_CORE] you-get v0.4.1650 initialized for execution."
