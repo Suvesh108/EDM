@@ -26,7 +26,6 @@ async function run() {
   const owner = 'Suvesh108';
   const repo = 'vortex';
   const tag = process.argv[2] || 'v0.6.9';
-  const versionNum = tag.replace(/^v/i, '');
 
   console.log(`Checking existing release for tag ${tag}...`);
   const headers = {
@@ -41,23 +40,44 @@ async function run() {
     headers
   });
 
-  const releaseBody = `## 📱 VortexDownloader ${tag} - Android APK & Desktop Release
+  const releaseBody = `## 💻 VortexDownloader ${tag} - Windows Desktop Executable & Android APK
 
-- **Android APK (Direct Install)**: \`VortexDownloader-${tag}.apk\`
+- 🖥️ **Windows Executable (Standalone Portable)**: \`VortexDownloader.exe\` (Double-click to launch, no install required)
+- 📱 **Android APK (Direct Install)**: \`VortexDownloader-${tag}.apk\`
 
 ✨ **What's New in ${tag}**:
-- 🚀 **Ghost Downloader 3 Core Architecture Parity**: Full architectural alignment with Ghost Downloader 3 feature packs (HTTP, BitTorrent, YouTube, M3U8, GitHub, HuggingFace, ED2k, FTP, FFmpeg).
-- 🧩 **Enhanced HuggingFace & GitHub Packs**: Added support for single-segment model repo IDs (e.g., \`bert-base-uncased\`, \`gpt2\`), datasets, spaces, direct blob resolvers, and GitHub release asset CDN routing with mirror acceleration.
-- ⚡ **Race-Condition-Free Work-Stealing Downloader**: Fixed chunk boundary collision and double byte counting in multi-pipe segmented downloader.
-- 🔌 **Upgraded Hybrid Go Gateway & Aria2 JSON-RPC**: Reverse proxy routes in Go gateway (\`:5001\`) to Python sidecar (\`:5002\`) for all packs, accounts, plugins, and exporters with native execution of \`aria2.addUri\`, \`aria2.tellStatus\`, and \`aria2.tellActive\`.
-- 🐳 **Production Docker Multi-Stage Engine**: Standalone multi-stage Python 3.11 container bundling built React frontend assets and static-ffmpeg.
-- 📱 **Mobile & Extension Integration**: Updated Manifest V3 Chromium extension and Android Capacitor build with zero-latency backend discovery.
-- 🛡️ **Defensive Error Handling & Invariant Verification**: Stabilized Real-Debrid token management, plugin resolutions, and batch exporters across both Go Core and Python backends.
+- 🖥️ **Standalone Windows Executable**: Bundled single-file binary with embedded templates, static assets, and automatic local browser startup (\`http://localhost:5001\`).
+- 🐍 **Complete Python + HTMX Architecture Rewrite**: Pure Python core powered by FastAPI, Jinja2, and HTMX. Zero Node/Vite build steps and zero Go gateway proxy bottlenecks.
+- 🎯 **100% Mathematically Accurate Progress Tracking**: Eliminated the 95% jump bug with automated byte-range probing (\`Range: bytes=0-1\`) and real downloaded payload accounting.
+- ⚙️ **Comprehensive Settings & Automation Suite**:
+  - Pre-allocated threads (1–64) and dynamic Auto Speed Boost thread monitor.
+  - 8 Automatic Category Sorting Rules (Video, Audio, Images, Subtitles, Documents, Archives, Programs, Other).
+  - Windows Registry protocol & extension integration (\`vortex://\`, \`.torrent\`, \`.magnet\`, \`.ed2k\`, \`ftp://\`, \`.m3u8\`, \`.mpd\`).
+  - Aria2 JSON-RPC 2.0 browser extension pairing with custom token support.
+- 🧲 **Multi-Protocol & Host Extraction**: Native support for YouTube, TikTok, Vimeo, HLS/M3U8 streams, BitTorrent, and 16 direct host decoders (TeraBox, Streamtape, DoodStream, etc.).
 `;
 
   if (getRes.status === 200) {
     release = await getRes.json();
     console.log(`Found existing release: ${release.name} (id: ${release.id})`);
+    
+    // Update release description
+    console.log(`Updating release body for ${tag}...`);
+    const updateRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/releases/${release.id}`, {
+      method: 'PATCH',
+      headers: {
+        ...headers,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        name: `VortexDownloader ${tag}`,
+        body: releaseBody
+      })
+    });
+    if (updateRes.ok) {
+      release = await updateRes.json();
+      console.log(`Updated release body successfully.`);
+    }
   } else {
     console.log(`Creating new release for ${tag}...`);
     const createRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/releases`, {
@@ -84,29 +104,41 @@ async function run() {
     console.log(`Created release id: ${release.id}`);
   }
 
-  // Upload Single Release APK Asset
-  const apkFiles = [
-    { name: `VortexDownloader-${tag}.apk`, path: `release/VortexDownloader-${tag}.apk` }
+  // Release Assets to Upload
+  const filesToUpload = [
+    { 
+      name: 'VortexDownloader.exe', 
+      path: 'release/VortexDownloader.exe',
+      contentType: 'application/octet-stream'
+    },
+    { 
+      name: `VortexDownloader-${tag}.apk`, 
+      path: `release/VortexDownloader-${tag}.apk`,
+      contentType: 'application/vnd.android.package-archive'
+    }
   ];
 
-  for (const apk of apkFiles) {
-    const filePath = path.resolve(apk.path);
+  for (const item of filesToUpload) {
+    const filePath = path.resolve(item.path);
     if (!fs.existsSync(filePath)) {
       console.warn(`File not found: ${filePath}`);
       continue;
     }
 
     const fileBuffer = fs.readFileSync(filePath);
-    const fileName = apk.name;
+    const fileName = item.name;
 
     // Check if asset already exists on release
     const existingAsset = release.assets?.find(a => a.name === fileName);
     if (existingAsset) {
       console.log(`Deleting existing asset ${fileName} (${existingAsset.id})...`);
-      await fetch(`https://api.github.com/repos/${owner}/${repo}/releases/assets/${existingAsset.id}`, {
+      const delRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/releases/assets/${existingAsset.id}`, {
         method: 'DELETE',
         headers
       });
+      if (!delRes.ok) {
+        console.warn(`Could not delete asset ${existingAsset.id}: ${delRes.status}`);
+      }
     }
 
     console.log(`Uploading ${fileName} (${(fileBuffer.length / (1024 * 1024)).toFixed(2)} MB)...`);
@@ -116,7 +148,7 @@ async function run() {
       method: 'POST',
       headers: {
         ...headers,
-        'Content-Type': 'application/vnd.android.package-archive',
+        'Content-Type': item.contentType,
         'Content-Length': fileBuffer.length.toString()
       },
       body: fileBuffer
@@ -131,7 +163,7 @@ async function run() {
     }
   }
 
-  console.log(`\n🎉 Release published successfully at: ${release.html_url}`);
+  console.log(`\n🎉 Release published and assets updated at: ${release.html_url}`);
 }
 
 run().catch(err => {
