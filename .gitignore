@@ -16,4 +16,4 @@ backend/data/*.db-wal
 *.part
 *.tmp
 *.exe
-!release/VortexDownloader.exe
+!release/VortexDownloader-Setup*.exe

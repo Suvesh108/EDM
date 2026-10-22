@@ -40,13 +40,13 @@ async function run() {
     headers
   });
 
-  const releaseBody = `## 💻 VortexDownloader ${tag} - Windows Desktop Executable & Android APK
+  const releaseBody = `## 💻 VortexDownloader ${tag} - Windows Setup Installer & Android APK
 
-- 🖥️ **Windows Executable (Standalone Portable)**: \`VortexDownloader.exe\` (Double-click to launch, no install required)
+- 🖥️ **Windows Installer**: \`VortexDownloader-Setup-${tag}.exe\` (Official Windows Setup wizard with Start Menu shortcut, Desktop icon, uninstaller, and URL protocol handler)
 - 📱 **Android APK (Direct Install)**: \`VortexDownloader-${tag}.apk\`
 
 ✨ **What's New in ${tag}**:
-- 🖥️ **Standalone Windows Executable**: Bundled single-file binary with embedded templates, static assets, and automatic local browser startup (\`http://localhost:5001\`).
+- 🖥️ **Official Windows Setup Installer**: Full installer wizard with desktop & start menu shortcuts, automatic local browser startup (\`http://localhost:5001\`), and uninstaller support.
 - 🐍 **Complete Python + HTMX Architecture Rewrite**: Pure Python core powered by FastAPI, Jinja2, and HTMX. Zero Node/Vite build steps and zero Go gateway proxy bottlenecks.
 - 🎯 **100% Mathematically Accurate Progress Tracking**: Eliminated the 95% jump bug with automated byte-range probing (\`Range: bytes=0-1\`) and real downloaded payload accounting.
 - ⚙️ **Comprehensive Settings & Automation Suite**:
@@ -104,11 +104,29 @@ async function run() {
     console.log(`Created release id: ${release.id}`);
   }
 
+  // Remove obsolete portable exe asset if present on the release
+  const obsoleteAssets = ['VortexDownloader.exe'];
+  for (const obsoleteName of obsoleteAssets) {
+    const found = release.assets?.find(a => a.name === obsoleteName);
+    if (found) {
+      console.log(`Purging obsolete portable asset: ${obsoleteName} (${found.id})...`);
+      const delRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/releases/assets/${found.id}`, {
+        method: 'DELETE',
+        headers
+      });
+      if (delRes.ok) {
+        console.log(`Deleted obsolete asset: ${obsoleteName}`);
+      } else {
+        console.warn(`Failed to delete obsolete asset ${obsoleteName}: ${delRes.status}`);
+      }
+    }
+  }
+
   // Release Assets to Upload
   const filesToUpload = [
     { 
-      name: 'VortexDownloader.exe', 
-      path: 'release/VortexDownloader.exe',
+      name: `VortexDownloader-Setup-${tag}.exe`, 
+      path: `release/VortexDownloader-Setup-${tag}.exe`,
       contentType: 'application/octet-stream'
     },
     { 

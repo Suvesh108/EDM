@@ -25,11 +25,11 @@
 
 VortexDownloader is an ultra-fast, universal downloading engine rewritten entirely in **Python + HTMX** with dynamic multi-pipe streaming, intelligent work-stealing, category auto-sorting, Windows registry protocol/extension integration, real-time IDM/FDM progress telemetry, and Aria2 JSON-RPC 2.0 extension compatibility!
 
-- **Download Windows Executable (v0.6.9)**: [**VortexDownloader.exe**](release/VortexDownloader.exe) *(Portable standalone binary — double-click to launch)*
+- **Download Windows Installer (v0.6.9)**: [**VortexDownloader-Setup-v0.6.9.exe**](release/VortexDownloader-Setup-v0.6.9.exe) *(Official Windows Setup wizard with Start Menu shortcut, Desktop icon, uninstaller, and URL protocol handler)*
 - **Download APK (v0.6.9)**: [**VortexDownloader-v0.6.9.apk**](release/VortexDownloader-v0.6.9.apk)
 - **Version**: `0.6.9` (Release v0.6.9)
 - **What's New in v0.6.9**:
-  - 🖥️ **Windows Standalone Portable Executable**: Built `release/VortexDownloader.exe` with bundled templates, assets, and auto-browser launcher (`http://localhost:5001`).
+  - 🖥️ **Official Windows Setup Installer**: Built `release/VortexDownloader-Setup-v0.6.9.exe` installer with Start Menu integration, desktop shortcut, uninstaller, and protocol registration.
   - 🐍 **Complete Python + HTMX Engine Rewrite**: Fast, responsive dashboard with zero build overhead, real-time polling updates, and persistent SQLite WAL database.
   - ⚙️ **Comprehensive Settings & Automation Suite**:
     - Pre-allocated threads (1–64) and Auto Speed Boost thread monitor.
