@@ -32,7 +32,7 @@ try {
   process.exit(1);
 }
 
-// Copy assets to Chromium
+// 1. Copy assets to Chromium (dist/chromium)
 fs.copyFileSync(path.join(root, 'manifest.chromium.json'), path.join(distChromium, 'manifest.json'));
 fs.copyFileSync(path.join(root, 'src', 'popup.html'), path.join(distChromium, 'popup.html'));
 fs.copyFileSync(path.join(root, 'src', 'popup.css'), path.join(distChromium, 'popup.css'));
@@ -50,7 +50,24 @@ if (fs.existsSync(path.join(tempDir, 'popup.js'))) {
   fs.copyFileSync(path.join(tempDir, 'popup.js'), path.join(distChromium, 'popup.js'));
 }
 
-// Copy assets to Firefox
+// 2. Also copy assets directly to root extension/ folder so loading `extension` directly works out-of-the-box
+fs.copyFileSync(path.join(root, 'manifest.chromium.json'), path.join(root, 'manifest.json'));
+fs.copyFileSync(path.join(root, 'src', 'popup.html'), path.join(root, 'popup.html'));
+fs.copyFileSync(path.join(root, 'src', 'popup.css'), path.join(root, 'popup.css'));
+if (fs.existsSync(path.join(root, 'src', 'logo.png'))) {
+  fs.copyFileSync(path.join(root, 'src', 'logo.png'), path.join(root, 'logo.png'));
+}
+if (fs.existsSync(path.join(tempDir, 'background.js'))) {
+  fs.copyFileSync(path.join(tempDir, 'background.js'), path.join(root, 'background.js'));
+}
+if (fs.existsSync(path.join(tempDir, 'content.js'))) {
+  fs.copyFileSync(path.join(tempDir, 'content.js'), path.join(root, 'content.js'));
+}
+if (fs.existsSync(path.join(tempDir, 'popup.js'))) {
+  fs.copyFileSync(path.join(tempDir, 'popup.js'), path.join(root, 'popup.js'));
+}
+
+// 3. Copy assets to Firefox (dist/firefox)
 fs.copyFileSync(path.join(root, 'manifest.firefox.json'), path.join(distFirefox, 'manifest.json'));
 fs.copyFileSync(path.join(root, 'src', 'popup.html'), path.join(distFirefox, 'popup.html'));
 fs.copyFileSync(path.join(root, 'src', 'popup.css'), path.join(distFirefox, 'popup.css'));
@@ -70,4 +87,4 @@ if (fs.existsSync(path.join(tempDir, 'popup.js'))) {
 
 // Clean up temp
 fs.rmSync(tempDir, { recursive: true, force: true });
-console.log('[EDM] Extension built successfully for Chromium and Firefox!');
+console.log('[EDM] Extension built successfully for root extension/, dist/chromium, and dist/firefox!');

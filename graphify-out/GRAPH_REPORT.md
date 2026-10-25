@@ -1,17 +1,17 @@
 # Graph Report - EDM  (2026-10-26)
 
 ## Corpus Check
-- 69 files · ~207,668 words
+- 73 files · ~246,513 words
 - Verdict: corpus is large enough that graph structure adds value.
-- Unclassified: 8 file(s) not represented in the graph (top: (none) 3, .css 2, .icns 1)
+- Unclassified: 9 file(s) not represented in the graph (top: (none) 3, .css 3, .icns 1)
 
 ## Summary
-- 726 nodes · 1248 edges · 52 communities (46 shown, 6 thin omitted)
+- 792 nodes · 1367 edges · 55 communities (51 shown, 4 thin omitted)
 - Extraction: 100% EXTRACTED · 0% INFERRED · 0% AMBIGUOUS · INFERRED: 3 edges (avg confidence: 0.85)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `4bca4755`
+- Built from commit: `eca29b7f`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -36,12 +36,12 @@
 - 🚀 Quickstart & Commands
 - AccelerationMode
 - adaptive/engine.rs
-- scheduler.rs
+- WorkScheduler
 - adaptive/worker.rs
 - default.json
 - edm-ipc
 - Phase 1 Plan — Download Engine (Headless)
-- edm-core/src/lib.rs
+- PopupController
 - 5. Architecture
 - background.ts
 - content.ts
@@ -60,27 +60,28 @@
 - EDM Dependency Licenses
 - 3. Technology decisions (with reasons)
 - 9. Testing and verification
-- Sanitizer
-- edm-ipc/src/lib.rs
-- ExtensionMessage
+- manifest.json
+- TokenBucketLimiter
+- background.js
 - AppReply
+- ExtensionMessage
+- spawn_extension_bridge
+- add
 - SegmentState
 
 ## God Nodes (most connected - your core abstractions)
 1. `Store` - 27 edges
 2. `ExtensionMessage` - 24 edges
 3. `PopupController` - 24 edges
-4. `DownloadState` - 22 edges
-5. `FileWriter` - 18 edges
-6. `AdaptiveWorker` - 17 edges
-7. `TokenBucketLimiter` - 17 edges
-8. `AppReply` - 17 edges
-9. `EDM — Edge Download Manager` - 17 edges
-10. `compilerOptions` - 16 edges
+4. `PopupController` - 24 edges
+5. `DownloadState` - 22 edges
+6. `FileWriter` - 18 edges
+7. `AdaptiveWorker` - 17 edges
+8. `TokenBucketLimiter` - 17 edges
+9. `AppReply` - 17 edges
+10. `EDM — Edge Download Manager` - 17 edges
 
 ## Surprising Connections (you probably didn't know these)
-- `spawn_extension_bridge()` --references--> `Json`  [INFERRED]
-  apps/desktop/src-tauri/src/main.rs → crates/edm-store/src/lib.rs
 - `ActiveTaskHandle` --references--> `AdaptiveTelemetry`  [EXTRACTED]
   apps/desktop/src-tauri/src/main.rs → crates/edm-core/src/adaptive/types.rs
 - `AppState` --references--> `AdaptiveEngine`  [EXTRACTED]
@@ -89,11 +90,13 @@
   apps/desktop/src-tauri/src/main.rs → crates/edm-store/src/lib.rs
 - `open_persistent_store()` --references--> `Store`  [EXTRACTED]
   apps/desktop/src-tauri/src/main.rs → crates/edm-store/src/lib.rs
+- `handle_extension_message()` --references--> `AppReply`  [EXTRACTED]
+  apps/desktop/src-tauri/src/main.rs → crates/edm-ipc/src/lib.rs
 
 ## Import Cycles
 - None detected.
 
-## Communities (52 total, 6 thin omitted)
+## Communities (55 total, 4 thin omitted)
 
 ### Community 0 - "7. UI/UX design system"
 Cohesion: 0.18
@@ -112,31 +115,31 @@ Cohesion: 0.07
 Nodes (21): DownloadTask, Engine, DownloadState, Cancelled, Completed, Created, Downloading, Failed (+13 more)
 
 ### Community 4 - "mod.rs"
-Cohesion: 0.26
+Cohesion: 0.18
 Nodes (8): AdaptiveTelemetry, WorkerStatus, Completed, Connecting, Downloading, Failed, Stalled, WorkerTelemetry
 
 ### Community 5 - "edm-nmh/src/main.rs"
-Cohesion: 0.16
-Nodes (7): get_db_path(), handle_message(), main(), open_store(), read_message(), write_reply(), Json
+Cohesion: 0.17
+Nodes (6): get_db_path(), handle_message(), main(), open_store(), read_message(), write_reply()
 
 ### Community 6 - "12. Phases, tasks and "Done when" checklists"
 Cohesion: 0.22
 Nodes (9): 12. Phases, tasks and "Done when" checklists, Phase 0 — Scaffold and decisions, Phase 1 — Download engine (headless), Phase 2 — Queue, scheduler core, limits, file handling, Phase 3 — Desktop app and design system, Phase 4 — Browser integration, Phase 5 — Video/media grabber, Phase 6 — Polish and release (+1 more)
 
 ### Community 7 - "FileWriter"
-Cohesion: 0.07
-Nodes (13): AdaptiveWorkerEvent, Done, Failed, Progress, RateLimited, Stalled, BucketState, test_token_bucket_limit() (+5 more)
+Cohesion: 0.11
+Nodes (6): Sanitizer, .RESERVED_NAMES, FileWriter, WriterError, AlreadyExists, Io
 
 ### Community 8 - "ADR 0003: Embedded SQLite with Write-Ahead Logging (WAL)"
 Cohesion: 0.33
 Nodes (5): ADR 0003: Embedded SQLite with Write-Ahead Logging (WAL), Context, Decision, Invariant, Status
 
 ### Community 9 - "planner.rs"
-Cohesion: 0.20
-Nodes (4): Planner, .DEFAULT_MIN_SEGMENT_SIZE, SegmentPlan, test_basic_planner()
+Cohesion: 0.15
+Nodes (8): MediaGrabber, StreamVariant, test_drm_detection(), test_hls_master_parse(), Planner, .DEFAULT_MIN_SEGMENT_SIZE, SegmentPlan, test_basic_planner()
 
 ### Community 10 - "chaos_integration.rs"
-Cohesion: 0.06
+Cohesion: 0.05
 Nodes (19): Cli, Commands, Download, Probe, benchmark_baseline_vs_adaptive(), handle_bench_file(), handle_bench_head(), spawn_bench_server() (+11 more)
 
 ### Community 11 - "tauri.conf.json"
@@ -168,12 +171,16 @@ Cohesion: 0.20
 Nodes (10): 1. Build and Test Workspace, 2. Run the Chaos Test Server, 3. Headless Download via CLI, 4. Build Desktop UI, 5. Build Browser Extension, 📂 Architecture Decision Records (ADRs), EDM — Edge Download Manager, 📄 License (+2 more)
 
 ### Community 18 - "AccelerationMode"
-Cohesion: 0.15
+Cohesion: 0.17
 Nodes (7): AdaptiveController, AccelerationMode, Auto, FallbackSingleStream, Limited, Optimizing, Stable
 
 ### Community 19 - "adaptive/engine.rs"
-Cohesion: 0.27
+Cohesion: 0.29
 Nodes (3): AdaptiveDownloadTask, AdaptiveEngine, AdaptiveConfig
+
+### Community 20 - "WorkScheduler"
+Cohesion: 0.17
+Nodes (7): WorkScheduler, AdaptiveWorkerEvent, Done, Failed, Progress, RateLimited, Stalled
 
 ### Community 21 - "adaptive/worker.rs"
 Cohesion: 0.06
@@ -191,9 +198,9 @@ Nodes (6): edm-cli, edm-core, edm-desktop-app, edm-ipc, edm-nmh, edm-store
 Cohesion: 0.40
 Nodes (4): Objective, Phase 1 Plan — Download Engine (Headless), Risks & Mitigations, Steps to Execute
 
-### Community 25 - "edm-core/src/lib.rs"
-Cohesion: 0.43
-Nodes (4): MediaGrabber, StreamVariant, test_drm_detection(), test_hls_master_parse()
+### Community 25 - "PopupController"
+Cohesion: 0.19
+Nodes (6): escapeHtml(), formatBytes(), formatEta(), formatSpeed(), PopupController, sanitizeUrl()
 
 ### Community 26 - "5. Architecture"
 Cohesion: 0.14
@@ -208,8 +215,8 @@ Cohesion: 0.40
 Nodes (5): SniffedImage, SniffedResource, sniffImages(), sniffResources(), add()
 
 ### Community 31 - "src-tauri/src/main.rs"
-Cohesion: 0.17
-Nodes (19): ActiveTaskHandle, AppState, execute_download(), get_db_path(), get_download_telemetry(), get_settings(), get_stats(), handle_extension_message() (+11 more)
+Cohesion: 0.23
+Nodes (14): ActiveTaskHandle, AppState, execute_download(), get_download_telemetry(), get_settings(), get_stats(), handle_extension_message(), open_file() (+6 more)
 
 ### Community 32 - "EDM — Edge Download Manager"
 Cohesion: 0.18
@@ -263,17 +270,33 @@ Nodes (4): 3.1 Core language: **Rust**, 3.2 Why Rust and not Go (honest comparis
 Cohesion: 0.50
 Nodes (4): 9.1 The local test server (`edm-testsrv`), 9.2 Test types, 9.3 Benchmarks (`docs/benchmarks.md`), 9. Testing and verification
 
-### Community 50 - "edm-ipc/src/lib.rs"
-Cohesion: 0.27
-Nodes (5): Cookie, DEFAULT_PIPE_NAME, DownloadOverview, MediaVariant, PROTOCOL_VERSION
+### Community 47 - "manifest.json"
+Cohesion: 0.08
+Nodes (23): action, default_icon, default_popup, default_title, background, service_worker, content_scripts, 128 (+15 more)
+
+### Community 48 - "TokenBucketLimiter"
+Cohesion: 0.36
+Nodes (3): BucketState, test_token_bucket_limit(), TokenBucketLimiter
+
+### Community 49 - "background.js"
+Cohesion: 0.36
+Nodes (7): cachedStatus, notifiedCompletedIds, notifiedFailedIds, probeConnection(), sendHostMessage(), sendViaHttp(), sendViaNative()
+
+### Community 50 - "AppReply"
+Cohesion: 0.13
+Nodes (15): AppReply, Accepted, Declined, DownloadDetail, DownloadList, Error, Pong, Settings (+7 more)
 
 ### Community 51 - "ExtensionMessage"
 Cohesion: 0.12
 Nodes (16): ExtensionMessage, AddDownload, AddMany, CancelDownload, GetDownload, GetStatus, Hello, ListDownloads (+8 more)
 
-### Community 53 - "AppReply"
-Cohesion: 0.20
-Nodes (10): AppReply, Accepted, Declined, DownloadDetail, DownloadList, Error, Pong, Settings (+2 more)
+### Community 52 - "spawn_extension_bridge"
+Cohesion: 0.29
+Nodes (6): get_db_path(), main(), open_persistent_store(), register_native_messaging_host(), spawn_extension_bridge(), Json
+
+### Community 53 - "add"
+Cohesion: 0.67
+Nodes (3): sniffImages(), sniffResources(), add()
 
 ### Community 54 - "SegmentState"
 Cohesion: 0.40
@@ -281,23 +304,23 @@ Nodes (5): SegmentState, Done, Downloading, Failed, Pending
 
 ## Knowledge Gaps
 - **82 isolated node(s):** `clsx`, `motion`, `tailwind-merge`, `zustand`, `@types/node` (+77 more)
-  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 344 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
-- **6 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 366 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
+- **4 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `DownloadState` connect `DownloadState` to `edm-ipc/src/lib.rs`, `adaptive/engine.rs`, `edm-nmh/src/main.rs`, `src-tauri/src/main.rs`?**
-  _High betweenness centrality (0.031) - this node is a cross-community bridge._
+- **Why does `DownloadState` connect `DownloadState` to `AppReply`, `adaptive/engine.rs`, `edm-nmh/src/main.rs`, `src-tauri/src/main.rs`?**
+  _High betweenness centrality (0.026) - this node is a cross-community bridge._
 - **What connects `clsx`, `motion`, `tailwind-merge` to the rest of the system?**
   _82 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `DownloadState` be split into smaller, more focused modules?**
-  _Cohesion score 0.06980392156862746 - nodes in this community are weakly interconnected._
-- **Why does `Store` connect `DownloadState` to `adaptive/engine.rs`, `edm-nmh/src/main.rs`, `src-tauri/src/main.rs`?**
-  _High betweenness centrality (0.028) - this node is a cross-community bridge._
+  _Cohesion score 0.06787330316742081 - nodes in this community are weakly interconnected._
+- **Why does `Store` connect `DownloadState` to `adaptive/engine.rs`, `spawn_extension_bridge`, `edm-nmh/src/main.rs`, `src-tauri/src/main.rs`?**
+  _High betweenness centrality (0.024) - this node is a cross-community bridge._
 - **Should `FileWriter` be split into smaller, more focused modules?**
-  _Cohesion score 0.0708245243128964 - nodes in this community are weakly interconnected._
-- **Why does `ExtensionMessage` connect `ExtensionMessage` to `edm-ipc/src/lib.rs`, `edm-nmh/src/main.rs`, `src-tauri/src/main.rs`?**
-  _High betweenness centrality (0.026) - this node is a cross-community bridge._
+  _Cohesion score 0.10666666666666667 - nodes in this community are weakly interconnected._
+- **Why does `ExtensionMessage` connect `ExtensionMessage` to `AppReply`, `edm-nmh/src/main.rs`, `src-tauri/src/main.rs`?**
+  _High betweenness centrality (0.022) - this node is a cross-community bridge._
 - **Should `chaos_integration.rs` be split into smaller, more focused modules?**
-  _Cohesion score 0.05608322026232474 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.0525879917184265 - nodes in this community are weakly interconnected._

@@ -48,9 +48,9 @@
     "semantic_hash": ""
   },
   "apps/desktop/src-tauri/tauri.conf.json": {
-    "mtime": 1792952669.3567073,
-    "seen": 1792953075.8460011,
-    "ast_hash": "943295dceb8bb04e7a6bcc21d4e61735",
+    "mtime": 1792953237.1707337,
+    "seen": 1792953313.7240367,
+    "ast_hash": "c319d1d637046934b877d4be6df1707f",
     "semantic_hash": ""
   },
   "apps/desktop/src/App.tsx": {
@@ -210,9 +210,9 @@
     "semantic_hash": ""
   },
   "extension/build.js": {
-    "mtime": 1792948238.2762802,
-    "seen": 1792949006.6898232,
-    "ast_hash": "aa4e441d6618f9dc7fd27b7665086029",
+    "mtime": 1792953576.140595,
+    "seen": 1792953626.7963507,
+    "ast_hash": "03a3d70dd1ab75372cd0acd6dd16bf9c",
     "semantic_hash": ""
   },
   "extension/manifest.chromium.json": {
@@ -476,6 +476,42 @@
   "assets/logo.png": {
     "mtime": 1792918786.2127974,
     "seen": 1792950212.897056,
+    "ast_hash": "5c128bab39bad44b668eb76d2908ae28",
+    "semantic_hash": ""
+  },
+  "extension/background.js": {
+    "mtime": 1792953580.4566486,
+    "seen": 1792953626.7963483,
+    "ast_hash": "4ba9ecd5082fa4c176406b6e920d79b8",
+    "semantic_hash": ""
+  },
+  "extension/content.js": {
+    "mtime": 1792953580.4566486,
+    "seen": 1792953626.7963521,
+    "ast_hash": "6d2d00d88d447c735627c6b2d2dc7df2",
+    "semantic_hash": ""
+  },
+  "extension/manifest.json": {
+    "mtime": 1792952021.076627,
+    "seen": 1792953626.7963557,
+    "ast_hash": "eeb635ed4bc67e06f929eb134e2b79a0",
+    "semantic_hash": ""
+  },
+  "extension/popup.js": {
+    "mtime": 1792953580.4566486,
+    "seen": 1792953626.796358,
+    "ast_hash": "bf27ed91db115aba02155edbf48f2e8a",
+    "semantic_hash": ""
+  },
+  "extension/popup.html": {
+    "mtime": 1792949278.3899026,
+    "seen": 1792953626.796381,
+    "ast_hash": "2c98da337f40529bb0d11f9f89f084b4",
+    "semantic_hash": ""
+  },
+  "extension/logo.png": {
+    "mtime": 1792918786.2127974,
+    "seen": 1792953626.7963917,
     "ast_hash": "5c128bab39bad44b668eb76d2908ae28",
     "semantic_hash": ""
   }
