@@ -1,7 +1,0 @@
-<?xml version='1.0' encoding='utf-8'?>
-<resources>
-    <string name="app_name">Vortex Downloader</string>
-    <string name="title_activity_main">Vortex Downloader</string>
-    <string name="package_name">io.vortexdownloader.app</string>
-    <string name="custom_url_scheme">io.vortexdownloader.app</string>
-</resources>
