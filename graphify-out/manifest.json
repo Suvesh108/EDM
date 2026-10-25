@@ -36,15 +36,15 @@
     "semantic_hash": ""
   },
   "apps/desktop/src-tauri/capabilities/default.json": {
-    "mtime": 1792913353.3293202,
-    "seen": 1792914059.685897,
-    "ast_hash": "272630acdbaa0a0712a3eadee958c77a",
+    "mtime": 1792958157.2662551,
+    "seen": 1792958419.1235228,
+    "ast_hash": "b8b392d3cea91ff5eada8a8b12e79c79",
     "semantic_hash": ""
   },
   "apps/desktop/src-tauri/src/main.rs": {
-    "mtime": 1792957140.779552,
-    "seen": 1792957365.5896728,
-    "ast_hash": "e49c8a2ae95337e601d5ae839c7f5ff4",
+    "mtime": 1792958151.684705,
+    "seen": 1792958419.1235344,
+    "ast_hash": "77ac2efa55c8892464b2e975e4dd43ce",
     "semantic_hash": ""
   },
   "apps/desktop/src-tauri/tauri.conf.json": {
@@ -54,9 +54,9 @@
     "semantic_hash": ""
   },
   "apps/desktop/src/App.tsx": {
-    "mtime": 1792957213.161332,
-    "seen": 1792957365.5896776,
-    "ast_hash": "75e23b1be8627f80f408402883cf85ee",
+    "mtime": 1792958271.801743,
+    "seen": 1792958419.1235387,
+    "ast_hash": "2105fbf88392c7568866311ae9c65e60",
     "semantic_hash": ""
   },
   "apps/desktop/src/main.tsx": {
@@ -342,9 +342,9 @@
     "semantic_hash": ""
   },
   "apps/desktop/src/components/SettingsPage.tsx": {
-    "mtime": 1792957237.659929,
-    "seen": 1792957365.58968,
-    "ast_hash": "e7ea9491aeff600de7f6cccb06328daa",
+    "mtime": 1792958298.8197951,
+    "seen": 1792958419.1235409,
+    "ast_hash": "33c5398863759bb945c45f1cc3a1825c",
     "semantic_hash": ""
   },
   "apps/desktop/src/types/settings.ts": {
@@ -360,9 +360,9 @@
     "semantic_hash": ""
   },
   "apps/desktop/src-tauri/gen/schemas/capabilities.json": {
-    "mtime": 1792941018.4820805,
-    "seen": 1792941414.8250093,
-    "ast_hash": "345ab1d3e48c08f381ede1397130f009",
+    "mtime": 1792958314.2275774,
+    "seen": 1792958419.1235287,
+    "ast_hash": "45992589ad0d1c35f7a68a9cd61a5589",
     "semantic_hash": ""
   },
   "apps/desktop/src-tauri/gen/schemas/desktop-schema.json": {
@@ -450,9 +450,9 @@
     "semantic_hash": ""
   },
   "apps/desktop/src/services/tauriBridge.ts": {
-    "mtime": 1792957164.8333516,
-    "seen": 1792957365.5896854,
-    "ast_hash": "6b51d257ec3ff3b4ee21084bf7641105",
+    "mtime": 1792958173.1785934,
+    "seen": 1792958419.1235461,
+    "ast_hash": "55d2f32830e51956828e2a7454d306a8",
     "semantic_hash": ""
   },
   "crates/edm-nmh/com.edm.nmh.json": {

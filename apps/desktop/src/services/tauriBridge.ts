@@ -322,6 +322,11 @@ export async function tauriSaveSettings(settings: EdmSettings): Promise<void> {
 export async function tauriWindowMinimize(): Promise<void> {
   if (isTauri()) {
     try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("app_minimize");
+      return;
+    } catch (_) {}
+    try {
       const { getCurrentWindow } = await import("@tauri-apps/api/window");
       await getCurrentWindow().minimize();
     } catch (err) {
@@ -332,6 +337,11 @@ export async function tauriWindowMinimize(): Promise<void> {
 
 export async function tauriWindowToggleMaximize(): Promise<void> {
   if (isTauri()) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("app_toggle_maximize");
+      return;
+    } catch (_) {}
     try {
       const { getCurrentWindow } = await import("@tauri-apps/api/window");
       await getCurrentWindow().toggleMaximize();
@@ -344,10 +354,31 @@ export async function tauriWindowToggleMaximize(): Promise<void> {
 export async function tauriWindowClose(): Promise<void> {
   if (isTauri()) {
     try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("app_close");
+      return;
+    } catch (_) {}
+    try {
       const { getCurrentWindow } = await import("@tauri-apps/api/window");
       await getCurrentWindow().close();
     } catch (err) {
       console.warn("Tauri window close:", err);
+    }
+  }
+}
+
+export async function tauriStartDragging(): Promise<void> {
+  if (isTauri()) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("app_start_dragging");
+      return;
+    } catch (_) {}
+    try {
+      const { getCurrentWindow } = await import("@tauri-apps/api/window");
+      await getCurrentWindow().startDragging();
+    } catch (err) {
+      console.warn("Tauri window start dragging:", err);
     }
   }
 }

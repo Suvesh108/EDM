@@ -51,6 +51,7 @@ import {
   tauriWindowMinimize,
   tauriWindowToggleMaximize,
   tauriWindowClose,
+  tauriStartDragging,
 } from "./services/tauriBridge";
 
 export interface WorkerInfo {
@@ -838,180 +839,188 @@ export default function App() {
           ────────────────────────────────────────────────────────────── */}
           <header
             data-tauri-drag-region
-            className="h-14 px-3 sm:px-4 bg-[var(--bg-header)] border-b border-[var(--border-subtle)] flex items-center justify-between gap-1.5 sm:gap-2 shrink-0 z-20 select-none overflow-x-auto"
+            onMouseDown={(e) => {
+              if (e.button === 0 && !(e.target as HTMLElement).closest("button, input, select, a, textarea")) {
+                tauriStartDragging();
+              }
+            }}
+            className="h-14 px-3 sm:px-4 bg-[var(--bg-header)] border-b border-[var(--border-subtle)] flex items-center justify-between gap-2 shrink-0 z-20 select-none"
           >
-        {/* Left: Brand Identity with Official 3D Logo */}
-        <div className="flex items-center gap-2 sm:gap-2.5 shrink-0">
-          <img
-            src="/logo.png"
-            alt="EDM Logo"
-            className="w-7 h-7 sm:w-8 sm:h-8 object-contain drop-shadow-md transition-transform hover:scale-105 duration-150 shrink-0"
-          />
-          <div className="shrink-0 flex flex-col justify-center">
-            <div className="flex items-center gap-1.5">
-              <span className="font-bold tracking-tight text-xs sm:text-sm">EDM</span>
-              <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider bg-[var(--accent-badge-bg)] text-[var(--accent-badge-text)] border border-[var(--accent-badge-border)]">
-                v0.0.1 PRO
-              </span>
+            {/* Left: Brand Identity with Official 3D Logo & Context Actions */}
+            <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+              <div className="flex items-center gap-2 sm:gap-2.5 shrink-0">
+                <img
+                  src="/logo.png"
+                  alt="EDM Logo"
+                  className="w-7 h-7 sm:w-8 sm:h-8 object-contain drop-shadow-md transition-transform hover:scale-105 duration-150 shrink-0 pointer-events-none"
+                />
+                <div className="shrink-0 flex flex-col justify-center">
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-bold tracking-tight text-xs sm:text-sm">EDM</span>
+                    <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider bg-[var(--accent-badge-bg)] text-[var(--accent-badge-text)] border border-[var(--accent-badge-border)]">
+                      v0.0.1 PRO
+                    </span>
+                  </div>
+                  <div className="text-[10px] text-[var(--text-muted)] whitespace-nowrap font-medium leading-tight mt-0.5">
+                    Edge Download Manager
+                  </div>
+                </div>
+              </div>
+
+              {/* Contextual Toolbar when tasks are selected */}
+              {selectedIds.length > 0 && (
+                <div className="flex items-center gap-1 sm:gap-1.5 shrink-0 animate-in fade-in zoom-in-95 duration-150">
+                  <button
+                    onClick={() => {
+                      setDownloads((prev) =>
+                        prev.map((d) =>
+                          selectedIds.includes(d.id) && d.state === "paused"
+                            ? { ...d, state: "downloading", speed: "12.4 MB/s" }
+                            : d
+                        )
+                      );
+                      setSelectedDownload((prev) =>
+                        prev && selectedIds.includes(prev.id) && prev.state === "paused"
+                          ? { ...prev, state: "downloading", speed: "12.4 MB/s" }
+                          : prev
+                      );
+                    }}
+                    className="btn-3d h-8 px-2 sm:px-2.5 rounded-lg text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
+                    title="Resume Selected"
+                  >
+                    <Play className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                    <span className="hidden md:inline">Resume</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setDownloads((prev) =>
+                        prev.map((d) =>
+                          selectedIds.includes(d.id) && d.state === "downloading"
+                            ? { ...d, state: "paused", speed: "0 B/s" }
+                            : d
+                        )
+                      );
+                      setSelectedDownload((prev) =>
+                        prev && selectedIds.includes(prev.id) && prev.state === "downloading"
+                          ? { ...prev, state: "paused", speed: "0 B/s" }
+                          : prev
+                      );
+                    }}
+                    className="btn-3d h-8 px-2 sm:px-2.5 rounded-lg text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
+                    title="Pause Selected"
+                  >
+                    <Pause className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                    <span className="hidden md:inline">Pause</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setDownloads((prev) => prev.map((d) => ({ ...d, state: "paused", speed: "0 B/s" })));
+                      setSelectedDownload((prev) => (prev ? { ...prev, state: "paused", speed: "0 B/s" } : null));
+                    }}
+                    className="btn-3d h-8 px-2 sm:px-2.5 rounded-lg text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
+                    title="Stop All Downloads"
+                  >
+                    <Square className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                    <span className="hidden md:inline">Stop All</span>
+                  </button>
+
+                  <button
+                    onClick={deleteSelected}
+                    className="btn-3d h-8 px-2 sm:px-2.5 rounded-lg text-xs font-medium text-[var(--text-secondary)] hover:text-rose-400 inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
+                    title="Delete Selected Tasks"
+                  >
+                    <Trash2 className="w-3.5 h-3.5 shrink-0" />
+                    <span className="hidden md:inline">Delete</span>
+                  </button>
+                </div>
+              )}
             </div>
-            <div className="text-[10px] text-[var(--text-muted)] whitespace-nowrap font-medium leading-tight mt-0.5">
-              Edge Download Manager
+
+            {/* Center: Command Deck (Add URL, Search Box, View Mode Toggle) */}
+            <div className="flex-1 flex items-center justify-center gap-2 sm:gap-2.5 min-w-0 px-2" data-tauri-drag-region>
+              <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+                {/* Primary Action: Add URL */}
+                <button
+                  onClick={() => setIsAddModalOpen(true)}
+                  className="btn-primary-3d h-8 px-3 sm:px-3.5 rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
+                  title="Add URL (Ctrl+N)"
+                >
+                  <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
+                  <span>Add URL</span>
+                </button>
+
+                {/* Search Box */}
+                <div className="relative shrink-0">
+                  <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--text-muted)] pointer-events-none" />
+                  <input
+                    type="text"
+                    placeholder="Search..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="w-24 sm:w-36 md:w-48 focus:w-32 sm:focus:w-56 h-8 pl-8 pr-2.5 rounded-lg text-xs bg-[var(--bg-chassis)] border border-[var(--border-subtle)] text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)] transition-all truncate"
+                  />
+                </div>
+
+                {/* View Mode Toggle */}
+                <div className="h-8 flex items-center p-0.5 rounded-lg bg-[var(--bg-chassis)] border border-[var(--border-subtle)] shrink-0">
+                  <button
+                    onClick={() => setViewMode("table")}
+                    className={`h-full px-2 rounded-md cursor-pointer transition-colors inline-flex items-center ${
+                      viewMode === "table" ? "bg-[var(--bg-card)] text-[var(--accent)]" : "text-[var(--text-muted)]"
+                    }`}
+                    title="Table View"
+                  >
+                    <LayoutList className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    onClick={() => setViewMode("grid")}
+                    className={`h-full px-2 rounded-md cursor-pointer transition-colors inline-flex items-center ${
+                      viewMode === "grid" ? "bg-[var(--bg-card)] text-[var(--accent)]" : "text-[var(--text-muted)]"
+                    }`}
+                    title="Grid View"
+                  >
+                    <LayoutGrid className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
 
-        {/* Center: Selected Task Actions (Contextual Toolbar) */}
-        {selectedIds.length > 0 && (
-          <div className="flex items-center gap-1 sm:gap-1.5 shrink-0 animate-in fade-in zoom-in-95 duration-150">
-            <button
-              onClick={() => {
-                setDownloads((prev) =>
-                  prev.map((d) =>
-                    selectedIds.includes(d.id) && d.state === "paused"
-                      ? { ...d, state: "downloading", speed: "12.4 MB/s" }
-                      : d
-                  )
-                );
-                setSelectedDownload((prev) =>
-                  prev && selectedIds.includes(prev.id) && prev.state === "paused"
-                    ? { ...prev, state: "downloading", speed: "12.4 MB/s" }
-                    : prev
-                );
-              }}
-              className="btn-3d h-8 px-2 sm:px-2.5 rounded-lg text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
-              title="Resume Selected"
-            >
-              <Play className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-              <span className="hidden sm:inline">Resume</span>
-            </button>
-
-            <button
-              onClick={() => {
-                setDownloads((prev) =>
-                  prev.map((d) =>
-                    selectedIds.includes(d.id) && d.state === "downloading"
-                      ? { ...d, state: "paused", speed: "0 B/s" }
-                      : d
-                  )
-                );
-                setSelectedDownload((prev) =>
-                  prev && selectedIds.includes(prev.id) && prev.state === "downloading"
-                    ? { ...prev, state: "paused", speed: "0 B/s" }
-                    : prev
-                );
-              }}
-              className="btn-3d h-8 px-2 sm:px-2.5 rounded-lg text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
-              title="Pause Selected"
-            >
-              <Pause className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-              <span className="hidden sm:inline">Pause</span>
-            </button>
-
-            <button
-              onClick={() => {
-                setDownloads((prev) => prev.map((d) => ({ ...d, state: "paused", speed: "0 B/s" })));
-                setSelectedDownload((prev) => (prev ? { ...prev, state: "paused", speed: "0 B/s" } : null));
-              }}
-              className="btn-3d h-8 px-2 sm:px-2.5 rounded-lg text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
-              title="Stop All Downloads"
-            >
-              <Square className="w-3.5 h-3.5 text-rose-400 shrink-0" />
-              <span className="hidden sm:inline">Stop All</span>
-            </button>
-
-            <button
-              onClick={deleteSelected}
-              className="btn-3d h-8 px-2 sm:px-2.5 rounded-lg text-xs font-medium text-[var(--text-secondary)] hover:text-rose-400 inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
-              title="Delete Selected Tasks"
-            >
-              <Trash2 className="w-3.5 h-3.5 shrink-0" />
-              <span className="hidden sm:inline">Delete</span>
-            </button>
-          </div>
-        )}
-
-        {/* Right: Add URL, Search, View Mode Toggle, & Settings */}
-        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0 ml-auto">
-          {/* Primary Action: Add URL */}
-          <button
-            onClick={() => setIsAddModalOpen(true)}
-            className="btn-primary-3d h-8 px-2.5 sm:px-3.5 rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
-            title="Add URL (Ctrl+N)"
-          >
-            <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
-            <span className="hidden xs:inline sm:inline">Add URL</span>
-          </button>
-
-          {/* Search Box */}
-          <div className="relative shrink-0">
-            <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--text-muted)] pointer-events-none" />
-            <input
-              type="text"
-              placeholder="Search..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-20 sm:w-28 md:w-36 focus:w-28 sm:focus:w-44 h-8 pl-8 pr-2.5 rounded-lg text-xs bg-[var(--bg-chassis)] border border-[var(--border-subtle)] text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)] transition-all truncate"
-            />
-          </div>
-
-          {/* View Mode Toggle */}
-          <div className="h-8 flex items-center p-0.5 rounded-lg bg-[var(--bg-chassis)] border border-[var(--border-subtle)] shrink-0">
-            <button
-              onClick={() => setViewMode("table")}
-              className={`h-full px-2 rounded-md cursor-pointer transition-colors inline-flex items-center ${
-                viewMode === "table" ? "bg-[var(--bg-card)] text-[var(--accent)]" : "text-[var(--text-muted)]"
-              }`}
-              title="Table View"
-            >
-              <LayoutList className="w-3.5 h-3.5" />
-            </button>
-            <button
-              onClick={() => setViewMode("grid")}
-              className={`h-full px-2 rounded-md cursor-pointer transition-colors inline-flex items-center ${
-                viewMode === "grid" ? "bg-[var(--bg-card)] text-[var(--accent)]" : "text-[var(--text-muted)]"
-              }`}
-              title="Grid View"
-            >
-              <LayoutGrid className="w-3.5 h-3.5" />
-            </button>
-          </div>
-
-          {/* Settings Trigger */}
-          <button
-            onClick={() => setActiveView("settings")}
-            className="btn-3d h-8 px-2 sm:px-2.5 rounded-lg text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
-            title="Settings & Preferences (Ctrl+,)"
-          >
-            <Settings className="w-3.5 h-3.5 shrink-0" />
-            <span className="hidden lg:inline">Settings</span>
-          </button>
-
-          {/* Unified Integrated Window Controls */}
-          <div className="flex items-center gap-0.5 ml-1 pl-1.5 border-l border-[var(--border-subtle)] shrink-0" data-tauri-drag-region="false">
-            <button
-              onClick={tauriWindowMinimize}
-              className="h-8 w-8 rounded-lg flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-white/10 transition-colors cursor-pointer"
-              title="Minimize"
-            >
-              <Minus className="w-3.5 h-3.5" />
-            </button>
-            <button
-              onClick={tauriWindowToggleMaximize}
-              className="h-8 w-8 rounded-lg flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-white/10 transition-colors cursor-pointer"
-              title="Maximize / Restore"
-            >
-              <Square className="w-3 h-3" />
-            </button>
-            <button
-              onClick={tauriWindowClose}
-              className="h-8 w-8 rounded-lg flex items-center justify-center text-[var(--text-muted)] hover:text-white hover:bg-rose-600 transition-colors cursor-pointer"
-              title="Close"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        </div>
-      </header>
+            {/* Right: Unified Integrated Window Controls */}
+            <div className="flex items-center gap-0.5 shrink-0" data-tauri-drag-region="false">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  tauriWindowMinimize();
+                }}
+                className="h-8 w-8 rounded-lg flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-white/10 transition-colors cursor-pointer"
+                title="Minimize"
+              >
+                <Minus className="w-3.5 h-3.5" />
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  tauriWindowToggleMaximize();
+                }}
+                className="h-8 w-8 rounded-lg flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-white/10 transition-colors cursor-pointer"
+                title="Maximize / Restore"
+              >
+                <Square className="w-3 h-3" />
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  tauriWindowClose();
+                }}
+                className="h-8 w-8 rounded-lg flex items-center justify-center text-[var(--text-muted)] hover:text-white hover:bg-rose-600 transition-colors cursor-pointer"
+                title="Close"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </header>
 
       {/* ─────────────────────────────────────────────────────────────
           2. WORKSPACE BODY: SIDEBAR + MAIN CONTENT AREA
@@ -1525,8 +1534,18 @@ export default function App() {
           3. FULL-WIDTH INTEGRATED BOTTOM STATUS BAR (With Speed Limiter)
       ────────────────────────────────────────────────────────────── */}
       <footer className="h-11 px-3 sm:px-4 bg-[var(--bg-panel)] border-t border-[var(--border-subtle)] flex items-center justify-between text-xs shrink-0 select-none gap-2 w-full z-20">
-        {/* Left: Speed Limiter Controller + Selected Task Quick Readout */}
+        {/* Left: Settings Button + Speed Limiter Controller + Selected Task Quick Readout */}
         <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
+          {/* Settings Trigger placed immediately to the left of Speed Throttle */}
+          <button
+            onClick={() => setActiveView("settings")}
+            className="h-7 px-2.5 rounded-md text-[11px] sm:text-xs font-medium bg-[var(--bg-card)] border border-[var(--border-subtle)] hover:border-[var(--border-strong)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors"
+            title="Settings & Preferences (Ctrl+,)"
+          >
+            <Settings className="w-3.5 h-3.5 text-[var(--accent)] shrink-0" />
+            <span className="hidden xs:inline">Settings</span>
+          </button>
+
           {/* Speed Limiter Dial (Opens upward from status bar) */}
           <div className="relative shrink-0">
             <button

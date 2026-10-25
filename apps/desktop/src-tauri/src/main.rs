@@ -884,6 +884,34 @@ fn set_app_user_model_id() {
     }
 }
 
+#[tauri::command]
+fn app_minimize(window: tauri::WebviewWindow) {
+    let _ = window.minimize();
+}
+
+#[tauri::command]
+fn app_toggle_maximize(window: tauri::WebviewWindow) {
+    if let Ok(is_max) = window.is_maximized() {
+        if is_max {
+            let _ = window.unmaximize();
+        } else {
+            let _ = window.maximize();
+        }
+    } else {
+        let _ = window.maximize();
+    }
+}
+
+#[tauri::command]
+fn app_close(window: tauri::WebviewWindow) {
+    let _ = window.close();
+}
+
+#[tauri::command]
+fn app_start_dragging(window: tauri::WebviewWindow) {
+    let _ = window.start_dragging();
+}
+
 fn main() {
     #[cfg(windows)]
     set_app_user_model_id();
@@ -942,7 +970,11 @@ fn main() {
             get_download_telemetry,
             get_stats,
             get_settings,
-            save_settings
+            save_settings,
+            app_minimize,
+            app_toggle_maximize,
+            app_close,
+            app_start_dragging
         ])
         .run(tauri::generate_context!())
         .expect("error while running EDM desktop application");
