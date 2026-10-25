@@ -3,6 +3,7 @@
   "name": "EDM — Edge Download Manager",
   "version": "0.0.1",
   "description": "High-performance live download dashboard and acceleration integration for EDM",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtV+tzzqeXOHGiHRP0VsvjmC8Z8aGDOhULzJ2VkWXrKFczBh+5jEDxpX5jsL/55EmDzb+YeBEf9sX0+V7HQvu5ycm4eSh8VgJVsTAzWPgqKJeqKgbCCqlfOTzC+RETCOAEJk74ZfsQpNlUn1Xb5A2BJTI8Tya0Hl+0azuGhm6DDaaPRB5//ZIAaCy6MU2BleMKSD5zah7YoQoZwTLfTraFfSsXSqTcWrIOoAQhRjNSvACGJSKpzRQ8Dp1TkK7iINMuk1bUNp7Y3H71bgO6f1vSVsnAr/JKE4RQlEldX/QrhdT/AHHJioPOE+18xDkzZRc8w8o6ZJI7pcLS7WUwsKELwIDAQAB",
   "permissions": [
     "downloads",
     "nativeMessaging",
@@ -15,7 +16,9 @@
   ],
   "host_permissions": [
     "http://*/*",
-    "https://*/*"
+    "https://*/*",
+    "http://127.0.0.1:8998/*",
+    "http://localhost:8998/*"
   ],
   "background": {
     "service_worker": "background.js"

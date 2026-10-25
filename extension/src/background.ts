@@ -21,48 +21,95 @@ let cachedStatus: any = {
   aggregate_speed_bps: 0,
 };
 
-// Dispatch message to Native Messaging Host with automatic loopback HTTP fallback
-async function sendHostMessage(message: any): Promise<any> {
-  // 1. Try Native Messaging Host first
-  try {
-    const nativeReply = await new Promise<any>((resolve, reject) => {
+let activeChannel: "native" | "http" | "unknown" = "unknown";
+
+async function sendViaNative(message: any): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error("Native host timeout")), 1500);
+    try {
       chrome.runtime.sendNativeMessage(NMH_HOST, message, (resp) => {
+        clearTimeout(timeout);
         if (chrome.runtime.lastError) {
           reject(chrome.runtime.lastError);
         } else {
           resolve(resp);
         }
       });
-    });
+    } catch (e) {
+      clearTimeout(timeout);
+      reject(e);
+    }
+  });
+}
 
+async function sendViaHttp(message: any): Promise<any> {
+  const ctrl = new AbortController();
+  const timeout = setTimeout(() => ctrl.abort(), 2000);
+  try {
+    const res = await fetch(FALLBACK_HTTP_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-EDM-Client": "extension",
+      },
+      body: JSON.stringify(message),
+      signal: ctrl.signal,
+    });
+    clearTimeout(timeout);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  } catch (e) {
+    clearTimeout(timeout);
+    throw e;
+  }
+}
+
+// Dispatch message to EDM Desktop Host with automatic dual-channel failover
+async function sendHostMessage(message: any): Promise<any> {
+  // If activeChannel is already known, try it first for zero-latency response
+  if (activeChannel === "http") {
+    try {
+      const resp = await sendViaHttp(message);
+      connectionState = "connected";
+      lastPingTime = Date.now();
+      return resp;
+    } catch {
+      activeChannel = "unknown";
+    }
+  } else if (activeChannel === "native") {
+    try {
+      const resp = await sendViaNative(message);
+      connectionState = "connected";
+      lastPingTime = Date.now();
+      return resp;
+    } catch {
+      activeChannel = "unknown";
+    }
+  }
+
+  // 1. Try local loopback HTTP Bridge first (instant when EDM desktop is running)
+  try {
+    const httpReply = await sendViaHttp(message);
+    activeChannel = "http";
     connectionState = "connected";
     lastPingTime = Date.now();
-    return nativeReply;
-  } catch (err: any) {
-    // 2. Fallback to Local Loopback HTTP Bridge (port 8998)
+    return httpReply;
+  } catch {
+    // 2. Fall back to Chromium Native Messaging Host
     try {
-      const httpRes = await fetch(FALLBACK_HTTP_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(message),
-      });
-
-      if (httpRes.ok) {
-        const json = await httpRes.json();
-        connectionState = "connected";
-        lastPingTime = Date.now();
-        return json;
-      }
-    } catch {
-      // Both channels unreachable
-    }
-
-    connectionState = "connection_failed";
-    return {
-      type: "error",
-      message: "Desktop application is not running or native host is unregistered.",
-    };
+      const nativeReply = await sendViaNative(message);
+      activeChannel = "native";
+      connectionState = "connected";
+      lastPingTime = Date.now();
+      return nativeReply;
+    } catch {}
   }
+
+  connectionState = "connection_failed";
+  return {
+    type: "error",
+    message: "EDM Desktop is not running. Please launch the EDM application.",
+  };
 }
 
 // Check desktop host connection status

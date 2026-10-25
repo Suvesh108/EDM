@@ -963,6 +963,7 @@ dependencies = [
 name = "edm-desktop-app"
 version = "0.0.1"
 dependencies = [
+ "axum",
  "chrono",
  "edm-core",
  "edm-ipc",
@@ -973,6 +974,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tokio",
+ "tower-http",
  "url",
  "uuid",
 ]

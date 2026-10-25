@@ -24,9 +24,9 @@
     "semantic_hash": ""
   },
   "apps/desktop/src-tauri/Cargo.toml": {
-    "mtime": 1792950009.5608063,
-    "seen": 1792950212.8968072,
-    "ast_hash": "2090f0294623f782786bf4b5776761fd",
+    "mtime": 1792952082.550978,
+    "seen": 1792953075.8459823,
+    "ast_hash": "113b734ada46e876496e5f5e45ee0480",
     "semantic_hash": ""
   },
   "apps/desktop/src-tauri/build.rs": {
@@ -42,15 +42,15 @@
     "semantic_hash": ""
   },
   "apps/desktop/src-tauri/src/main.rs": {
-    "mtime": 1792950059.7315643,
-    "seen": 1792950212.8968372,
-    "ast_hash": "fdb4e7d2b90fd4ef8e558e82b27d37da",
+    "mtime": 1792952886.086898,
+    "seen": 1792953075.846,
+    "ast_hash": "7a1fc59d70afb7642c23cd77cb8cbfb8",
     "semantic_hash": ""
   },
   "apps/desktop/src-tauri/tauri.conf.json": {
-    "mtime": 1792949218.1546788,
-    "seen": 1792950212.8968403,
-    "ast_hash": "63f896ab1149c6aef6def77280f7fa2f",
+    "mtime": 1792952669.3567073,
+    "seen": 1792953075.8460011,
+    "ast_hash": "943295dceb8bb04e7a6bcc21d4e61735",
     "semantic_hash": ""
   },
   "apps/desktop/src/App.tsx": {
@@ -216,9 +216,9 @@
     "semantic_hash": ""
   },
   "extension/manifest.chromium.json": {
-    "mtime": 1792949228.9232478,
-    "seen": 1792950212.8969684,
-    "ast_hash": "4a2122270e9311d4ed9cd5107080882a",
+    "mtime": 1792952021.076627,
+    "seen": 1792953075.8460538,
+    "ast_hash": "eeb635ed4bc67e06f929eb134e2b79a0",
     "semantic_hash": ""
   },
   "extension/manifest.firefox.json": {
@@ -234,9 +234,9 @@
     "semantic_hash": ""
   },
   "extension/src/background.ts": {
-    "mtime": 1792949288.027948,
-    "seen": 1792950212.896978,
-    "ast_hash": "58d2a85c1b4061b1c41a91e64f00c200",
+    "mtime": 1792952060.9686975,
+    "seen": 1792953075.8460577,
+    "ast_hash": "72ac9297c8954c685fc23afbdb5ef823",
     "semantic_hash": ""
   },
   "extension/src/content.ts": {
@@ -456,9 +456,9 @@
     "semantic_hash": ""
   },
   "crates/edm-nmh/com.edm.nmh.json": {
-    "mtime": 1792948471.6113799,
-    "seen": 1792949006.6898146,
-    "ast_hash": "012507c3444df19a5b49f7487208c852",
+    "mtime": 1792952297.261554,
+    "seen": 1792953075.8460443,
+    "ast_hash": "e74ba79b16d49a1051ba6639d7400f55",
     "semantic_hash": ""
   },
   "crates/edm-nmh/register_host.ps1": {

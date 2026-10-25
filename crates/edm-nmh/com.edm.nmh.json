@@ -1,12 +1,12 @@
 {
   "name": "com.edm.nmh",
   "description": "EDM Native Messaging Host for Edge, Chrome and Brave",
-  "path": "C:\\Users\\Suvesh\\Desktop\\projects\\EDM\\target\\debug\\edm-nmh.exe",
+  "path": "C:\\Users\\Suvesh\\Desktop\\projects\\EDM\\target\\release\\edm-nmh.exe",
   "type": "stdio",
   "allowed_origins": [
+    "chrome-extension://ginpdimhcdbojbhemgjedghkeolbcmgj/",
     "chrome-extension://ebdcbpghekpbgjiclaclbgmdnimeheci/",
     "chrome-extension://knldjmfmopnpolahpmmgbagdohdnhkik/",
-    "chrome-extension://cphjfljhggknldkppchfobogknclmblg/",
-    "chrome-extension://*"
+    "chrome-extension://cphjfljhggknldkppchfobogknclmblg/"
   ]
 }
