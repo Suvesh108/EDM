@@ -221,6 +221,93 @@ export async function tauriLoadSettings(): Promise<EdmSettings | null> {
   return null;
 }
 
+export async function tauriResumeDownload(id: string): Promise<void> {
+  if (isTauri()) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("resume_download", { id });
+    } catch (err) {
+      console.warn("Tauri resume_download:", err);
+    }
+  }
+}
+
+export async function tauriCancelDownload(id: string): Promise<void> {
+  if (isTauri()) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("cancel_download", { id });
+    } catch (err) {
+      console.warn("Tauri cancel_download:", err);
+    }
+  }
+}
+
+export async function tauriDeleteDownload(id: string): Promise<void> {
+  if (isTauri()) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("delete_download", { id });
+    } catch (err) {
+      console.warn("Tauri delete_download:", err);
+    }
+  }
+}
+
+export async function tauriOpenFile(id: string): Promise<void> {
+  if (isTauri()) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("open_file_path", { id });
+    } catch (err) {
+      console.warn("Tauri open_file_path:", err);
+    }
+  }
+}
+
+export async function tauriOpenFolder(id: string): Promise<void> {
+  if (isTauri()) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("open_dir_path", { id });
+    } catch (err) {
+      console.warn("Tauri open_dir_path:", err);
+    }
+  }
+}
+
+export interface BackendDownloadItem {
+  id: string;
+  url: string;
+  filename: string;
+  save_dir: string;
+  category: string;
+  state: string;
+  size_total: number | null;
+  size_done: number;
+  resumable: boolean;
+  speed_bytes_per_sec: number;
+  connections: number;
+  created_at: string;
+  completed_at: string | null;
+  error_msg: string | null;
+}
+
+export async function tauriListDownloads(): Promise<BackendDownloadItem[] | null> {
+  if (isTauri()) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const res = await invoke<{ downloads: BackendDownloadItem[] }>("list_downloads");
+      if (res && Array.isArray(res.downloads)) {
+        return res.downloads;
+      }
+    } catch (err) {
+      console.warn("Tauri list_downloads:", err);
+    }
+  }
+  return null;
+}
+
 export async function tauriSaveSettings(settings: EdmSettings): Promise<void> {
   if (isTauri()) {
     try {

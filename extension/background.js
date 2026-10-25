@@ -193,6 +193,24 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
       domain: c.domain,
       path: c.path
     }));
+    let derivedName = downloadItem.filename;
+    if (!derivedName || derivedName === "download" || derivedName === "download.bin" || !derivedName.includes(".")) {
+      try {
+        const u = new URL(url);
+        const lastPart = u.pathname.split("/").pop() || "";
+        if (lastPart && lastPart.includes(".") && lastPart.length > 2) {
+          derivedName = decodeURIComponent(lastPart);
+        } else {
+          for (const [k, v] of u.searchParams.entries()) {
+            if (["filename", "file", "title", "name"].includes(k.toLowerCase()) && v.trim()) {
+              derivedName = decodeURIComponent(v.trim());
+              break;
+            }
+          }
+        }
+      } catch {
+      }
+    }
     const payload = {
       type: "add_download",
       url: downloadItem.url,
@@ -200,7 +218,7 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
       referrer: downloadItem.referrer,
       userAgent: navigator.userAgent,
       cookies: cookiePayload,
-      filename: downloadItem.filename,
+      filename: derivedName || downloadItem.filename,
       mime: downloadItem.mime,
       size: downloadItem.totalBytes > 0 ? downloadItem.totalBytes : void 0,
       source: "browser_interception"

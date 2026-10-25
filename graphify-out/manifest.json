@@ -42,9 +42,9 @@
     "semantic_hash": ""
   },
   "apps/desktop/src-tauri/src/main.rs": {
-    "mtime": 1792952886.086898,
-    "seen": 1792953075.846,
-    "ast_hash": "7a1fc59d70afb7642c23cd77cb8cbfb8",
+    "mtime": 1792956055.7441916,
+    "seen": 1792956410.0574567,
+    "ast_hash": "036538bb2d854550f9197e0549a3073c",
     "semantic_hash": ""
   },
   "apps/desktop/src-tauri/tauri.conf.json": {
@@ -54,9 +54,9 @@
     "semantic_hash": ""
   },
   "apps/desktop/src/App.tsx": {
-    "mtime": 1792949360.79505,
-    "seen": 1792950212.8968437,
-    "ast_hash": "2a0cf4a3ca4a8b8a91a0071aecfc8a6c",
+    "mtime": 1792956248.8390627,
+    "seen": 1792956410.057466,
+    "ast_hash": "43ea8ece47ed0958fd82464922464ffd",
     "semantic_hash": ""
   },
   "apps/desktop/src/main.tsx": {
@@ -234,9 +234,9 @@
     "semantic_hash": ""
   },
   "extension/src/background.ts": {
-    "mtime": 1792952060.9686975,
-    "seen": 1792953075.8460577,
-    "ast_hash": "72ac9297c8954c685fc23afbdb5ef823",
+    "mtime": 1792956273.1142814,
+    "seen": 1792956410.0576406,
+    "ast_hash": "25602e82f4271931b28c24bffa7ac821",
     "semantic_hash": ""
   },
   "extension/src/content.ts": {
@@ -450,9 +450,9 @@
     "semantic_hash": ""
   },
   "apps/desktop/src/services/tauriBridge.ts": {
-    "mtime": 1792946699.1130865,
-    "seen": 1792946906.869447,
-    "ast_hash": "d7059d600554d397161ee78cd283ccdd",
+    "mtime": 1792956101.4354084,
+    "seen": 1792956410.0574808,
+    "ast_hash": "63eb84ec1144be8823d2aa9be9c570af",
     "semantic_hash": ""
   },
   "crates/edm-nmh/com.edm.nmh.json": {
@@ -480,14 +480,14 @@
     "semantic_hash": ""
   },
   "extension/background.js": {
-    "mtime": 1792953580.4566486,
-    "seen": 1792953626.7963483,
-    "ast_hash": "4ba9ecd5082fa4c176406b6e920d79b8",
+    "mtime": 1792956279.580719,
+    "seen": 1792956410.0576174,
+    "ast_hash": "5376db2ddcbf05cd2592ef58787c03dc",
     "semantic_hash": ""
   },
   "extension/content.js": {
-    "mtime": 1792953580.4566486,
-    "seen": 1792953626.7963521,
+    "mtime": 1792956279.580719,
+    "seen": 1792956410.0576234,
     "ast_hash": "6d2d00d88d447c735627c6b2d2dc7df2",
     "semantic_hash": ""
   },
@@ -498,8 +498,8 @@
     "semantic_hash": ""
   },
   "extension/popup.js": {
-    "mtime": 1792953580.4566486,
-    "seen": 1792953626.796358,
+    "mtime": 1792956279.5812452,
+    "seen": 1792956410.0576377,
     "ast_hash": "bf27ed91db115aba02155edbf48f2e8a",
     "semantic_hash": ""
   },

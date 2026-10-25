@@ -163,15 +163,36 @@ fn execute_download(
     validate_url_security(&url)?;
     let id_str = id.to_string();
 
-    let raw_name = filename.unwrap_or_else(|| {
-        url.split('/')
-            .last()
-            .unwrap_or("download.bin")
-            .split('?')
-            .next()
-            .unwrap_or("download.bin")
-            .to_string()
-    });
+    let raw_name = match filename {
+        Some(ref f) if !f.trim().is_empty() && f != "download" && f != "download.bin" => f.clone(),
+        _ => {
+            let path_part = url
+                .split('/')
+                .last()
+                .unwrap_or("download.bin")
+                .split('?')
+                .next()
+                .unwrap_or("download.bin");
+            if path_part.is_empty() || path_part == "download" || path_part == "download.bin" {
+                if let Ok(parsed) = url::Url::parse(&url) {
+                    let mut found = None;
+                    for (k, v) in parsed.query_pairs() {
+                        if (k == "filename" || k == "file" || k == "title" || k == "name")
+                            && !v.trim().is_empty()
+                        {
+                            found = Some(v.to_string());
+                            break;
+                        }
+                    }
+                    found.unwrap_or_else(|| "download.bin".to_string())
+                } else {
+                    "download.bin".to_string()
+                }
+            } else {
+                path_part.to_string()
+            }
+        }
+    };
     let clean_name = edm_core::sanitizer::Sanitizer::sanitize_filename(&raw_name);
 
     let save_path = save_dir.unwrap_or_else(|| {
@@ -694,6 +715,88 @@ async fn start_download(
 }
 
 #[command]
+async fn list_downloads(
+    state: State<'_, AppState>,
+    filter: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let reply = handle_extension_message(ExtensionMessage::ListDownloads { filter }, &state).await;
+    serde_json::to_value(reply).map_err(|e| e.to_string())
+}
+
+#[command]
+fn resume_download(state: State<'_, AppState>, id: String) -> Result<serde_json::Value, String> {
+    if let Ok(uuid) = Uuid::parse_str(&id) {
+        let records = state.store.list_all_downloads().unwrap_or_default();
+        if let Some(r) = records.into_iter().find(|d| d.id == uuid) {
+            let _ = execute_download(
+                &state,
+                uuid,
+                r.url,
+                Some(r.filename),
+                Some(PathBuf::from(r.save_dir)),
+                Some(r.connections),
+                r.size_total,
+            );
+            let _ = state.store.update_download_state(uuid, DownloadState::Downloading, None);
+            return Ok(serde_json::json!({ "status": "resumed", "id": id }));
+        }
+    }
+    Err(format!("Task {} not found", id))
+}
+
+#[command]
+fn cancel_download(state: State<'_, AppState>, id: String) -> Result<serde_json::Value, String> {
+    let tasks = state.tasks.lock().unwrap();
+    if let Some(task) = tasks.get(&id) {
+        task.cancelled.store(true, Ordering::Relaxed);
+    }
+    if let Ok(uuid) = Uuid::parse_str(&id) {
+        let _ = state
+            .store
+            .update_download_state(uuid, DownloadState::Cancelled, Some("Cancelled by user"));
+    }
+    Ok(serde_json::json!({ "status": "cancelled", "id": id }))
+}
+
+#[command]
+fn delete_download(state: State<'_, AppState>, id: String) -> Result<serde_json::Value, String> {
+    let tasks = state.tasks.lock().unwrap();
+    if let Some(task) = tasks.get(&id) {
+        task.cancelled.store(true, Ordering::Relaxed);
+    }
+    if let Ok(uuid) = Uuid::parse_str(&id) {
+        let _ = state.store.delete_download(uuid);
+    }
+    Ok(serde_json::json!({ "status": "deleted", "id": id }))
+}
+
+#[command]
+fn open_file_path(state: State<'_, AppState>, id: String) -> Result<serde_json::Value, String> {
+    if let Ok(uuid) = Uuid::parse_str(&id) {
+        if let Ok(records) = state.store.list_all_downloads() {
+            if let Some(r) = records.into_iter().find(|d| d.id == uuid) {
+                open_file(&r.save_dir, &r.filename);
+                return Ok(serde_json::json!({ "status": "opened" }));
+            }
+        }
+    }
+    Err("Not found".into())
+}
+
+#[command]
+fn open_dir_path(state: State<'_, AppState>, id: String) -> Result<serde_json::Value, String> {
+    if let Ok(uuid) = Uuid::parse_str(&id) {
+        if let Ok(records) = state.store.list_all_downloads() {
+            if let Some(r) = records.into_iter().find(|d| d.id == uuid) {
+                open_folder(&r.save_dir, &r.filename);
+                return Ok(serde_json::json!({ "status": "opened" }));
+            }
+        }
+    }
+    Err("Not found".into())
+}
+
+#[command]
 fn pause_download(state: State<'_, AppState>, id: String) -> Result<serde_json::Value, String> {
     let tasks = state.tasks.lock().unwrap();
     if let Some(task) = tasks.get(&id) {
@@ -799,6 +902,12 @@ fn main() {
             probe_url,
             start_download,
             pause_download,
+            resume_download,
+            cancel_download,
+            delete_download,
+            list_downloads,
+            open_file_path,
+            open_dir_path,
             get_download_telemetry,
             get_stats,
             get_settings,

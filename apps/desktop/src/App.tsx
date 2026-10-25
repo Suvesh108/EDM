@@ -39,6 +39,11 @@ import {
   tauriProbeUrl,
   tauriStartDownload,
   tauriPauseDownload,
+  tauriResumeDownload,
+  tauriDeleteDownload,
+  tauriOpenFile,
+  tauriOpenFolder,
+  tauriListDownloads,
   tauriSaveSettings,
   tauriLoadSettings,
   tauriGetTelemetry,
@@ -208,6 +213,97 @@ export default function App() {
         setSettings(backendSettings);
       }
     });
+  }, []);
+
+  // Bidirectional real-time sync with backend SQLite store & extension tasks
+  useEffect(() => {
+    let mounted = true;
+
+    const syncWithBackend = async () => {
+      const backendItems = await tauriListDownloads();
+      if (!backendItems || !mounted) return;
+
+      setDownloads((prev) => {
+        const existingMap = new Map(prev.map((item) => [item.id, item]));
+        const validCategories = ["Video", "Music", "Documents", "Compressed", "Programs", "Other"] as const;
+        const stateMap: Record<string, "downloading" | "paused" | "queued" | "completed" | "failed"> = {
+          downloading: "downloading",
+          verifying: "downloading",
+          paused: "paused",
+          cancelled: "paused",
+          completed: "completed",
+          failed: "failed",
+          queued: "queued",
+          created: "queued",
+          probing: "queued",
+        };
+
+        const updated: DownloadItem[] = backendItems.map((b) => {
+          const existing = existingMap.get(b.id);
+          const total = b.size_total || existing?.sizeTotal || 0;
+          const done = b.size_done || existing?.sizeDone || 0;
+          const pct = total > 0 ? Math.min(100, Math.floor((done / total) * 100)) : (existing?.progress || 0);
+          const speedVal = b.speed_bytes_per_sec || 0;
+          const etaSec = speedVal > 0 && total > done ? Math.ceil((total - done) / speedVal) : 0;
+
+          const category = validCategories.includes(b.category as any)
+            ? (b.category as DownloadItem["category"])
+            : "Programs";
+
+          const domain = (() => {
+            try {
+              return new URL(b.url).hostname;
+            } catch {
+              return "web";
+            }
+          })();
+
+          const itemState = stateMap[b.state] || (existing?.state || "downloading");
+          const history = existing?.speedHistory
+            ? (speedVal > 0 ? [...existing.speedHistory.slice(-39), speedVal] : existing.speedHistory)
+            : (speedVal > 0 ? [speedVal] : [0]);
+
+          return {
+            id: b.id,
+            name: b.filename,
+            category,
+            sizeTotal: total,
+            sizeDone: done,
+            speed: itemState === "downloading" ? formatSpeed(speedVal) : "0 B/s",
+            eta: itemState === "completed" ? "Finished" : (etaSec > 0 ? formatEta(etaSec) : "Calculating..."),
+            connections: b.connections || existing?.connections || 8,
+            state: itemState,
+            progress: itemState === "completed" ? 100 : pct,
+            url: b.url,
+            domain,
+            dateAdded: b.created_at ? new Date(b.created_at).toLocaleDateString() : (existing?.dateAdded || "Today"),
+            workers: existing?.workers,
+            speedHistory: history,
+            peakSpeedBps: Math.max(existing?.peakSpeedBps || 0, speedVal),
+          };
+        });
+
+        // Also keep any local-only preview items that haven't hit backend yet
+        const backendIds = new Set(backendItems.map((b) => b.id));
+        for (const item of prev) {
+          if (!backendIds.has(item.id) && Date.now() - Number(item.id) < 5000) {
+            updated.push(item);
+          }
+        }
+
+        return updated;
+      });
+    };
+
+    // Initial immediate sync
+    syncWithBackend();
+
+    // Fast sync interval
+    const interval = setInterval(syncWithBackend, 800);
+    return () => {
+      mounted = false;
+      clearInterval(interval);
+    };
   }, []);
 
   // Synchronize mode and palette attributes on root document
@@ -559,11 +655,13 @@ export default function App() {
           const nextState = d.state === "downloading" ? "paused" : "downloading";
           if (nextState === "paused") {
             tauriPauseDownload(id);
+          } else {
+            tauriResumeDownload(id);
           }
           return {
             ...d,
             state: nextState,
-            speed: nextState === "downloading" ? "12.4 MB/s" : "0 B/s",
+            speed: nextState === "downloading" ? d.speed : "0 B/s",
           };
         }
         return d;
@@ -575,12 +673,13 @@ export default function App() {
       return {
         ...prev,
         state: nextState,
-        speed: nextState === "downloading" ? "12.4 MB/s" : "0 B/s",
+        speed: nextState === "downloading" ? prev.speed : "0 B/s",
       };
     });
   };
 
   const deleteSelected = () => {
+    selectedIds.forEach((id) => tauriDeleteDownload(id));
     setDownloads((prev) => prev.filter((d) => !selectedIds.includes(d.id)));
     setSelectedIds([]);
     setSelectedDownload(null);
@@ -1191,7 +1290,7 @@ export default function App() {
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
-                                alert(`Opened destination folder for ${item.name}`);
+                                tauriOpenFolder(item.id);
                               }}
                               className="p-1.5 rounded-md hover:bg-[var(--bg-card)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] cursor-pointer transition-colors"
                               title="Reveal in Explorer"
@@ -1353,7 +1452,7 @@ export default function App() {
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
-                            alert(`Destination: C:\\Users\\Suvesh\\Downloads\\${item.name}`);
+                            tauriOpenFolder(item.id);
                           }}
                           className="btn-3d p-1.5 rounded-md text-[var(--text-secondary)] hover:text-[var(--text-primary)] cursor-pointer"
                           title="Reveal in Explorer"
@@ -1771,6 +1870,14 @@ export default function App() {
                 NTFS Sparse Allocation • Mark-of-the-Web Attached
               </div>
               <div className="flex items-center gap-2 shrink-0">
+                {activeSelectedDownload.state === "completed" && (
+                  <button
+                    onClick={() => tauriOpenFile(activeSelectedDownload.id)}
+                    className="btn-3d h-7 px-3 rounded-lg text-xs font-semibold cursor-pointer text-blue-400 hover:text-blue-300"
+                  >
+                    Open File
+                  </button>
+                )}
                 <button
                   onClick={() => toggleDownloadState(activeSelectedDownload.id)}
                   className={`btn-3d h-7 px-3 rounded-lg text-xs font-semibold cursor-pointer transition-colors ${
