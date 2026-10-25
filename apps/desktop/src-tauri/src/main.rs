@@ -865,7 +865,29 @@ fn save_settings(
     Ok(serde_json::json!({ "status": "saved" }))
 }
 
+#[cfg(windows)]
+fn set_app_user_model_id() {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+
+    #[link(name = "shell32")]
+    extern "system" {
+        fn SetCurrentProcessExplicitAppUserModelID(AppID: *const u16) -> i32;
+    }
+
+    let wide: Vec<u16> = OsStr::new("com.edm.desktop")
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    unsafe {
+        let _ = SetCurrentProcessExplicitAppUserModelID(wide.as_ptr());
+    }
+}
+
 fn main() {
+    #[cfg(windows)]
+    set_app_user_model_id();
+
     register_native_messaging_host();
 
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -897,6 +919,15 @@ fn main() {
     });
 
     tauri::Builder::default()
+        .setup(|app| {
+            use tauri::Manager;
+            if let Some(window) = app.get_webview_window("main") {
+                if let Ok(icon) = tauri::image::Image::from_bytes(include_bytes!("../icons/128x128.png")) {
+                    let _ = window.set_icon(icon);
+                }
+            }
+            Ok(())
+        })
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
             probe_url,

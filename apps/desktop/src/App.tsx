@@ -32,6 +32,7 @@ import {
   Settings,
   PanelLeftClose,
   PanelLeftOpen,
+  Minus,
 } from "lucide-react";
 import SettingsPage from "./components/SettingsPage";
 import { loadSettings, saveSettings, EdmSettings } from "./types/settings";
@@ -47,6 +48,9 @@ import {
   tauriSaveSettings,
   tauriLoadSettings,
   tauriGetTelemetry,
+  tauriWindowMinimize,
+  tauriWindowToggleMaximize,
+  tauriWindowClose,
 } from "./services/tauriBridge";
 
 export interface WorkerInfo {
@@ -832,7 +836,10 @@ export default function App() {
           {/* ─────────────────────────────────────────────────────────────
               1. WINDOW HEADER & TOP COMMAND DECK
           ────────────────────────────────────────────────────────────── */}
-          <header className="h-14 px-3 sm:px-4 bg-[var(--bg-header)] border-b border-[var(--border-subtle)] flex items-center justify-between gap-1.5 sm:gap-2 shrink-0 z-20 select-none overflow-x-auto">
+          <header
+            data-tauri-drag-region
+            className="h-14 px-3 sm:px-4 bg-[var(--bg-header)] border-b border-[var(--border-subtle)] flex items-center justify-between gap-1.5 sm:gap-2 shrink-0 z-20 select-none overflow-x-auto"
+          >
         {/* Left: Brand Identity with Official 3D Logo */}
         <div className="flex items-center gap-2 sm:gap-2.5 shrink-0">
           <img
@@ -978,6 +985,31 @@ export default function App() {
             <Settings className="w-3.5 h-3.5 shrink-0" />
             <span className="hidden lg:inline">Settings</span>
           </button>
+
+          {/* Unified Integrated Window Controls */}
+          <div className="flex items-center gap-0.5 ml-1 pl-1.5 border-l border-[var(--border-subtle)] shrink-0" data-tauri-drag-region="false">
+            <button
+              onClick={tauriWindowMinimize}
+              className="h-8 w-8 rounded-lg flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-white/10 transition-colors cursor-pointer"
+              title="Minimize"
+            >
+              <Minus className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={tauriWindowToggleMaximize}
+              className="h-8 w-8 rounded-lg flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-white/10 transition-colors cursor-pointer"
+              title="Maximize / Restore"
+            >
+              <Square className="w-3 h-3" />
+            </button>
+            <button
+              onClick={tauriWindowClose}
+              className="h-8 w-8 rounded-lg flex items-center justify-center text-[var(--text-muted)] hover:text-white hover:bg-rose-600 transition-colors cursor-pointer"
+              title="Close"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
         </div>
       </header>
 

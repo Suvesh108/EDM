@@ -37,7 +37,9 @@
 }
 
 body {
-  width: 480px;
+  width: 400px;
+  min-width: 400px;
+  max-width: 400px;
   height: 580px;
   background-color: var(--bg-chassis);
   color: var(--text-primary);

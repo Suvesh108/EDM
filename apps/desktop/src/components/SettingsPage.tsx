@@ -27,7 +27,15 @@ import {
   AlertTriangle,
   RefreshCw,
   CheckCircle2,
+  Minus,
+  Square,
+  X,
 } from "lucide-react";
+import {
+  tauriWindowMinimize,
+  tauriWindowToggleMaximize,
+  tauriWindowClose,
+} from "../services/tauriBridge";
 import { EdmSettings, defaultSettings, saveSettings } from "../types/settings";
 import type { DownloadItem } from "../App";
 
@@ -305,7 +313,10 @@ export default function SettingsPage({
       {/* ─────────────────────────────────────────────────────────────
           1. HEADER WITH BACK NAVIGATION & SEARCH
       ────────────────────────────────────────────────────────────── */}
-      <header className="h-14 px-3 sm:px-6 bg-[var(--bg-header)] border-b border-[var(--border-subtle)] flex items-center justify-between shrink-0 z-20 gap-2 overflow-x-auto select-none">
+      <header
+        data-tauri-drag-region
+        className="h-14 px-3 sm:px-6 bg-[var(--bg-header)] border-b border-[var(--border-subtle)] flex items-center justify-between shrink-0 z-20 gap-2 overflow-x-auto select-none"
+      >
         <div className="flex items-center gap-2 sm:gap-3 shrink-0">
           <button
             onClick={onBack}
@@ -359,6 +370,31 @@ export default function SettingsPage({
             <Download className="w-3.5 h-3.5" />
             <span className="hidden sm:inline">Export</span>
           </button>
+
+          {/* Unified Integrated Window Controls */}
+          <div className="flex items-center gap-0.5 ml-1 pl-1.5 border-l border-[var(--border-subtle)] shrink-0" data-tauri-drag-region="false">
+            <button
+              onClick={tauriWindowMinimize}
+              className="h-8 w-8 rounded-lg flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-white/10 transition-colors cursor-pointer"
+              title="Minimize"
+            >
+              <Minus className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={tauriWindowToggleMaximize}
+              className="h-8 w-8 rounded-lg flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-white/10 transition-colors cursor-pointer"
+              title="Maximize / Restore"
+            >
+              <Square className="w-3 h-3" />
+            </button>
+            <button
+              onClick={tauriWindowClose}
+              className="h-8 w-8 rounded-lg flex items-center justify-center text-[var(--text-muted)] hover:text-white hover:bg-rose-600 transition-colors cursor-pointer"
+              title="Close"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
         </div>
       </header>
 

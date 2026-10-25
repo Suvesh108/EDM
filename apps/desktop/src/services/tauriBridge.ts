@@ -318,3 +318,36 @@ export async function tauriSaveSettings(settings: EdmSettings): Promise<void> {
     }
   }
 }
+
+export async function tauriWindowMinimize(): Promise<void> {
+  if (isTauri()) {
+    try {
+      const { getCurrentWindow } = await import("@tauri-apps/api/window");
+      await getCurrentWindow().minimize();
+    } catch (err) {
+      console.warn("Tauri window minimize:", err);
+    }
+  }
+}
+
+export async function tauriWindowToggleMaximize(): Promise<void> {
+  if (isTauri()) {
+    try {
+      const { getCurrentWindow } = await import("@tauri-apps/api/window");
+      await getCurrentWindow().toggleMaximize();
+    } catch (err) {
+      console.warn("Tauri window toggle maximize:", err);
+    }
+  }
+}
+
+export async function tauriWindowClose(): Promise<void> {
+  if (isTauri()) {
+    try {
+      const { getCurrentWindow } = await import("@tauri-apps/api/window");
+      await getCurrentWindow().close();
+    } catch (err) {
+      console.warn("Tauri window close:", err);
+    }
+  }
+}

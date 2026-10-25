@@ -110,10 +110,7 @@ class PopupController {
   }
 
   private async loadSettings() {
-    const data = await chrome.storage.local.get(["edm_popup_width", "edm_refresh_rate", "edm_theme"]);
-    if (data.edm_popup_width) {
-      document.body.style.width = `${data.edm_popup_width}px`;
-    }
+    const data = await chrome.storage.local.get(["edm_refresh_rate", "edm_theme"]);
     if (data.edm_refresh_rate) {
       this.refreshRateMs = parseInt(data.edm_refresh_rate, 10);
     }
@@ -867,17 +864,6 @@ class PopupController {
           <div class="settings-group-title">Interface & Appearance</div>
           <div class="setting-row">
             <div>
-              <div class="setting-label">Popup Window Width</div>
-              <div class="setting-desc">Adjust toolbar popup width</div>
-            </div>
-            <select id="widthSelect">
-              <option value="420">Compact (420px)</option>
-              <option value="480" selected>Standard (480px)</option>
-              <option value="540">Wide (540px)</option>
-            </select>
-          </div>
-          <div class="setting-row">
-            <div>
               <div class="setting-label">Telemetry Refresh Rate</div>
               <div class="setting-desc">Live progress update frequency</div>
             </div>
@@ -945,16 +931,6 @@ class PopupController {
           testBtn.innerText = "Test Connection";
           testBtn.style.color = "";
         }, 2000);
-      });
-    }
-
-    // Width
-    const widthSelect = document.getElementById("widthSelect") as HTMLSelectElement;
-    if (widthSelect) {
-      widthSelect.addEventListener("change", async () => {
-        const val = widthSelect.value;
-        document.body.style.width = `${val}px`;
-        await chrome.storage.local.set({ edm_popup_width: val });
       });
     }
 
