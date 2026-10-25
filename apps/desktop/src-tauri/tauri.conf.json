@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "EDM — Edge Download Manager",
+        "title": "EDM — Edge Download Manager v0.0.1",
         "width": 950,
         "height": 660,
         "minWidth": 950,
