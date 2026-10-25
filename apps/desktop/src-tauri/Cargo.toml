@@ -1,0 +1,20 @@
+[package]
+name = "edm-desktop-app"
+version = "0.0.1"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2.0.0", features = [] }
+
+[dependencies]
+tauri = { version = "2.0.0", features = [] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+edm-core = { path = "../../../crates/edm-core" }
+edm-store = { path = "../../../crates/edm-store" }
+edm-ipc = { path = "../../../crates/edm-ipc" }
+tokio = { version = "1.43", features = ["full"] }
+reqwest.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+url.workspace = true

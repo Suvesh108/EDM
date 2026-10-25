@@ -1,0 +1,17 @@
+[package]
+name = "edm-store"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+edm-ipc = { path = "../edm-ipc" }
+rusqlite.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tokio = { workspace = true, features = ["sync"] }

@@ -12,3 +12,4 @@ target/
 Thumbs.db
 .env*
 !*.example
+graphify-out/cache/

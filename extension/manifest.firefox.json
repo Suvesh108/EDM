@@ -1,0 +1,39 @@
+{
+  "manifest_version": 3,
+  "name": "EDM — Edge Download Manager",
+  "version": "0.0.1",
+  "description": "High-performance live download dashboard and acceleration integration for EDM",
+  "permissions": [
+    "downloads",
+    "nativeMessaging",
+    "cookies",
+    "contextMenus",
+    "storage",
+    "tabs",
+    "activeTab",
+    "notifications"
+  ],
+  "host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "EDM Live Dashboard"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "edm@suvesh.dev"
+    }
+  }
+}

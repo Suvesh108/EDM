@@ -1,0 +1,17 @@
+[package]
+name = "edm-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+edm-core = { path = "../edm-core" }
+edm-store = { path = "../edm-store" }
+edm-ipc = { path = "../edm-ipc" }
+reqwest.workspace = true
+tokio.workspace = true
+clap.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
