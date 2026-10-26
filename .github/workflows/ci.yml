@@ -30,14 +30,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Extension build
-        run: |
-          cd extension
-          npm install
-          npm run build
       - name: Desktop UI build
         run: |
           cd apps/desktop
+          npm install
+          npm run build
+      - name: Extension build
+        run: |
+          cd extension
           npm install
           npm run build
 
@@ -63,9 +63,10 @@ jobs:
           cd extension
           npm install
           npm run build
-      - name: Build Release Binaries
-        run: |
-          cargo build --release -p edm-desktop-app -p edm-cli -p edm-nmh
+      - name: Build NMH
+        run: cargo build --release -p edm-nmh
+      - name: Build Desktop App and CLI
+        run: cargo build --release -p edm-desktop-app -p edm-cli
       - name: Package Release
         shell: bash
         run: |

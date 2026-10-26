@@ -15,7 +15,12 @@ fs.mkdirSync(tempDir, { recursive: true });
 
 console.log('[EDM] Transpiling extension scripts with esbuild...');
 try {
-  const esbuild = require('../apps/desktop/node_modules/esbuild');
+  let esbuild;
+  try {
+    esbuild = require('esbuild');
+  } catch (_e) {
+    esbuild = require('../apps/desktop/node_modules/esbuild');
+  }
   esbuild.buildSync({
     entryPoints: [
       path.join(root, 'src', 'background.ts'),
