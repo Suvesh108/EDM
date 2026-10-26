@@ -65,15 +65,13 @@ jobs:
           npm run build
       - name: Build NMH
         run: cargo build --release -p edm-nmh
-      - name: Build Desktop App and CLI
-        run: cargo build --release -p edm-desktop-app -p edm-cli
+      - name: Build Desktop App
+        run: cargo build --release -p edm-desktop-app
       - name: Package Release
         shell: bash
         run: |
           mkdir -p release-dist
           cp target/release/edm-desktop-app.exe release-dist/
-          cp target/release/edm-cli.exe release-dist/
-          cp target/release/edm-nmh.exe release-dist/
           tar -czvf release-dist/edm-extension.tar.gz -C extension/dist/chromium .
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
