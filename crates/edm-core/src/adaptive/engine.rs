@@ -29,6 +29,9 @@ pub struct AdaptiveDownloadTask {
     pub config: AdaptiveConfig,
     pub limiter: Option<TokenBucketLimiter>,
     pub cancelled: Arc<AtomicBool>,
+    pub cookies: Option<String>,
+    pub referer: Option<String>,
+    pub user_agent: Option<String>,
 }
 
 pub struct AdaptiveEngine {
@@ -41,6 +44,8 @@ impl AdaptiveEngine {
         let client = Client::builder()
             .pool_max_idle_per_host(32)
             .tcp_keepalive(Some(Duration::from_secs(15)))
+            .redirect(reqwest::redirect::Policy::limited(15))
+            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36 Edg/135.0.0.0")
             .build()
             .unwrap_or_else(|_| Client::new());
 
@@ -53,9 +58,15 @@ impl AdaptiveEngine {
         telemetry_callback: Option<TelemetryCallback>,
     ) -> Result<PathBuf, String> {
         info!("AdaptiveEngine: Probing {}", task.url);
-        let probe = Probe::probe_url(&self.client, &task.url)
-            .await
-            .map_err(|e| format!("Probe failed: {}", e))?;
+        let probe = Probe::probe_url_with_headers(
+            &self.client,
+            &task.url,
+            task.cookies.as_deref(),
+            task.referer.as_deref(),
+            task.user_agent.as_deref(),
+        )
+        .await
+        .map_err(|e| format!("Probe failed: {}", e))?;
 
         let total_size = probe.size_total;
         let filename = probe.filename.unwrap_or(task.filename);
@@ -82,7 +93,11 @@ impl AdaptiveEngine {
             content_type: probe.content_type.clone(),
             referer: None,
             user_agent: None,
-            connections: if is_resumable { task.config.initial_connections } else { 1 },
+            connections: if is_resumable {
+                task.config.initial_connections
+            } else {
+                1
+            },
             created_at: Utc::now(),
         };
         let _ = self.store.insert_download(&record);
@@ -99,13 +114,18 @@ impl AdaptiveEngine {
 
         // 4. Check cancellation and spawn initial workers
         if task.cancelled.load(Ordering::Relaxed) {
-            let _ = self.store.update_download_state(task.id, DownloadState::Paused, None);
+            let _ = self
+                .store
+                .update_download_state(task.id, DownloadState::Paused, None);
             return Err("Download cancelled by user".into());
         }
 
         if let Some(size) = total_size {
             let initial_conns = if is_resumable {
-                task.config.initial_connections.min(task.config.max_connections).max(1)
+                task.config
+                    .initial_connections
+                    .min(task.config.max_connections)
+                    .max(1)
             } else {
                 1
             };
@@ -117,6 +137,9 @@ impl AdaptiveEngine {
                     plan.start,
                     plan.end,
                     probe.etag.clone(),
+                    task.cookies.clone(),
+                    task.referer.clone(),
+                    task.user_agent.clone(),
                     self.client.clone(),
                     writer.clone(),
                     task.limiter.clone(),
@@ -130,6 +153,9 @@ impl AdaptiveEngine {
                 0,
                 u64::MAX - 1,
                 probe.etag.clone(),
+                task.cookies.clone(),
+                task.referer.clone(),
+                task.user_agent.clone(),
                 self.client.clone(),
                 writer.clone(),
                 task.limiter.clone(),
@@ -149,8 +175,12 @@ impl AdaptiveEngine {
                 info!("Download task {} received cancellation signal", task.id);
                 scheduler.cancel_all();
                 let _ = writer.flush();
-                let _ = self.store.update_download_progress(task.id, total_downloaded);
-                let _ = self.store.update_download_state(task.id, DownloadState::Paused, None);
+                let _ = self
+                    .store
+                    .update_download_progress(task.id, total_downloaded);
+                let _ = self
+                    .store
+                    .update_download_state(task.id, DownloadState::Paused, None);
                 return Err("Download cancelled by user".into());
             }
 
@@ -291,11 +321,7 @@ impl AdaptiveEngine {
                         let eta = if let Some(tot) = total_size {
                             let rem = tot.saturating_sub(total_downloaded);
                             let rate = controller.rolling_throughput_bps() / 8;
-                            if rate > 0 {
-                                Some(rem / rate)
-                            } else {
-                                None
-                            }
+                            rem.checked_div(rate)
                         } else {
                             None
                         };
@@ -331,7 +357,9 @@ impl AdaptiveEngine {
             .finalize(Some(&task.url))
             .map_err(|e| format!("Failed to finalize file: {}", e))?;
 
-        let _ = self.store.update_download_progress(task.id, total_downloaded);
+        let _ = self
+            .store
+            .update_download_progress(task.id, total_downloaded);
         let _ = self
             .store
             .update_download_state(task.id, DownloadState::Completed, None);

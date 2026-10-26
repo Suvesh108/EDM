@@ -8,6 +8,7 @@ target/
 *.so
 *.dylib
 *.log
+*.tsbuildinfo
 .DS_Store
 Thumbs.db
 .env*

@@ -2,6 +2,7 @@ pub mod adaptive;
 pub mod engine;
 pub mod limiter;
 pub mod media;
+pub mod packs;
 pub mod planner;
 pub mod probe;
 pub mod sanitizer;
@@ -15,6 +16,9 @@ pub use adaptive::{
 pub use engine::{DownloadTask, Engine};
 pub use limiter::TokenBucketLimiter;
 pub use media::{MediaGrabber, StreamVariant};
+pub use packs::{
+    FeaturePackId, FeaturePackManager, FeaturePackStatus, PackExecutor, ParsedPackTarget,
+};
 pub use planner::{Planner, SegmentPlan};
 pub use probe::{Probe, ProbeResult};
 pub use sanitizer::Sanitizer;

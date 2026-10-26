@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EDM Extension — Settings</title>
+  <style>
+    :root {
+      --bg: #090d16;
+      --card: #0f172a;
+      --card-border: #1e293b;
+      --accent: #2563eb;
+      --accent-hover: #1d4ed8;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+      --success: #10b981;
+      --danger: #ef4444;
+      --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      padding: 24px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+    }
+    .container {
+      width: 100%;
+      max-width: 520px;
+      background: var(--card);
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      padding: 24px;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 20px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--card-border);
+    }
+    .logo {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+    }
+    .header-text h1 {
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--text);
+    }
+    .header-text p {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    .section {
+      margin-bottom: 20px;
+    }
+    .section-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+      margin-bottom: 6px;
+    }
+    .section-desc {
+      font-size: 11px;
+      color: var(--text-muted);
+      line-height: 1.5;
+      margin-bottom: 12px;
+    }
+    .input-group {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    input[type="text"], input[type="password"] {
+      flex: 1;
+      height: 38px;
+      background: #020617;
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      color: var(--text);
+      padding: 0 12px;
+      font-size: 12px;
+      font-family: monospace;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    input[type="text"]:focus, input[type="password"]:focus {
+      border-color: var(--accent);
+    }
+    .btn {
+      height: 38px;
+      padding: 0 14px;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: background 0.15s, transform 0.1s;
+    }
+    .btn:hover {
+      background: var(--accent-hover);
+    }
+    .btn:active {
+      transform: scale(0.97);
+    }
+    .btn-secondary {
+      background: #1e293b;
+      color: var(--text);
+    }
+    .btn-secondary:hover {
+      background: #334155;
+    }
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: 600;
+      background: rgba(148, 163, 184, 0.1);
+      color: var(--text-muted);
+      border: 1px solid rgba(148, 163, 184, 0.2);
+    }
+    .status-badge.connected {
+      background: rgba(16, 185, 129, 0.15);
+      color: var(--success);
+      border-color: rgba(16, 185, 129, 0.3);
+    }
+    .status-badge.disconnected {
+      background: rgba(239, 68, 68, 0.15);
+      color: var(--danger);
+      border-color: rgba(239, 68, 68, 0.3);
+    }
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px;
+      background: #020617;
+      border: 1px solid var(--card-border);
+      border-radius: 10px;
+      margin-bottom: 10px;
+    }
+    .toggle-info h3 {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .toggle-info p {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+    .switch {
+      position: relative;
+      display: inline-block;
+      width: 38px;
+      height: 20px;
+    }
+    .switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+    .slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-color: #334155;
+      transition: .3s;
+      border-radius: 20px;
+    }
+    .slider:before {
+      position: absolute;
+      content: "";
+      height: 14px;
+      width: 14px;
+      left: 3px;
+      bottom: 3px;
+      background-color: white;
+      transition: .3s;
+      border-radius: 50%;
+    }
+    input:checked + .slider {
+      background-color: var(--accent);
+    }
+    input:checked + .slider:before {
+      transform: translateX(18px);
+    }
+    .feedback-msg {
+      margin-top: 8px;
+      font-size: 11px;
+      min-height: 16px;
+    }
+    .feedback-msg.success { color: var(--success); }
+    .feedback-msg.error { color: var(--danger); }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <img src="logo.png" alt="EDM Logo" class="logo">
+      <div class="header-text">
+        <h1>EDM Extension Configuration</h1>
+        <p>Pair with EDM Desktop on 127.0.0.1:14370</p>
+      </div>
+    </div>
+
+    <!-- Connection Status -->
+    <div class="section">
+      <div class="section-title">Connection Status</div>
+      <div style="display: flex; align-items: center; justify-content: space-between;">
+        <div id="statusBadge" class="status-badge disconnected">
+          <div class="status-dot"></div>
+          <span id="statusText">Disconnected</span>
+        </div>
+        <button id="btnTest" class="btn btn-secondary">Test Connection</button>
+      </div>
+      <div id="testFeedback" class="feedback-msg"></div>
+    </div>
+
+    <!-- Authentication Token -->
+    <div class="section">
+      <div class="section-title">WebSocket Authentication Token</div>
+      <div class="section-desc">
+        Copy this token from the EDM Desktop app: Settings &rarr; Network &amp; Browser Integration &rarr; Extension WebSocket Authentication Token.
+      </div>
+      <div class="input-group">
+        <input type="text" id="inputToken" placeholder="Paste 64-character token here" autocomplete="off" spellcheck="false">
+        <button id="btnSave" class="btn">Save</button>
+      </div>
+      <div id="saveFeedback" class="feedback-msg"></div>
+    </div>
+
+    <!-- Download Interception Toggle -->
+    <div class="section">
+      <div class="section-title">Download Interception</div>
+      <div class="toggle-row">
+        <div class="toggle-info">
+          <h3>Automatic Download Interception</h3>
+          <p>Intercept clicks and browser downloads to accelerate via EDM</p>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="toggleInterception" checked>
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div class="section-desc" style="margin-top: 6px;">
+        Tip: Hold <kbd style="background:#1e293b; padding:2px 5px; border-radius:4px; font-size:10px;">Shift</kbd> or <kbd style="background:#1e293b; padding:2px 5px; border-radius:4px; font-size:10px;">Alt</kbd> while clicking a link to bypass EDM and download directly in the browser.
+      </div>
+    </div>
+  </div>
+
+  <script src="options.js"></script>
+</body>
+</html>

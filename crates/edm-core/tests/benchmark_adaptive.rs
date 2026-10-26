@@ -18,7 +18,10 @@ use tempfile::tempdir;
 use uuid::Uuid;
 
 async fn spawn_bench_server() -> (SocketAddr, tokio::task::JoinHandle<()>) {
-    let app = Router::new().route("/bench/{size}", get(handle_bench_file).head(handle_bench_head));
+    let app = Router::new().route(
+        "/bench/{size}",
+        get(handle_bench_file).head(handle_bench_head),
+    );
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -105,7 +108,12 @@ async fn handle_bench_file(
             header::CONTENT_LENGTH,
             HeaderValue::from_str(&content_len.to_string()).unwrap(),
         );
-        (StatusCode::PARTIAL_CONTENT, headers, Body::from_stream(stream)).into_response()
+        (
+            StatusCode::PARTIAL_CONTENT,
+            headers,
+            Body::from_stream(stream),
+        )
+            .into_response()
     } else {
         headers.insert(
             header::CONTENT_LENGTH,
@@ -140,7 +148,10 @@ async fn benchmark_baseline_vs_adaptive() {
     };
 
     let t0 = Instant::now();
-    let baseline_res = baseline_engine.download(task1, None).await.expect("baseline download");
+    let baseline_res = baseline_engine
+        .download(task1, None)
+        .await
+        .expect("baseline download");
     let baseline_time = t0.elapsed();
     let baseline_throughput_mbps =
         (file_size as f64 * 8.0) / (baseline_time.as_secs_f64() * 1_000_000.0);
@@ -171,10 +182,16 @@ async fn benchmark_baseline_vs_adaptive() {
         config,
         limiter: None,
         cancelled: Arc::new(AtomicBool::new(false)),
+        cookies: None,
+        referer: None,
+        user_agent: None,
     };
 
     let t1 = Instant::now();
-    let adaptive_res = adaptive_engine.download(task2, None).await.expect("adaptive download");
+    let adaptive_res = adaptive_engine
+        .download(task2, None)
+        .await
+        .expect("adaptive download");
     let adaptive_time = t1.elapsed();
     let adaptive_throughput_mbps =
         (file_size as f64 * 8.0) / (adaptive_time.as_secs_f64() * 1_000_000.0);

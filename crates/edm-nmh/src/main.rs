@@ -48,10 +48,23 @@ fn handle_message(msg: ExtensionMessage, store: &Arc<Mutex<Store>>) -> AppReply 
         ExtensionMessage::GetStatus => {
             let s = store.lock().unwrap();
             let downloads = s.list_all_downloads().unwrap_or_default();
-            let active = downloads.iter().filter(|d| d.state == DownloadState::Downloading).count();
-            let queued = downloads.iter().filter(|d| d.state == DownloadState::Queued).count();
-            let completed = downloads.iter().filter(|d| d.state == DownloadState::Completed).count();
-            let agg_speed: u64 = if active > 0 { active as u64 * 4_500_000 } else { 0 };
+            let active = downloads
+                .iter()
+                .filter(|d| d.state == DownloadState::Downloading)
+                .count();
+            let queued = downloads
+                .iter()
+                .filter(|d| d.state == DownloadState::Queued)
+                .count();
+            let completed = downloads
+                .iter()
+                .filter(|d| d.state == DownloadState::Completed)
+                .count();
+            let agg_speed: u64 = if active > 0 {
+                active as u64 * 4_500_000
+            } else {
+                0
+            };
 
             AppReply::Status {
                 status: "connected".into(),
@@ -80,14 +93,23 @@ fn handle_message(msg: ExtensionMessage, store: &Arc<Mutex<Store>>) -> AppReply 
                 let is_queued = r.state == DownloadState::Queued;
                 let is_completed = r.state == DownloadState::Completed;
 
-                if is_active { active_count += 1; aggregate_speed += 3_500_000; }
-                if is_queued { queued_count += 1; }
-                if is_completed { completed_count += 1; }
+                if is_active {
+                    active_count += 1;
+                    aggregate_speed += 3_500_000;
+                }
+                if is_queued {
+                    queued_count += 1;
+                }
+                if is_completed {
+                    completed_count += 1;
+                }
 
                 let matches_filter = match filter_lower.as_str() {
                     "active" => is_active || is_queued,
                     "completed" => is_completed,
-                    "failed" => r.state == DownloadState::Failed || r.state == DownloadState::Cancelled,
+                    "failed" => {
+                        r.state == DownloadState::Failed || r.state == DownloadState::Cancelled
+                    }
                     _ => true,
                 };
 
@@ -137,7 +159,11 @@ fn handle_message(msg: ExtensionMessage, store: &Arc<Mutex<Store>>) -> AppReply 
                         size_total: r.size_total,
                         size_done: r.size_done,
                         resumable: r.resumable,
-                        speed_bytes_per_sec: if r.state == DownloadState::Downloading { 3_500_000 } else { 0 },
+                        speed_bytes_per_sec: if r.state == DownloadState::Downloading {
+                            3_500_000
+                        } else {
+                            0
+                        },
                         connections: r.connections,
                         created_at: r.created_at,
                         completed_at: if is_comp { Some(Utc::now()) } else { None },
@@ -172,7 +198,9 @@ fn handle_message(msg: ExtensionMessage, store: &Arc<Mutex<Store>>) -> AppReply 
 
             if parsed_url.scheme() != "http" && parsed_url.scheme() != "https" {
                 return AppReply::Error {
-                    message: "Security violation: Only HTTP and HTTPS download protocols are permitted".into(),
+                    message:
+                        "Security violation: Only HTTP and HTTPS download protocols are permitted"
+                            .into(),
                 };
             }
 
@@ -195,7 +223,9 @@ fn handle_message(msg: ExtensionMessage, store: &Arc<Mutex<Store>>) -> AppReply 
                 if let Ok(p) = url::Url::parse(fu) {
                     if p.scheme() != "http" && p.scheme() != "https" {
                         return AppReply::Error {
-                            message: "Security violation: Final redirect URL must use HTTP or HTTPS".into(),
+                            message:
+                                "Security violation: Final redirect URL must use HTTP or HTTPS"
+                                    .into(),
                         };
                     }
                 }
@@ -203,11 +233,21 @@ fn handle_message(msg: ExtensionMessage, store: &Arc<Mutex<Store>>) -> AppReply 
 
             let id = Uuid::new_v4();
             let raw_name = filename.unwrap_or_else(|| {
-                url.split('/').last().unwrap_or("download.bin").split('?').next().unwrap_or("download.bin").to_string()
+                url.split('/')
+                    .next_back()
+                    .unwrap_or("download.bin")
+                    .split('?')
+                    .next()
+                    .unwrap_or("download.bin")
+                    .to_string()
             });
             let clean_name = Sanitizer::sanitize_filename(&raw_name);
 
-            let ext = clean_name.split('.').last().unwrap_or("").to_lowercase();
+            let ext = clean_name
+                .split('.')
+                .next_back()
+                .unwrap_or("")
+                .to_lowercase();
             let category = if ["mp4", "mkv", "webm", "avi", "mov"].contains(&ext.as_str()) {
                 "Video"
             } else if ["mp3", "flac", "wav", "aac"].contains(&ext.as_str()) {
@@ -270,7 +310,8 @@ fn handle_message(msg: ExtensionMessage, store: &Arc<Mutex<Store>>) -> AppReply 
 
         ExtensionMessage::CancelDownload { id } => {
             let s = store.lock().unwrap();
-            let _ = s.update_download_state(id, DownloadState::Cancelled, Some("Cancelled by user"));
+            let _ =
+                s.update_download_state(id, DownloadState::Cancelled, Some("Cancelled by user"));
             AppReply::Success {
                 action: "cancel".into(),
                 id: Some(id),
@@ -292,9 +333,17 @@ fn handle_message(msg: ExtensionMessage, store: &Arc<Mutex<Store>>) -> AppReply 
                 if let Some(r) = records.into_iter().find(|d| d.id == id) {
                     let file_path = PathBuf::from(&r.save_dir).join(&r.filename);
                     if file_path.exists() {
-                        let ext = r.filename.split('.').last().unwrap_or("").to_lowercase();
+                        let ext = r
+                            .filename
+                            .split('.')
+                            .next_back()
+                            .unwrap_or("")
+                            .to_lowercase();
                         // Security guard: never directly execute hazardous executable files. Reveal in Explorer safely instead.
-                        let is_executable = ["exe", "bat", "cmd", "scr", "vbs", "ps1", "msi", "reg", "com", "pif"].contains(&ext.as_str());
+                        let is_executable = [
+                            "exe", "bat", "cmd", "scr", "vbs", "ps1", "msi", "reg", "com", "pif",
+                        ]
+                        .contains(&ext.as_str());
                         if is_executable {
                             let _ = std::process::Command::new("explorer.exe")
                                 .arg(format!("/select,{}", file_path.to_string_lossy()))
@@ -360,7 +409,10 @@ fn read_message<R: Read>(mut reader: R) -> io::Result<Option<ExtensionMessage>> 
 
     let len = u32::from_ne_bytes(len_bytes) as usize;
     if len > 10 * 1024 * 1024 {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "Message too large"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Message too large",
+        ));
     }
 
     let mut buf = vec![0u8; len];
@@ -408,7 +460,10 @@ async fn main() -> io::Result<()> {
                         if let Some(host) = headers.get(axum::http::header::HOST) {
                             if let Ok(h) = host.to_str() {
                                 if !h.starts_with("127.0.0.1") && !h.starts_with("localhost") {
-                                    return Err((StatusCode::FORBIDDEN, "Forbidden: Host must be loopback"));
+                                    return Err((
+                                        StatusCode::FORBIDDEN,
+                                        "Forbidden: Host must be loopback",
+                                    ));
                                 }
                             }
                         }
@@ -416,10 +471,16 @@ async fn main() -> io::Result<()> {
                         // Security Guard 2: Anti-CSRF Origin check (reject malicious website origins)
                         if let Some(origin) = headers.get(axum::http::header::ORIGIN) {
                             if let Ok(o) = origin.to_str() {
-                                let is_ext = o.starts_with("chrome-extension://") || o.starts_with("moz-extension://");
-                                let is_local = o.starts_with("http://localhost:") || o.starts_with("http://127.0.0.1:") || o.starts_with("tauri://");
+                                let is_ext = o.starts_with("chrome-extension://")
+                                    || o.starts_with("moz-extension://");
+                                let is_local = o.starts_with("http://localhost:")
+                                    || o.starts_with("http://127.0.0.1:")
+                                    || o.starts_with("tauri://");
                                 if !is_ext && !is_local {
-                                    return Err((StatusCode::FORBIDDEN, "Forbidden: Untrusted Origin"));
+                                    return Err((
+                                        StatusCode::FORBIDDEN,
+                                        "Forbidden: Untrusted Origin",
+                                    ));
                                 }
                             }
                         }
@@ -430,12 +491,20 @@ async fn main() -> io::Result<()> {
                                 if site == "cross-site" {
                                     if let Some(origin) = headers.get(axum::http::header::ORIGIN) {
                                         if let Ok(o) = origin.to_str() {
-                                            if !o.starts_with("chrome-extension://") && !o.starts_with("moz-extension://") {
-                                                return Err((StatusCode::FORBIDDEN, "Forbidden: Cross-site request rejected"));
+                                            if !o.starts_with("chrome-extension://")
+                                                && !o.starts_with("moz-extension://")
+                                            {
+                                                return Err((
+                                                    StatusCode::FORBIDDEN,
+                                                    "Forbidden: Cross-site request rejected",
+                                                ));
                                             }
                                         }
                                     } else {
-                                        return Err((StatusCode::FORBIDDEN, "Forbidden: Cross-site request rejected"));
+                                        return Err((
+                                            StatusCode::FORBIDDEN,
+                                            "Forbidden: Cross-site request rejected",
+                                        ));
                                     }
                                 }
                             }
@@ -448,19 +517,17 @@ async fn main() -> io::Result<()> {
             )
             .layer(
                 CorsLayer::new()
-                    .allow_origin(AllowOrigin::predicate(
-                        |origin: &HeaderValue, _| {
-                            if let Ok(s) = origin.to_str() {
-                                s.starts_with("chrome-extension://")
-                                    || s.starts_with("moz-extension://")
-                                    || s.starts_with("http://localhost:")
-                                    || s.starts_with("http://127.0.0.1:")
-                                    || s.starts_with("tauri://")
-                            } else {
-                                false
-                            }
-                        },
-                    ))
+                    .allow_origin(AllowOrigin::predicate(|origin: &HeaderValue, _| {
+                        if let Ok(s) = origin.to_str() {
+                            s.starts_with("chrome-extension://")
+                                || s.starts_with("moz-extension://")
+                                || s.starts_with("http://localhost:")
+                                || s.starts_with("http://127.0.0.1:")
+                                || s.starts_with("tauri://")
+                        } else {
+                            false
+                        }
+                    }))
                     .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
                     .allow_headers(tower_http::cors::Any),
             )

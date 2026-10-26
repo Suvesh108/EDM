@@ -23,8 +23,7 @@ use uuid::Uuid;
 
 // Spawn an in-process mock HTTP test server on an ephemeral port
 async fn spawn_mock_server() -> (SocketAddr, tokio::task::JoinHandle<()>) {
-    let app = Router::new()
-        .route("/file/{size}", get(handle_file).head(handle_head));
+    let app = Router::new().route("/file/{size}", get(handle_file).head(handle_head));
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -170,6 +169,9 @@ async fn test_adaptive_download_full_integrity() {
         config,
         limiter: None,
         cancelled: Arc::new(AtomicBool::new(false)),
+        cookies: None,
+        referer: None,
+        user_agent: None,
     };
 
     let completed_path = engine.download(task, None).await.expect("download failed");
@@ -184,7 +186,10 @@ async fn test_adaptive_download_full_integrity() {
     }
     let expected = hex::encode(full_hasher.finalize());
     let actual = compute_file_sha256(&completed_path);
-    assert_eq!(actual, expected, "Checksum verification passed with exact match");
+    assert_eq!(
+        actual, expected,
+        "Checksum verification passed with exact match"
+    );
 }
 
 #[tokio::test]
@@ -205,9 +210,15 @@ async fn test_single_stream_fallback_norange() {
         config: AdaptiveConfig::default(),
         limiter: None,
         cancelled: Arc::new(AtomicBool::new(false)),
+        cookies: None,
+        referer: None,
+        user_agent: None,
     };
 
-    let completed_path = engine.download(task, None).await.expect("fallback download failed");
+    let completed_path = engine
+        .download(task, None)
+        .await
+        .expect("fallback download failed");
     assert!(completed_path.exists());
     assert_eq!(std::fs::metadata(&completed_path).unwrap().len(), file_size);
 
@@ -219,18 +230,23 @@ async fn test_single_stream_fallback_norange() {
     }
     let expected = hex::encode(full_hasher.finalize());
     let actual = compute_file_sha256(&completed_path);
-    assert_eq!(actual, expected, "Single-stream fallback correctly reconstructed file");
+    assert_eq!(
+        actual, expected,
+        "Single-stream fallback correctly reconstructed file"
+    );
 }
 
 #[test]
 fn test_adaptive_controller_decisions() {
-    let mut config = AdaptiveConfig::default();
-    config.initial_connections = 2;
-    config.min_connections = 1;
-    config.max_connections = 8;
-    config.cooldown_duration = Duration::from_millis(50);
-    config.throughput_gain_threshold = 0.08;
-    config.throughput_drop_threshold = -0.05;
+    let config = AdaptiveConfig {
+        initial_connections: 2,
+        min_connections: 1,
+        max_connections: 8,
+        cooldown_duration: Duration::from_millis(50),
+        throughput_gain_threshold: 0.08,
+        throughput_drop_threshold: -0.05,
+        ..Default::default()
+    };
 
     let mut controller = AdaptiveController::new(config, true);
     assert_eq!(controller.current_connections(), 2);
@@ -270,7 +286,13 @@ fn test_adaptive_controller_decisions() {
     }
 
     // Sample 4: HTTP 429 rate limit
-    let dec4 = controller.evaluate_sample(100_000, Duration::from_secs(1), 0, true, Some(Duration::from_secs(5)));
+    let dec4 = controller.evaluate_sample(
+        100_000,
+        Duration::from_secs(1),
+        0,
+        true,
+        Some(Duration::from_secs(5)),
+    );
     match dec4 {
         AdaptiveDecision::LimitRate { retry_after, .. } => {
             assert_eq!(retry_after, Some(Duration::from_secs(5)));
@@ -301,6 +323,9 @@ async fn test_cancellation_and_persistence() {
         config: AdaptiveConfig::default(),
         limiter: None,
         cancelled: cancelled.clone(),
+        cookies: None,
+        referer: None,
+        user_agent: None,
     };
 
     let res = engine.download(task, None).await;
@@ -308,7 +333,10 @@ async fn test_cancellation_and_persistence() {
     assert!(res.unwrap_err().contains("cancelled"));
 
     // Verify task is recorded in SQLite as paused
-    let state = store.get_download_state(id).expect("get_download_state").expect("record exists");
+    let state = store
+        .get_download_state(id)
+        .expect("get_download_state")
+        .expect("record exists");
     assert_eq!(state.to_lowercase(), "paused");
 }
 
@@ -337,6 +365,9 @@ async fn test_bandwidth_limiter() {
         },
         limiter: Some(limiter),
         cancelled: Arc::new(AtomicBool::new(false)),
+        cookies: None,
+        referer: None,
+        user_agent: None,
     };
 
     let t0 = std::time::Instant::now();

@@ -49,9 +49,13 @@ pub struct AdaptiveWorker {
     pub retry_count: Arc<AtomicU32>,
     pub etag: Option<String>,
     pub cancelled: Arc<AtomicBool>,
+    pub cookies: Option<String>,
+    pub referer: Option<String>,
+    pub user_agent: Option<String>,
 }
 
 impl AdaptiveWorker {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         idx: u32,
         url: String,
@@ -59,6 +63,9 @@ impl AdaptiveWorker {
         end: u64,
         pos: u64,
         etag: Option<String>,
+        cookies: Option<String>,
+        referer: Option<String>,
+        user_agent: Option<String>,
     ) -> Self {
         let now = Utc::now().timestamp_millis() as u64;
         Self {
@@ -73,6 +80,9 @@ impl AdaptiveWorker {
             retry_count: Arc::new(AtomicU32::new(0)),
             etag,
             cancelled: Arc::new(AtomicBool::new(false)),
+            cookies,
+            referer,
+            user_agent,
         }
     }
 
@@ -113,7 +123,8 @@ impl AdaptiveWorker {
     }
 
     pub fn is_stalled(&self, timeout_secs: u64) -> bool {
-        if self.get_status() == WorkerStatus::Completed || self.get_status() == WorkerStatus::Failed {
+        if self.get_status() == WorkerStatus::Completed || self.get_status() == WorkerStatus::Failed
+        {
             return false;
         }
         let now = Utc::now().timestamp_millis() as u64;
@@ -138,7 +149,9 @@ impl AdaptiveWorker {
 
             if current_pos > current_end {
                 self.set_status(WorkerStatus::Completed);
-                let _ = event_tx.send(AdaptiveWorkerEvent::Done { idx: self.idx }).await;
+                let _ = event_tx
+                    .send(AdaptiveWorkerEvent::Done { idx: self.idx })
+                    .await;
                 return;
             }
 
@@ -147,7 +160,10 @@ impl AdaptiveWorker {
 
             debug!(
                 "AdaptiveWorker {} connecting for bytes {}-{} (attempt {})",
-                self.idx, current_pos, current_end, retries + 1
+                self.idx,
+                current_pos,
+                current_end,
+                retries + 1
             );
 
             let mut req = client
@@ -159,6 +175,18 @@ impl AdaptiveWorker {
                 req = req.header(IF_RANGE, tag.as_str());
             }
 
+            if let Some(ref cookie_str) = self.cookies {
+                req = req.header(reqwest::header::COOKIE, cookie_str.as_str());
+            }
+
+            if let Some(ref ref_str) = self.referer {
+                req = req.header(reqwest::header::REFERER, ref_str.as_str());
+            }
+
+            if let Some(ref ua_str) = self.user_agent {
+                req = req.header(reqwest::header::USER_AGENT, ua_str.as_str());
+            }
+
             let resp = match req.send().await {
                 Ok(r) => r,
                 Err(e) => {
@@ -167,7 +195,10 @@ impl AdaptiveWorker {
                     self.retry_count.store(retries, Ordering::Relaxed);
                     // Exponential backoff with jitter
                     let jitter_ms = (self.idx as u64 * 73) % 250;
-                    tokio::time::sleep(Duration::from_millis(500 * (1 << retries.min(5)) + jitter_ms)).await;
+                    tokio::time::sleep(Duration::from_millis(
+                        500 * (1 << retries.min(5)) + jitter_ms,
+                    ))
+                    .await;
                     continue;
                 }
             };
@@ -205,6 +236,20 @@ impl AdaptiveWorker {
                 continue;
             }
 
+            if status == reqwest::StatusCode::OK && self.start > 0 {
+                warn!("Server returned 200 OK instead of 206 Partial Content for Worker {}. Aborting secondary worker to prevent overwrite.", self.idx);
+                self.set_status(WorkerStatus::Completed);
+                let _ = event_tx
+                    .send(AdaptiveWorkerEvent::Done { idx: self.idx })
+                    .await;
+                return;
+            }
+
+            if status == reqwest::StatusCode::OK && self.start == 0 {
+                // Server streaming from 0; reset write pos to 0
+                self.pos.store(0, Ordering::SeqCst);
+            }
+
             self.set_status(WorkerStatus::Downloading);
             let mut stream = resp.bytes_stream();
             let mut read_failed = false;
@@ -222,9 +267,14 @@ impl AdaptiveWorker {
                         break;
                     }
                     Err(_) => {
-                        warn!("Worker {} stalled (no data for {:?})", self.idx, stall_timeout);
+                        warn!(
+                            "Worker {} stalled (no data for {:?})",
+                            self.idx, stall_timeout
+                        );
                         self.set_status(WorkerStatus::Stalled);
-                        let _ = event_tx.send(AdaptiveWorkerEvent::Stalled { idx: self.idx }).await;
+                        let _ = event_tx
+                            .send(AdaptiveWorkerEvent::Stalled { idx: self.idx })
+                            .await;
                         read_failed = true;
                         None
                     }
@@ -256,7 +306,8 @@ impl AdaptiveWorker {
                             break;
                         }
                         self.pos.fetch_add(allowed as u64, Ordering::SeqCst);
-                        self.bytes_downloaded.fetch_add(allowed as u64, Ordering::Relaxed);
+                        self.bytes_downloaded
+                            .fetch_add(allowed as u64, Ordering::Relaxed);
                         self.mark_activity();
 
                         let _ = event_tx
@@ -279,7 +330,8 @@ impl AdaptiveWorker {
                 }
 
                 self.pos.fetch_add(chunk_len, Ordering::SeqCst);
-                self.bytes_downloaded.fetch_add(chunk_len, Ordering::Relaxed);
+                self.bytes_downloaded
+                    .fetch_add(chunk_len, Ordering::Relaxed);
                 self.mark_activity();
 
                 let _ = event_tx
@@ -297,7 +349,9 @@ impl AdaptiveWorker {
 
             if !read_failed && self.pos.load(Ordering::Relaxed) > self.end.load(Ordering::Relaxed) {
                 self.set_status(WorkerStatus::Completed);
-                let _ = event_tx.send(AdaptiveWorkerEvent::Done { idx: self.idx }).await;
+                let _ = event_tx
+                    .send(AdaptiveWorkerEvent::Done { idx: self.idx })
+                    .await;
                 return;
             }
 

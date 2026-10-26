@@ -19,7 +19,9 @@ pub struct AdaptiveController {
 impl AdaptiveController {
     pub fn new(config: AdaptiveConfig, is_resumable_range: bool) -> Self {
         let initial = if is_resumable_range {
-            config.initial_connections.clamp(config.min_connections, config.max_connections)
+            config
+                .initial_connections
+                .clamp(config.min_connections, config.max_connections)
         } else {
             1
         };
@@ -31,7 +33,10 @@ impl AdaptiveController {
         };
 
         let status_reason = if is_resumable_range {
-            format!("Starting adaptive acceleration with {} initial streams", initial)
+            format!(
+                "Starting adaptive acceleration with {} initial streams",
+                initial
+            )
         } else {
             "Server does not support HTTP Range requests; single stream mode active".into()
         };
@@ -108,7 +113,10 @@ impl AdaptiveController {
             );
             self.status_reason = reason.clone();
             info!("{}", reason);
-            return AdaptiveDecision::LimitRate { retry_after, reason };
+            return AdaptiveDecision::LimitRate {
+                retry_after,
+                reason,
+            };
         }
 
         // 2. Error rate backoff
@@ -158,7 +166,10 @@ impl AdaptiveController {
                     self.current_connections = to;
                     self.mode = AccelerationMode::Optimizing;
                     self.last_adjustment = Instant::now();
-                    let reason = format!("Scaling from {} to {} streams to probe bandwidth headroom", from, to);
+                    let reason = format!(
+                        "Scaling from {} to {} streams to probe bandwidth headroom",
+                        from, to
+                    );
                     self.status_reason = reason.clone();
                     info!("{}", reason);
                     return AdaptiveDecision::ScaleUp { from, to, reason };

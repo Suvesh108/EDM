@@ -95,6 +95,7 @@ class PopupController {
 
   private pollInterval: any = null;
   private refreshRateMs: number = 500;
+  private port: chrome.runtime.Port | null = null;
 
   constructor() {
     this.init();
@@ -102,11 +103,59 @@ class PopupController {
 
   private async init() {
     this.bindHeaderNav();
+    this.connectPort();
     await this.loadSettings();
-    await this.refreshDownloads();
     await this.sniffPageContent();
-    this.startPolling();
     this.render();
+  }
+
+  private connectPort() {
+    try {
+      this.port = chrome.runtime.connect({ name: "popup" });
+      this.port.onMessage.addListener((msg) => {
+        if (msg.type === "snapshot") {
+          this.connectionState = msg.connectionStatus || "disconnected";
+          this.updateConnectionPill();
+          if (Array.isArray(msg.tasks)) {
+            this.downloads = msg.tasks.map((t: any) => ({
+              id: t.id,
+              url: "",
+              filename: t.filename,
+              save_dir: "Downloads",
+              category: "General",
+              state: t.status,
+              size_total: t.total,
+              size_done: t.downloaded,
+              resumable: true,
+              speed_bytes_per_sec: t.speed,
+              connections: 8,
+              created_at: "",
+            }));
+            const badge = document.getElementById("tasksBadge");
+            if (badge) {
+              const activeCount = this.downloads.filter(d => d.state === "downloading").length;
+              badge.innerText = String(activeCount);
+            }
+            if (this.activeTab === "tasks") {
+              this.renderTasksListOnly();
+            }
+          }
+        }
+      });
+      this.port.onDisconnect.addListener(() => {
+        this.port = null;
+        this.connectionState = "disconnected";
+        this.updateConnectionPill();
+      });
+    } catch (e) {
+      console.warn("Could not connect port to background:", e);
+    }
+  }
+
+  private sendTaskAction(id: string, action: string) {
+    if (this.port) {
+      this.port.postMessage({ type: "task_action", id, action });
+    }
   }
 
   private async loadSettings() {
@@ -133,36 +182,17 @@ class PopupController {
     });
   }
 
-  private startPolling() {
-    if (this.pollInterval) clearInterval(this.pollInterval);
-    this.pollInterval = setInterval(async () => {
-      if (this.activeTab === "tasks" || this.activeTab === "advanced") {
-        await this.refreshDownloads();
-      }
-    }, this.refreshRateMs);
-  }
-
-  private async sendHost(payload: any): Promise<any> {
-    const t0 = performance.now();
-    return new Promise((resolve) => {
-      chrome.runtime.sendMessage({ action: "forward_to_host", payload }, (resp) => {
-        this.latencyMs = Math.round(performance.now() - t0);
-        if (resp && resp.type !== "error") {
-          this.connectionState = "connected";
-        } else if (resp?.type === "error") {
-          this.connectionState = "connection_failed";
-        }
-        this.updateConnectionPill();
-        resolve(resp);
-      });
-    });
-  }
-
   private updateConnectionPill() {
     const pill = document.getElementById("connectionPill");
     const dot = document.getElementById("connectionDot");
     const text = document.getElementById("connectionText");
     if (!pill || !dot || !text) return;
+
+    pill.style.cursor = "pointer";
+    pill.title = "Click to configure WebSocket connection / token";
+    pill.onclick = () => {
+      chrome.runtime.openOptionsPage();
+    };
 
     dot.className = "status-dot";
     switch (this.connectionState) {
@@ -180,22 +210,13 @@ class PopupController {
         break;
       default:
         dot.classList.add("dot-failed");
-        text.innerText = "App Offline";
+        text.innerText = "Offline (Setup)";
         break;
     }
   }
 
   private async refreshDownloads() {
-    const resp = await this.sendHost({ type: "list_downloads", filter: "all" });
-    if (resp && resp.type === "download_list") {
-      this.downloads = resp.downloads || [];
-      const badge = document.getElementById("tasksBadge");
-      if (badge) badge.innerText = String(resp.active_count || 0);
-
-      if (this.activeTab === "tasks") {
-        this.renderTasksListOnly();
-      }
-    }
+    // Downloads are pushed live from background port via WebSocket snapshot!
   }
 
   private async sniffPageContent() {
@@ -473,24 +494,24 @@ class PopupController {
     // Start Add
     const startAddBtn = document.getElementById("startAddBtn");
     if (startAddBtn) {
-      startAddBtn.addEventListener("click", async () => {
+      startAddBtn.addEventListener("click", () => {
         const urlInp = document.getElementById("newUrlInput") as HTMLInputElement;
         const fileInp = document.getElementById("newFileNameInput") as HTMLInputElement;
         const url = urlInp?.value.trim();
         const filename = fileInp?.value.trim();
         if (!url) return;
 
-        await this.sendHost({
-          type: "add_download",
-          url,
-          filename: filename || undefined,
-          source: "extension_popup",
-        });
+        if (this.port) {
+          this.port.postMessage({
+            type: "create_task",
+            url,
+            filename: filename || undefined,
+          });
+        }
 
         this.isAddFormOpen = false;
         this.newUrlInput = "";
         this.newFileNameInput = "";
-        await this.refreshDownloads();
         this.render();
       });
     }
@@ -498,11 +519,12 @@ class PopupController {
     // Retry connection button
     const retryBtn = document.getElementById("retryConnectBtn");
     if (retryBtn) {
-      retryBtn.addEventListener("click", async () => {
+      retryBtn.addEventListener("click", () => {
+        if (this.port) {
+          this.port.postMessage({ type: "reconnect" });
+        }
         this.connectionState = "reconnecting";
         this.updateConnectionPill();
-        await this.refreshDownloads();
-        this.render();
       });
     }
 
@@ -512,67 +534,63 @@ class PopupController {
   private attachCardActions() {
     // Pause
     document.querySelectorAll(".act-pause").forEach((btn) => {
-      btn.addEventListener("click", async (e) => {
+      btn.addEventListener("click", (e) => {
         e.stopPropagation();
         const id = btn.getAttribute("data-id");
         if (id) {
-          await this.sendHost({ type: "pause_download", id });
-          await this.refreshDownloads();
+          this.sendTaskAction(id, "pause");
         }
       });
     });
 
     // Resume
     document.querySelectorAll(".act-resume").forEach((btn) => {
-      btn.addEventListener("click", async (e) => {
+      btn.addEventListener("click", (e) => {
         e.stopPropagation();
         const id = btn.getAttribute("data-id");
         if (id) {
-          await this.sendHost({ type: "resume_download", id });
-          await this.refreshDownloads();
+          this.sendTaskAction(id, "resume");
         }
       });
     });
 
     // Cancel
     document.querySelectorAll(".act-cancel").forEach((btn) => {
-      btn.addEventListener("click", async (e) => {
+      btn.addEventListener("click", (e) => {
         e.stopPropagation();
         const id = btn.getAttribute("data-id");
         if (id && confirm("Are you sure you want to cancel this download?")) {
-          await this.sendHost({ type: "cancel_download", id });
-          await this.refreshDownloads();
+          this.sendTaskAction(id, "cancel");
         }
       });
     });
 
     // Retry
     document.querySelectorAll(".act-retry").forEach((btn) => {
-      btn.addEventListener("click", async (e) => {
+      btn.addEventListener("click", (e) => {
         e.stopPropagation();
         const id = btn.getAttribute("data-id");
         if (id) {
-          await this.sendHost({ type: "retry_download", id });
-          await this.refreshDownloads();
+          this.sendTaskAction(id, "resume");
         }
       });
     });
 
     // Open File
     document.querySelectorAll(".act-open-file").forEach((btn) => {
-      btn.addEventListener("click", async (e) => {
+      btn.addEventListener("click", (e) => {
         e.stopPropagation();
         const id = btn.getAttribute("data-id");
-        if (id) await this.sendHost({ type: "open_downloaded_file", id });
+        if (id) this.sendTaskAction(id, "open_file");
       });
     });
 
     // Open Folder
     document.querySelectorAll(".act-open-folder").forEach((btn) => {
-      btn.addEventListener("click", async (e) => {
+      btn.addEventListener("click", (e) => {
         e.stopPropagation();
         const id = btn.getAttribute("data-id");
-        if (id) await this.sendHost({ type: "open_download_folder", id });
+        if (id) this.sendTaskAction(id, "open_folder");
       });
     });
 
@@ -590,14 +608,13 @@ class PopupController {
       });
     });
 
-    // Delete history
+    // Remove from list
     document.querySelectorAll(".act-delete").forEach((btn) => {
-      btn.addEventListener("click", async (e) => {
+      btn.addEventListener("click", (e) => {
         e.stopPropagation();
         const id = btn.getAttribute("data-id");
         if (id) {
-          await this.sendHost({ type: "remove_download_history", id });
-          await this.refreshDownloads();
+          this.sendTaskAction(id, "remove");
         }
       });
     });

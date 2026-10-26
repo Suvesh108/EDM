@@ -20,7 +20,8 @@ try {
     entryPoints: [
       path.join(root, 'src', 'background.ts'),
       path.join(root, 'src', 'content.ts'),
-      path.join(root, 'src', 'popup.ts')
+      path.join(root, 'src', 'popup.ts'),
+      path.join(root, 'src', 'options.ts')
     ],
     outdir: tempDir,
     target: 'es2020',
@@ -36,6 +37,9 @@ try {
 fs.copyFileSync(path.join(root, 'manifest.chromium.json'), path.join(distChromium, 'manifest.json'));
 fs.copyFileSync(path.join(root, 'src', 'popup.html'), path.join(distChromium, 'popup.html'));
 fs.copyFileSync(path.join(root, 'src', 'popup.css'), path.join(distChromium, 'popup.css'));
+if (fs.existsSync(path.join(root, 'src', 'options.html'))) {
+  fs.copyFileSync(path.join(root, 'src', 'options.html'), path.join(distChromium, 'options.html'));
+}
 if (fs.existsSync(path.join(root, 'src', 'logo.png'))) {
   fs.copyFileSync(path.join(root, 'src', 'logo.png'), path.join(distChromium, 'logo.png'));
 }
@@ -49,11 +53,17 @@ if (fs.existsSync(path.join(tempDir, 'content.js'))) {
 if (fs.existsSync(path.join(tempDir, 'popup.js'))) {
   fs.copyFileSync(path.join(tempDir, 'popup.js'), path.join(distChromium, 'popup.js'));
 }
+if (fs.existsSync(path.join(tempDir, 'options.js'))) {
+  fs.copyFileSync(path.join(tempDir, 'options.js'), path.join(distChromium, 'options.js'));
+}
 
 // 2. Also copy assets directly to root extension/ folder so loading `extension` directly works out-of-the-box
 fs.copyFileSync(path.join(root, 'manifest.chromium.json'), path.join(root, 'manifest.json'));
 fs.copyFileSync(path.join(root, 'src', 'popup.html'), path.join(root, 'popup.html'));
 fs.copyFileSync(path.join(root, 'src', 'popup.css'), path.join(root, 'popup.css'));
+if (fs.existsSync(path.join(root, 'src', 'options.html'))) {
+  fs.copyFileSync(path.join(root, 'src', 'options.html'), path.join(root, 'options.html'));
+}
 if (fs.existsSync(path.join(root, 'src', 'logo.png'))) {
   fs.copyFileSync(path.join(root, 'src', 'logo.png'), path.join(root, 'logo.png'));
 }
@@ -66,11 +76,17 @@ if (fs.existsSync(path.join(tempDir, 'content.js'))) {
 if (fs.existsSync(path.join(tempDir, 'popup.js'))) {
   fs.copyFileSync(path.join(tempDir, 'popup.js'), path.join(root, 'popup.js'));
 }
+if (fs.existsSync(path.join(tempDir, 'options.js'))) {
+  fs.copyFileSync(path.join(tempDir, 'options.js'), path.join(root, 'options.js'));
+}
 
 // 3. Copy assets to Firefox (dist/firefox)
 fs.copyFileSync(path.join(root, 'manifest.firefox.json'), path.join(distFirefox, 'manifest.json'));
 fs.copyFileSync(path.join(root, 'src', 'popup.html'), path.join(distFirefox, 'popup.html'));
 fs.copyFileSync(path.join(root, 'src', 'popup.css'), path.join(distFirefox, 'popup.css'));
+if (fs.existsSync(path.join(root, 'src', 'options.html'))) {
+  fs.copyFileSync(path.join(root, 'src', 'options.html'), path.join(distFirefox, 'options.html'));
+}
 if (fs.existsSync(path.join(root, 'src', 'logo.png'))) {
   fs.copyFileSync(path.join(root, 'src', 'logo.png'), path.join(distFirefox, 'logo.png'));
 }
@@ -83,6 +99,9 @@ if (fs.existsSync(path.join(tempDir, 'content.js'))) {
 }
 if (fs.existsSync(path.join(tempDir, 'popup.js'))) {
   fs.copyFileSync(path.join(tempDir, 'popup.js'), path.join(distFirefox, 'popup.js'));
+}
+if (fs.existsSync(path.join(tempDir, 'options.js'))) {
+  fs.copyFileSync(path.join(tempDir, 'options.js'), path.join(distFirefox, 'options.js'));
 }
 
 // Clean up temp

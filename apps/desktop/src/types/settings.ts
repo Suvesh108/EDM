@@ -1,3 +1,5 @@
+import type { FeaturePackId } from "./featurePacks";
+
 export interface CategoryRule {
   id: string;
   name: string;
@@ -100,6 +102,7 @@ export interface EdmSettings {
     socketBufferSizeKb: number;
     logLevel: "debug" | "info" | "warn" | "error";
   };
+  featurePacks: Record<FeaturePackId, boolean>;
 }
 
 export const defaultSettings: EdmSettings = {
@@ -236,6 +239,17 @@ export const defaultSettings: EdmSettings = {
     socketBufferSizeKb: 128,
     logLevel: "info",
   },
+  featurePacks: {
+    http_pack: true,
+    bittorrent_pack: true,
+    ftp_pack: true,
+    ed2k_pack: true,
+    m3u8_pack: true,
+    ffmpeg_pack: true,
+    yt_dlp_pack: true,
+    github_pack: true,
+    huggingface_pack: true,
+  },
 };
 
 const STORAGE_KEY = "edm_settings_v1";
@@ -258,6 +272,7 @@ export function loadSettings(): EdmSettings {
       notifications: { ...defaultSettings.notifications, ...parsed.notifications },
       security: { ...defaultSettings.security, ...parsed.security },
       advanced: { ...defaultSettings.advanced, ...parsed.advanced },
+      featurePacks: { ...defaultSettings.featurePacks, ...parsed.featurePacks },
       categories: parsed.categories?.length ? parsed.categories : defaultSettings.categories,
     };
   } catch (err) {

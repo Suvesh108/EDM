@@ -30,23 +30,49 @@ pub struct Probe;
 
 impl Probe {
     pub async fn probe_url(client: &Client, url: &str) -> Result<ProbeResult, ProbeError> {
+        Self::probe_url_with_headers(client, url, None, None, None).await
+    }
+
+    pub async fn probe_url_with_headers(
+        client: &Client,
+        url: &str,
+        cookies: Option<&str>,
+        referer: Option<&str>,
+        user_agent: Option<&str>,
+    ) -> Result<ProbeResult, ProbeError> {
         // Try HEAD first
-        let head_resp = client
-            .head(url)
-            .header(ACCEPT_ENCODING, "identity")
-            .send()
-            .await;
+        let mut head_req = client.head(url).header(ACCEPT_ENCODING, "identity");
+        if let Some(c) = cookies {
+            head_req = head_req.header(reqwest::header::COOKIE, c);
+        }
+        if let Some(r) = referer {
+            head_req = head_req.header(reqwest::header::REFERER, r);
+        }
+        if let Some(u) = user_agent {
+            head_req = head_req.header(reqwest::header::USER_AGENT, u);
+        }
+
+        let head_resp = head_req.send().await;
 
         let (resp, tested_range_directly) = match head_resp {
             Ok(r) if r.status().is_success() => (r, false),
             _ => {
                 // Fallback to GET with Range: bytes=0-0
-                let r = client
+                let mut get_req = client
                     .get(url)
                     .header(ACCEPT_ENCODING, "identity")
-                    .header(RANGE, "bytes=0-0")
-                    .send()
-                    .await?;
+                    .header(RANGE, "bytes=0-0");
+                if let Some(c) = cookies {
+                    get_req = get_req.header(reqwest::header::COOKIE, c);
+                }
+                if let Some(r) = referer {
+                    get_req = get_req.header(reqwest::header::REFERER, r);
+                }
+                if let Some(u) = user_agent {
+                    get_req = get_req.header(reqwest::header::USER_AGENT, u);
+                }
+
+                let r = get_req.send().await?;
                 (r, true)
             }
         };
@@ -79,7 +105,7 @@ impl Probe {
             } else if let Some(yt_title) = Self::fetch_youtube_title(client, &final_url).await {
                 filename = Some(yt_title);
             }
-        } else if filename.as_deref().map_or(true, |f| Self::is_generic_name(f)) {
+        } else if filename.as_deref().is_none_or(Self::is_generic_name) {
             // Check if query parameters specify a title or filename
             if let Some(extracted) = Self::extract_filename_from_query(&final_url) {
                 filename = Some(extracted);
@@ -262,14 +288,12 @@ impl Probe {
         if let Ok(parsed) = url::Url::parse(url_str) {
             for (k, v) in parsed.query_pairs() {
                 let k_lower = k.to_ascii_lowercase();
-                if k_lower == "title"
-                    || k_lower == "filename"
-                    || k_lower == "file_name"
-                    || k_lower == "file"
+                if matches!(
+                    k_lower.as_str(),
+                    "title" | "filename" | "file_name" | "file"
+                ) && !v.trim().is_empty()
                 {
-                    if !v.trim().is_empty() {
-                        return Some(Sanitizer::sanitize_filename(&v));
-                    }
+                    return Some(Sanitizer::sanitize_filename(&v));
                 }
             }
         }

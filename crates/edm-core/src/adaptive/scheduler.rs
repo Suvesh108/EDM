@@ -30,12 +30,16 @@ impl WorkScheduler {
     }
 
     /// Spawns an initial worker for a byte range
+    #[allow(clippy::too_many_arguments)]
     pub fn spawn_worker(
         &mut self,
         url: String,
         start: u64,
         end: u64,
         etag: Option<String>,
+        cookies: Option<String>,
+        referer: Option<String>,
+        user_agent: Option<String>,
         client: Client,
         writer: FileWriter,
         limiter: Option<TokenBucketLimiter>,
@@ -44,7 +48,9 @@ impl WorkScheduler {
         let idx = self.next_idx;
         self.next_idx += 1;
 
-        let worker = Arc::new(AdaptiveWorker::new(idx, url, start, end, start, etag));
+        let worker = Arc::new(AdaptiveWorker::new(
+            idx, url, start, end, start, etag, cookies, referer, user_agent,
+        ));
         self.workers.push(worker.clone());
 
         let w_clone = worker.clone();
@@ -120,6 +126,9 @@ impl WorkScheduler {
             new_worker_start,
             new_worker_end,
             target.etag.clone(),
+            target.cookies.clone(),
+            target.referer.clone(),
+            target.user_agent.clone(),
             client,
             writer,
             limiter,
@@ -174,7 +183,9 @@ impl WorkScheduler {
             .iter()
             .filter(|w| {
                 let s = w.get_status();
-                s == WorkerStatus::Connecting || s == WorkerStatus::Downloading || s == WorkerStatus::Stalled
+                s == WorkerStatus::Connecting
+                    || s == WorkerStatus::Downloading
+                    || s == WorkerStatus::Stalled
             })
             .count() as u32
     }

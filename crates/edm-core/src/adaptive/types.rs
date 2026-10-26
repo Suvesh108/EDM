@@ -99,9 +99,25 @@ pub struct AdaptiveTelemetry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AdaptiveDecision {
-    ScaleUp { from: u32, to: u32, reason: String },
-    ScaleDown { from: u32, to: u32, reason: String },
-    HoldStable { connections: u32, reason: String },
-    LimitRate { retry_after: Option<Duration>, reason: String },
-    FallbackSingleStream { reason: String },
+    ScaleUp {
+        from: u32,
+        to: u32,
+        reason: String,
+    },
+    ScaleDown {
+        from: u32,
+        to: u32,
+        reason: String,
+    },
+    HoldStable {
+        connections: u32,
+        reason: String,
+    },
+    LimitRate {
+        retry_after: Option<Duration>,
+        reason: String,
+    },
+    FallbackSingleStream {
+        reason: String,
+    },
 }

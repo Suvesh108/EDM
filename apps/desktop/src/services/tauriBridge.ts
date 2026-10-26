@@ -382,3 +382,27 @@ export async function tauriStartDragging(): Promise<void> {
     }
   }
 }
+
+export async function tauriGetFeaturePacks(): Promise<any[]> {
+  if (isTauri()) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return await invoke<any[]>("get_feature_packs");
+    } catch (err) {
+      console.warn("Tauri get_feature_packs:", err);
+    }
+  }
+  return [];
+}
+
+export async function tauriGetExtensionToken(): Promise<string> {
+  if (isTauri()) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return await invoke<string>("get_extension_token");
+    } catch (err) {
+      console.warn("Tauri get_extension_token:", err);
+    }
+  }
+  return "ed00000000000000000000000000000000000000000000000000000000000000";
+}

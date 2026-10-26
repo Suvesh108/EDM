@@ -2,9 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use chrono::Utc;
-use edm_core::adaptive::{
-    AdaptiveConfig, AdaptiveDownloadTask, AdaptiveEngine, AdaptiveTelemetry,
-};
+use edm_core::adaptive::{AdaptiveConfig, AdaptiveDownloadTask, AdaptiveEngine, AdaptiveTelemetry};
 use edm_core::Probe;
 use edm_ipc::{AppReply, DownloadOverview, DownloadState, ExtensionMessage, PROTOCOL_VERSION};
 use edm_store::{DownloadRecord, Store};
@@ -15,6 +13,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{command, State};
 use uuid::Uuid;
+
+mod ws_server;
 
 #[derive(Clone)]
 struct ActiveTaskHandle {
@@ -28,6 +28,7 @@ struct AppState {
     engine: Arc<AdaptiveEngine>,
     tasks: Arc<Mutex<HashMap<String, ActiveTaskHandle>>>,
     rt_handle: tokio::runtime::Handle,
+    ws_manager: Arc<ws_server::WsManager>,
 }
 
 fn get_db_path() -> PathBuf {
@@ -60,7 +61,8 @@ fn register_native_messaging_host() {
     let current_dir = current_exe.parent().unwrap_or(&app_dir);
     let mut nmh_path = current_dir.join("edm-nmh.exe");
     if !nmh_path.exists() {
-        let dev_path = PathBuf::from(r"C:\Users\Suvesh\Desktop\projects\EDM\target\release\edm-nmh.exe");
+        let dev_path =
+            PathBuf::from(r"C:\Users\Suvesh\Desktop\projects\EDM\target\release\edm-nmh.exe");
         if dev_path.exists() {
             nmh_path = dev_path;
         }
@@ -92,7 +94,16 @@ fn register_native_messaging_host() {
 
     for key in &reg_targets {
         let _ = std::process::Command::new("reg")
-            .args(["add", &format!(r"HKCU\{}", key), "/ve", "/t", "REG_SZ", "/d", &manifest_path.to_string_lossy(), "/f"])
+            .args([
+                "add",
+                &format!(r"HKCU\{}", key),
+                "/ve",
+                "/t",
+                "REG_SZ",
+                "/d",
+                &manifest_path.to_string_lossy(),
+                "/f",
+            ])
             .creation_flags(CREATE_NO_WINDOW)
             .output();
     }
@@ -102,11 +113,44 @@ fn register_native_messaging_host() {
 fn register_native_messaging_host() {}
 
 fn validate_url_security(raw_url: &str) -> Result<url::Url, String> {
-    let parsed = url::Url::parse(raw_url)
-        .map_err(|e| format!("Security violation: Invalid URL format: {}", e))?;
-    if parsed.scheme() != "http" && parsed.scheme() != "https" {
-        return Err("Security violation: Only HTTP and HTTPS protocols are allowed".into());
+    let trimmed = raw_url.trim();
+    let lower = trimmed.to_ascii_lowercase();
+
+    // 1. BitTorrent Magnet URIs (handled by bittorrent_pack)
+    if lower.starts_with("magnet:?") {
+        return url::Url::parse(trimmed)
+            .or_else(|_| {
+                url::Url::parse(&format!(
+                    "https://magnet.internal/?raw={}",
+                    urlencoding::encode(trimmed)
+                ))
+            })
+            .map_err(|e| format!("Invalid magnet URI: {}", e));
     }
+
+    // 2. eDonkey2000 URIs (handled by ed2k_pack)
+    if lower.starts_with("ed2k://") {
+        return url::Url::parse(trimmed)
+            .or_else(|_| {
+                url::Url::parse(&format!(
+                    "https://ed2k.internal/?raw={}",
+                    urlencoding::encode(trimmed)
+                ))
+            })
+            .map_err(|e| format!("Invalid eD2k URI: {}", e));
+    }
+
+    let parsed = url::Url::parse(trimmed)
+        .map_err(|e| format!("Security violation: Invalid URL format: {}", e))?;
+
+    let scheme = parsed.scheme();
+    if scheme != "http" && scheme != "https" && scheme != "ftp" && scheme != "ftps" {
+        return Err(format!(
+            "Security violation: Protocol '{}' is not supported",
+            scheme
+        ));
+    }
+
     if let Some(host) = parsed.host_str() {
         let h = host.to_lowercase();
         if h == "169.254.169.254"
@@ -123,9 +167,11 @@ fn validate_url_security(raw_url: &str) -> Result<url::Url, String> {
 fn open_file(save_dir: &str, filename: &str) {
     let file_path = PathBuf::from(save_dir).join(filename);
     if file_path.exists() {
-        let ext = filename.split('.').last().unwrap_or("").to_lowercase();
-        let is_executable = ["exe", "bat", "cmd", "scr", "vbs", "ps1", "msi", "reg", "com", "pif"]
-            .contains(&ext.as_str());
+        let ext = filename.split('.').next_back().unwrap_or("").to_lowercase();
+        let is_executable = [
+            "exe", "bat", "cmd", "scr", "vbs", "ps1", "msi", "reg", "com", "pif",
+        ]
+        .contains(&ext.as_str());
         if is_executable {
             let _ = std::process::Command::new("explorer.exe")
                 .arg(format!("/select,{}", file_path.to_string_lossy()))
@@ -151,6 +197,7 @@ fn open_folder(save_dir: &str, filename: &str) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn execute_download(
     state: &AppState,
     id: Uuid,
@@ -159,37 +206,46 @@ fn execute_download(
     save_dir: Option<PathBuf>,
     max_connections: Option<u32>,
     size_total: Option<u64>,
+    cookies: Option<String>,
+    referer: Option<String>,
+    user_agent: Option<String>,
 ) -> Result<Uuid, String> {
     validate_url_security(&url)?;
     let id_str = id.to_string();
 
+    let pack_target = edm_core::FeaturePackManager::classify_target(&url);
+
     let raw_name = match filename {
         Some(ref f) if !f.trim().is_empty() && f != "download" && f != "download.bin" => f.clone(),
         _ => {
-            let path_part = url
-                .split('/')
-                .last()
-                .unwrap_or("download.bin")
-                .split('?')
-                .next()
-                .unwrap_or("download.bin");
-            if path_part.is_empty() || path_part == "download" || path_part == "download.bin" {
-                if let Ok(parsed) = url::Url::parse(&url) {
-                    let mut found = None;
-                    for (k, v) in parsed.query_pairs() {
-                        if (k == "filename" || k == "file" || k == "title" || k == "name")
-                            && !v.trim().is_empty()
-                        {
-                            found = Some(v.to_string());
-                            break;
-                        }
-                    }
-                    found.unwrap_or_else(|| "download.bin".to_string())
-                } else {
-                    "download.bin".to_string()
-                }
+            if let Some(ref suggested) = pack_target.suggested_filename {
+                suggested.clone()
             } else {
-                path_part.to_string()
+                let path_part = url
+                    .split('/')
+                    .next_back()
+                    .unwrap_or("download.bin")
+                    .split('?')
+                    .next()
+                    .unwrap_or("download.bin");
+                if path_part.is_empty() || path_part == "download" || path_part == "download.bin" {
+                    if let Ok(parsed) = url::Url::parse(&url) {
+                        let mut found = None;
+                        for (k, v) in parsed.query_pairs() {
+                            if (k == "filename" || k == "file" || k == "title" || k == "name")
+                                && !v.trim().is_empty()
+                            {
+                                found = Some(v.to_string());
+                                break;
+                            }
+                        }
+                        found.unwrap_or_else(|| "download.bin".to_string())
+                    } else {
+                        "download.bin".to_string()
+                    }
+                } else {
+                    path_part.to_string()
+                }
             }
         }
     };
@@ -216,8 +272,15 @@ fn execute_download(
 
     state.tasks.lock().unwrap().insert(id_str.clone(), handle);
 
-    let ext = clean_name.split('.').last().unwrap_or("").to_lowercase();
-    let category = if ["mp4", "mkv", "webm", "avi", "mov"].contains(&ext.as_str()) {
+    let ext = clean_name
+        .split('.')
+        .next_back()
+        .unwrap_or("")
+        .to_lowercase();
+    let category = if pack_target.is_p2p {
+        "Compressed"
+    } else if pack_target.is_stream || ["mp4", "mkv", "webm", "avi", "mov"].contains(&ext.as_str())
+    {
         "Video"
     } else if ["mp3", "flac", "wav", "aac"].contains(&ext.as_str()) {
         "Music"
@@ -229,6 +292,8 @@ fn execute_download(
         "Programs"
     };
 
+    let effective_size = size_total.or(pack_target.estimated_size);
+
     let record = DownloadRecord {
         id,
         url: url.clone(),
@@ -237,18 +302,35 @@ fn execute_download(
         save_dir: save_path.to_string_lossy().to_string(),
         category: category.into(),
         state: DownloadState::Downloading,
-        size_total,
+        size_total: effective_size,
         size_done: 0,
         resumable: true,
         etag: None,
         last_modified: None,
         content_type: None,
-        referer: None,
-        user_agent: None,
+        referer: referer.clone(),
+        user_agent: user_agent.clone(),
         connections: config.max_connections,
         created_at: Utc::now(),
     };
     let _ = state.store.insert_download(&record);
+
+    let ws_mgr = state.ws_manager.clone();
+    let ws_id = id_str.clone();
+    let ws_filename = clean_name.clone();
+    let ws_savedir = save_path.clone();
+    let ws_total = effective_size;
+    state.rt_handle.spawn(async move {
+        ws_mgr
+            .register_task(
+                ws_id,
+                ws_filename,
+                ws_savedir,
+                ws_total,
+                "downloading".into(),
+            )
+            .await;
+    });
 
     let task = AdaptiveDownloadTask {
         id,
@@ -258,27 +340,60 @@ fn execute_download(
         config,
         limiter: None,
         cancelled,
+        cookies,
+        referer,
+        user_agent,
     };
 
     let engine = state.engine.clone();
     let telem_target = telemetry_store.clone();
     let store_clone = state.store.clone();
     let store_cb = state.store.clone();
+    let ws_mgr_cb = state.ws_manager.clone();
+    let ws_id_cb = id_str.clone();
 
     state.rt_handle.spawn(async move {
+        let ws_mgr_tick = ws_mgr_cb.clone();
+        let ws_id_tick = ws_id_cb.clone();
         let cb = Arc::new(move |telem: AdaptiveTelemetry| {
             if let Ok(mut lock) = telem_target.lock() {
                 *lock = Some(telem.clone());
             }
             let _ = store_cb.update_download_progress(id, telem.downloaded_bytes);
+            let ws_mgr = ws_mgr_tick.clone();
+            let id_c = ws_id_tick.clone();
+            tokio::spawn(async move {
+                ws_mgr.update_task_progress(&id_c, telem.downloaded_bytes, telem.total_bytes, telem.rolling_throughput_bps, "downloading").await;
+            });
         });
-        let result = engine.download(task, Some(cb)).await;
+        let client = Client::builder()
+            .timeout(std::time::Duration::from_secs(45))
+            .redirect(reqwest::redirect::Policy::limited(15))
+            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36 Edg/135.0.0.0")
+            .build()
+            .unwrap_or_default();
+        let result = edm_core::PackExecutor::execute(task, engine, client, Some(cb)).await;
         let final_state = match result {
             Ok(_) => DownloadState::Completed,
             Err(e) if e.to_string().contains("cancelled") => DownloadState::Paused,
             Err(_) => DownloadState::Failed,
         };
         let _ = store_clone.update_download_state(id, final_state, None);
+
+        let final_status_str = match &final_state {
+            DownloadState::Completed => "completed",
+            DownloadState::Paused => "paused",
+            _ => "failed",
+        };
+        let ws_mgr_fin = ws_mgr_cb.clone();
+        let ws_id_fin = ws_id_cb.clone();
+        let (final_done, final_total) = match store_clone.list_all_downloads() {
+            Ok(records) => records.into_iter().find(|d| d.id == id).map(|d| (d.size_done, d.size_total)).unwrap_or((0, effective_size)),
+            Err(_) => (0, effective_size),
+        };
+        tokio::spawn(async move {
+            ws_mgr_fin.update_task_progress(&ws_id_fin, final_done, final_total, 0, final_status_str).await;
+        });
     });
 
     Ok(id)
@@ -489,7 +604,7 @@ async fn handle_extension_message(msg: ExtensionMessage, state: &AppState) -> Ap
             ..
         } => {
             let id = Uuid::new_v4();
-            match execute_download(state, id, url, filename, None, None, size) {
+            match execute_download(state, id, url, filename, None, None, size, None, None, None) {
                 Ok(id) => AppReply::Accepted { id },
                 Err(err) => AppReply::Error { message: err },
             }
@@ -500,7 +615,9 @@ async fn handle_extension_message(msg: ExtensionMessage, state: &AppState) -> Ap
             if let Some(task) = tasks.get(&id.to_string()) {
                 task.cancelled.store(true, Ordering::Relaxed);
             }
-            let _ = state.store.update_download_state(id, DownloadState::Paused, None);
+            let _ = state
+                .store
+                .update_download_state(id, DownloadState::Paused, None);
             AppReply::Success {
                 action: "pause".into(),
                 id: Some(id),
@@ -518,8 +635,13 @@ async fn handle_extension_message(msg: ExtensionMessage, state: &AppState) -> Ap
                     Some(PathBuf::from(r.save_dir)),
                     Some(r.connections),
                     r.size_total,
+                    None,
+                    r.referer,
+                    r.user_agent,
                 );
-                let _ = state.store.update_download_state(id, DownloadState::Downloading, None);
+                let _ = state
+                    .store
+                    .update_download_state(id, DownloadState::Downloading, None);
             }
             AppReply::Success {
                 action: "resume".into(),
@@ -554,8 +676,13 @@ async fn handle_extension_message(msg: ExtensionMessage, state: &AppState) -> Ap
                     Some(PathBuf::from(r.save_dir)),
                     Some(r.connections),
                     r.size_total,
+                    None,
+                    r.referer,
+                    r.user_agent,
                 );
-                let _ = state.store.update_download_state(id, DownloadState::Downloading, None);
+                let _ = state
+                    .store
+                    .update_download_state(id, DownloadState::Downloading, None);
             }
             AppReply::Success {
                 action: "retry".into(),
@@ -620,7 +747,10 @@ fn spawn_extension_bridge(state: AppState, rt_handle: tokio::runtime::Handle) {
                         if let Some(host) = headers.get(axum::http::header::HOST) {
                             if let Ok(h) = host.to_str() {
                                 if !h.starts_with("127.0.0.1") && !h.starts_with("localhost") {
-                                    return Err((StatusCode::FORBIDDEN, "Forbidden: Host must be loopback"));
+                                    return Err((
+                                        StatusCode::FORBIDDEN,
+                                        "Forbidden: Host must be loopback",
+                                    ));
                                 }
                             }
                         }
@@ -628,12 +758,16 @@ fn spawn_extension_bridge(state: AppState, rt_handle: tokio::runtime::Handle) {
                         // Guard 2: Origin check (allow browser extensions and loopback)
                         if let Some(origin) = headers.get(axum::http::header::ORIGIN) {
                             if let Ok(o) = origin.to_str() {
-                                let is_ext = o.starts_with("chrome-extension://") || o.starts_with("moz-extension://");
+                                let is_ext = o.starts_with("chrome-extension://")
+                                    || o.starts_with("moz-extension://");
                                 let is_local = o.starts_with("http://localhost:")
                                     || o.starts_with("http://127.0.0.1:")
                                     || o.starts_with("tauri://");
                                 if !is_ext && !is_local {
-                                    return Err((StatusCode::FORBIDDEN, "Forbidden: Untrusted Origin"));
+                                    return Err((
+                                        StatusCode::FORBIDDEN,
+                                        "Forbidden: Untrusted Origin",
+                                    ));
                                 }
                             }
                         }
@@ -644,12 +778,20 @@ fn spawn_extension_bridge(state: AppState, rt_handle: tokio::runtime::Handle) {
                                 if site == "cross-site" {
                                     if let Some(origin) = headers.get(axum::http::header::ORIGIN) {
                                         if let Ok(o) = origin.to_str() {
-                                            if !o.starts_with("chrome-extension://") && !o.starts_with("moz-extension://") {
-                                                return Err((StatusCode::FORBIDDEN, "Forbidden: Cross-site request rejected"));
+                                            if !o.starts_with("chrome-extension://")
+                                                && !o.starts_with("moz-extension://")
+                                            {
+                                                return Err((
+                                                    StatusCode::FORBIDDEN,
+                                                    "Forbidden: Cross-site request rejected",
+                                                ));
                                             }
                                         }
                                     } else {
-                                        return Err((StatusCode::FORBIDDEN, "Forbidden: Cross-site request rejected"));
+                                        return Err((
+                                            StatusCode::FORBIDDEN,
+                                            "Forbidden: Cross-site request rejected",
+                                        ));
                                     }
                                 }
                             }
@@ -662,19 +804,17 @@ fn spawn_extension_bridge(state: AppState, rt_handle: tokio::runtime::Handle) {
             )
             .layer(
                 CorsLayer::new()
-                    .allow_origin(AllowOrigin::predicate(
-                        |origin: &HeaderValue, _| {
-                            if let Ok(s) = origin.to_str() {
-                                s.starts_with("chrome-extension://")
-                                    || s.starts_with("moz-extension://")
-                                    || s.starts_with("http://localhost:")
-                                    || s.starts_with("http://127.0.0.1:")
-                                    || s.starts_with("tauri://")
-                            } else {
-                                false
-                            }
-                        },
-                    ))
+                    .allow_origin(AllowOrigin::predicate(|origin: &HeaderValue, _| {
+                        if let Ok(s) = origin.to_str() {
+                            s.starts_with("chrome-extension://")
+                                || s.starts_with("moz-extension://")
+                                || s.starts_with("http://localhost:")
+                                || s.starts_with("http://127.0.0.1:")
+                                || s.starts_with("tauri://")
+                        } else {
+                            false
+                        }
+                    }))
                     .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
                     .allow_headers(tower_http::cors::Any),
             )
@@ -689,7 +829,60 @@ fn spawn_extension_bridge(state: AppState, rt_handle: tokio::runtime::Handle) {
 #[command]
 async fn probe_url(url: String) -> Result<serde_json::Value, String> {
     validate_url_security(&url)?;
-    let client = Client::new();
+    let pack_target = edm_core::FeaturePackManager::classify_target(&url);
+
+    // 1. BitTorrent Magnet Link Probe
+    if pack_target.pack_id == edm_core::FeaturePackId::BitTorrentPack {
+        return Ok(serde_json::json!({
+            "url": url,
+            "final_url": url,
+            "filename": pack_target.suggested_filename.or(Some("Torrent_Task".into())),
+            "content_type": Some("application/x-bittorrent"),
+            "size_total": null,
+            "resumable": true,
+            "etag": null,
+            "last_modified": null
+        }));
+    }
+
+    // 2. eDonkey2000 Link Probe
+    if pack_target.pack_id == edm_core::FeaturePackId::Ed2kPack {
+        return Ok(serde_json::json!({
+            "url": url,
+            "final_url": url,
+            "filename": pack_target.suggested_filename.or(Some("eD2k_File".into())),
+            "content_type": Some("application/x-ed2k"),
+            "size_total": pack_target.estimated_size,
+            "resumable": true,
+            "etag": null,
+            "last_modified": null
+        }));
+    }
+
+    // 3. Video Stream Probe (yt-dlp)
+    if pack_target.pack_id == edm_core::FeaturePackId::YtDlpPack {
+        if let Ok(info) = edm_core::packs::YtDlpPack::extract_info(&url).await {
+            let best_size = info.formats.iter().filter_map(|f| f.filesize).max();
+            let sanitized = edm_core::sanitizer::Sanitizer::sanitize_filename(&info.title);
+            return Ok(serde_json::json!({
+                "url": url,
+                "final_url": info.webpage_url,
+                "filename": Some(format!("{}.mp4", sanitized)),
+                "content_type": Some("video/mp4"),
+                "size_total": best_size,
+                "resumable": true,
+                "etag": null,
+                "last_modified": null
+            }));
+        }
+    }
+
+    // 4. Standard HTTP / M3U8 / GitHub / HuggingFace Probe
+    let client = Client::builder()
+        .redirect(reqwest::redirect::Policy::limited(15))
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36 Edg/135.0.0.0")
+        .build()
+        .unwrap_or_default();
     let res = Probe::probe_url(&client, &url)
         .await
         .map_err(|e| e.to_string())?;
@@ -706,7 +899,18 @@ async fn start_download(
 ) -> Result<serde_json::Value, String> {
     let id = Uuid::new_v4();
     let save_path = save_dir.map(PathBuf::from);
-    let download_id = execute_download(&state, id, url, filename, save_path, max_connections, None)?;
+    let download_id = execute_download(
+        &state,
+        id,
+        url,
+        filename,
+        save_path,
+        max_connections,
+        None,
+        None,
+        None,
+        None,
+    )?;
 
     Ok(serde_json::json!({
         "status": "started",
@@ -736,8 +940,13 @@ fn resume_download(state: State<'_, AppState>, id: String) -> Result<serde_json:
                 Some(PathBuf::from(r.save_dir)),
                 Some(r.connections),
                 r.size_total,
+                None,
+                r.referer,
+                r.user_agent,
             );
-            let _ = state.store.update_download_state(uuid, DownloadState::Downloading, None);
+            let _ = state
+                .store
+                .update_download_state(uuid, DownloadState::Downloading, None);
             return Ok(serde_json::json!({ "status": "resumed", "id": id }));
         }
     }
@@ -751,9 +960,11 @@ fn cancel_download(state: State<'_, AppState>, id: String) -> Result<serde_json:
         task.cancelled.store(true, Ordering::Relaxed);
     }
     if let Ok(uuid) = Uuid::parse_str(&id) {
-        let _ = state
-            .store
-            .update_download_state(uuid, DownloadState::Cancelled, Some("Cancelled by user"));
+        let _ = state.store.update_download_state(
+            uuid,
+            DownloadState::Cancelled,
+            Some("Cancelled by user"),
+        );
     }
     Ok(serde_json::json!({ "status": "cancelled", "id": id }))
 }
@@ -802,7 +1013,9 @@ fn pause_download(state: State<'_, AppState>, id: String) -> Result<serde_json::
     if let Some(task) = tasks.get(&id) {
         task.cancelled.store(true, Ordering::Relaxed);
         if let Ok(uuid) = Uuid::parse_str(&id) {
-            let _ = state.store.update_download_state(uuid, DownloadState::Paused, None);
+            let _ = state
+                .store
+                .update_download_state(uuid, DownloadState::Paused, None);
         }
         Ok(serde_json::json!({ "status": "paused", "id": id }))
     } else {
@@ -837,6 +1050,12 @@ fn get_stats(state: State<'_, AppState>) -> serde_json::Value {
         "active_downloads": active_count,
         "engine": "adaptive_v1",
     })
+}
+
+#[command]
+fn get_feature_packs() -> serde_json::Value {
+    let packs = edm_core::FeaturePackManager::list_all_packs();
+    serde_json::to_value(packs).unwrap_or_else(|_| serde_json::json!([]))
 }
 
 #[command]
@@ -912,9 +1131,44 @@ fn app_start_dragging(window: tauri::WebviewWindow) {
     let _ = window.start_dragging();
 }
 
+#[tauri::command]
+fn get_extension_token(state: State<'_, AppState>) -> String {
+    state.ws_manager.get_token().to_string()
+}
+
+#[cfg(windows)]
+fn enforce_single_instance() {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    extern "system" {
+        fn CreateMutexW(
+            lpMutexAttributes: *mut std::ffi::c_void,
+            bInitialOwner: i32,
+            lpName: *const u16,
+        ) -> *mut std::ffi::c_void;
+        fn GetLastError() -> u32;
+    }
+    const ERROR_ALREADY_EXISTS: u32 = 183;
+    let mutex_name: Vec<u16> = OsStr::new("Global\\EDM_SingleInstance_Mutex_14370")
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let handle = unsafe { CreateMutexW(std::ptr::null_mut(), 1, mutex_name.as_ptr()) };
+    if handle.is_null() || unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
+        eprintln!("EDM is already running. Exiting second instance.");
+        std::process::exit(0);
+    }
+    let _ = handle;
+}
+
+#[cfg(not(windows))]
+fn enforce_single_instance() {}
+
 fn main() {
     #[cfg(windows)]
     set_app_user_model_id();
+
+    enforce_single_instance();
 
     register_native_messaging_host();
 
@@ -928,14 +1182,219 @@ fn main() {
 
     let store = open_persistent_store();
     let engine = Arc::new(AdaptiveEngine::new(store.clone()));
+
+    let token = ws_server::get_or_create_token();
+    let (create_task_tx, mut create_task_rx) =
+        tokio::sync::mpsc::channel::<ws_server::CreateTaskCommand>(64);
+    let (action_tx, mut action_rx) = tokio::sync::mpsc::channel::<ws_server::ActionCommand>(64);
+
+    let ws_manager = Arc::new(ws_server::WsManager::new(
+        token,
+        ws_server::EXTENSION_ID.to_string(),
+        store.clone(),
+        create_task_tx,
+        action_tx,
+    ));
+
     let app_state = AppState {
         store,
         engine,
         tasks: Arc::new(Mutex::new(HashMap::new())),
         rt_handle: rt_handle.clone(),
+        ws_manager: ws_manager.clone(),
     };
 
-    spawn_extension_bridge(app_state.clone(), rt_handle);
+    spawn_extension_bridge(app_state.clone(), rt_handle.clone());
+
+    // Start WebSocket Server on 127.0.0.1:14370
+    let ws_mgr_srv = ws_manager.clone();
+    rt_handle.spawn(async move {
+        ws_mgr_srv.sync_from_store().await;
+        ws_server::start_ws_server(ws_mgr_srv).await;
+    });
+
+    // Inbound WebSocket Task Creator Loop
+    let create_state = app_state.clone();
+    rt_handle.spawn(async move {
+        while let Some(cmd) = create_task_rx.recv().await {
+            let cookie_header = if !cmd.cookies.is_empty() {
+                Some(
+                    cmd.cookies
+                        .iter()
+                        .map(|c| format!("{}={}", c.name, c.value))
+                        .collect::<Vec<_>>()
+                        .join("; "),
+                )
+            } else {
+                None
+            };
+            let id = Uuid::new_v4();
+            let res = execute_download(
+                &create_state,
+                id,
+                cmd.url,
+                cmd.filename,
+                None,
+                None,
+                None,
+                cookie_header,
+                cmd.referrer,
+                cmd.user_agent,
+            );
+            let _ = cmd.resp_tx.send(res.map(|u| u.to_string()));
+        }
+    });
+
+    // Inbound WebSocket Task Actions Loop
+    let action_state = app_state.clone();
+    rt_handle.spawn(async move {
+        while let Some(cmd) = action_rx.recv().await {
+            let res = match cmd.action.as_str() {
+                "pause" => {
+                    if let Ok(id_uuid) = Uuid::parse_str(&cmd.id) {
+                        {
+                            let tasks = action_state.tasks.lock().unwrap();
+                            if let Some(t) = tasks.get(&cmd.id) {
+                                t.cancelled.store(true, Ordering::Relaxed);
+                            }
+                        }
+                        let _ = action_state.store.update_download_state(
+                            id_uuid,
+                            DownloadState::Paused,
+                            None,
+                        );
+                        action_state
+                            .ws_manager
+                            .update_task_progress(&cmd.id, 0, None, 0, "paused")
+                            .await;
+                        Ok(())
+                    } else {
+                        Err("Invalid task id".into())
+                    }
+                }
+                "resume" => {
+                    if let Ok(id_uuid) = Uuid::parse_str(&cmd.id) {
+                        let records = action_state.store.list_all_downloads().unwrap_or_default();
+                        if let Some(r) = records.into_iter().find(|d| d.id == id_uuid) {
+                            let _ = execute_download(
+                                &action_state,
+                                id_uuid,
+                                r.url,
+                                Some(r.filename),
+                                Some(PathBuf::from(r.save_dir)),
+                                Some(r.connections),
+                                r.size_total,
+                                None,
+                                r.referer,
+                                r.user_agent,
+                            );
+                            let _ = action_state.store.update_download_state(
+                                id_uuid,
+                                DownloadState::Downloading,
+                                None,
+                            );
+                            action_state
+                                .ws_manager
+                                .update_task_progress(
+                                    &cmd.id,
+                                    r.size_done,
+                                    r.size_total,
+                                    0,
+                                    "downloading",
+                                )
+                                .await;
+                            Ok(())
+                        } else {
+                            Err("Task not found".into())
+                        }
+                    } else {
+                        Err("Invalid task id".into())
+                    }
+                }
+                "cancel" => {
+                    if let Ok(id_uuid) = Uuid::parse_str(&cmd.id) {
+                        {
+                            let tasks = action_state.tasks.lock().unwrap();
+                            if let Some(t) = tasks.get(&cmd.id) {
+                                t.cancelled.store(true, Ordering::Relaxed);
+                            }
+                        }
+                        let _ = action_state.store.update_download_state(
+                            id_uuid,
+                            DownloadState::Cancelled,
+                            Some("Cancelled by user"),
+                        );
+                        action_state
+                            .ws_manager
+                            .update_task_progress(&cmd.id, 0, None, 0, "failed")
+                            .await;
+                        Ok(())
+                    } else {
+                        Err("Invalid task id".into())
+                    }
+                }
+                "remove" => {
+                    if let Ok(id_uuid) = Uuid::parse_str(&cmd.id) {
+                        {
+                            let tasks = action_state.tasks.lock().unwrap();
+                            if let Some(t) = tasks.get(&cmd.id) {
+                                t.cancelled.store(true, Ordering::Relaxed);
+                            }
+                        }
+                        let _ = action_state.store.delete_download(id_uuid);
+                        let live_tasks = action_state.ws_manager.get_live_tasks();
+                        let mut live = live_tasks.write().await;
+                        live.remove(&cmd.id);
+                        Ok(())
+                    } else {
+                        Err("Invalid task id".into())
+                    }
+                }
+                "open_file" => {
+                    let live_tasks = action_state.ws_manager.get_live_tasks();
+                    let live = live_tasks.read().await;
+                    if let Some(t) = live.get(&cmd.id) {
+                        ws_server::secure_open_file(&t.save_dir, &t.filename, &t.status)
+                    } else if let Ok(id_uuid) = Uuid::parse_str(&cmd.id) {
+                        let records = action_state.store.list_all_downloads().unwrap_or_default();
+                        if let Some(r) = records.into_iter().find(|d| d.id == id_uuid) {
+                            let status = match r.state {
+                                DownloadState::Completed => "completed",
+                                _ => "downloading",
+                            };
+                            ws_server::secure_open_file(
+                                &PathBuf::from(r.save_dir),
+                                &r.filename,
+                                status,
+                            )
+                        } else {
+                            Err("Task not found".into())
+                        }
+                    } else {
+                        Err("Task not found".into())
+                    }
+                }
+                "open_folder" => {
+                    let live_tasks = action_state.ws_manager.get_live_tasks();
+                    let live = live_tasks.read().await;
+                    if let Some(t) = live.get(&cmd.id) {
+                        ws_server::secure_open_folder(&t.save_dir, &t.filename)
+                    } else if let Ok(id_uuid) = Uuid::parse_str(&cmd.id) {
+                        let records = action_state.store.list_all_downloads().unwrap_or_default();
+                        if let Some(r) = records.into_iter().find(|d| d.id == id_uuid) {
+                            ws_server::secure_open_folder(&PathBuf::from(r.save_dir), &r.filename)
+                        } else {
+                            Err("Task not found".into())
+                        }
+                    } else {
+                        Err("Task not found".into())
+                    }
+                }
+                _ => Err("Unsupported action".into()),
+            };
+            let _ = cmd.resp_tx.send(res);
+        }
+    });
 
     // Keep Tokio runtime active in background thread
     std::thread::spawn(move || {
@@ -950,7 +1409,9 @@ fn main() {
         .setup(|app| {
             use tauri::Manager;
             if let Some(window) = app.get_webview_window("main") {
-                if let Ok(icon) = tauri::image::Image::from_bytes(include_bytes!("../icons/128x128.png")) {
+                if let Ok(icon) =
+                    tauri::image::Image::from_bytes(include_bytes!("../icons/128x128.png"))
+                {
                     let _ = window.set_icon(icon);
                 }
             }
@@ -969,8 +1430,10 @@ fn main() {
             open_dir_path,
             get_download_telemetry,
             get_stats,
+            get_feature_packs,
             get_settings,
             save_settings,
+            get_extension_token,
             app_minimize,
             app_toggle_maximize,
             app_close,

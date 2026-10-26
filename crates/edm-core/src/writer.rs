@@ -17,7 +17,7 @@ pub enum WriterError {
 
 #[derive(Clone)]
 pub struct FileWriter {
-    file: Arc<Mutex<File>>,
+    file: Arc<Mutex<Option<File>>>,
     part_path: PathBuf,
     final_path: PathBuf,
     pub total_size: Option<u64>,
@@ -76,7 +76,7 @@ impl FileWriter {
         }
 
         Ok(Self {
-            file: Arc::new(Mutex::new(file)),
+            file: Arc::new(Mutex::new(Some(file))),
             part_path,
             final_path,
             total_size,
@@ -84,40 +84,46 @@ impl FileWriter {
     }
 
     pub fn write_at(&self, offset: u64, data: &[u8]) -> Result<(), WriterError> {
-        let file = self.file.lock().unwrap();
+        let guard = self.file.lock().unwrap();
+        if let Some(ref file) = *guard {
+            #[cfg(windows)]
+            {
+                file.seek_write(data, offset)?;
+            }
 
-        #[cfg(windows)]
-        {
-            file.seek_write(data, offset)?;
-        }
-
-        #[cfg(not(windows))]
-        {
-            use std::io::Seek;
-            use std::io::SeekFrom;
-            let mut file_ref = &*file;
-            (&file_ref).seek(SeekFrom::Start(offset))?;
-            (&file_ref).write_all(data)?;
+            #[cfg(not(windows))]
+            {
+                use std::io::Seek;
+                use std::io::SeekFrom;
+                let mut file_ref = &*file;
+                (&file_ref).seek(SeekFrom::Start(offset))?;
+                (&file_ref).write_all(data)?;
+            }
         }
 
         Ok(())
     }
 
     pub fn flush(&self) -> Result<(), WriterError> {
-        let file = self.file.lock().unwrap();
-        file.sync_data()?;
+        let guard = self.file.lock().unwrap();
+        if let Some(ref file) = *guard {
+            file.sync_data()?;
+        }
         Ok(())
     }
 
     pub fn finalize(&self, referer_or_url: Option<&str>) -> Result<PathBuf, WriterError> {
         self.flush()?;
 
-        // Close file handle by dropping the lock and ensuring ownership is clean
-        drop(self.file.lock().unwrap());
+        // Close file handle by taking Option<File> and dropping it immediately to release Windows file lock
+        {
+            let mut guard = self.file.lock().unwrap();
+            let _ = guard.take();
+        }
 
         if self.final_path.exists() {
             // Apply duplicate rename policy if needed or overwrite
-            std::fs::remove_file(&self.final_path)?;
+            let _ = std::fs::remove_file(&self.final_path);
         }
 
         std::fs::rename(&self.part_path, &self.final_path)?;

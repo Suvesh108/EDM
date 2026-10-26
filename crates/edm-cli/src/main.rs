@@ -1,7 +1,5 @@
 use clap::{Parser, Subcommand};
-use edm_core::adaptive::{
-    AdaptiveConfig, AdaptiveDownloadTask, AdaptiveEngine, AdaptiveTelemetry,
-};
+use edm_core::adaptive::{AdaptiveConfig, AdaptiveDownloadTask, AdaptiveEngine, AdaptiveTelemetry};
 use edm_core::{DownloadTask, Engine, Probe};
 use edm_store::Store;
 use reqwest::Client;
@@ -61,8 +59,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             if adaptive {
                 let engine = AdaptiveEngine::new(store);
-                let mut config = AdaptiveConfig::default();
-                config.max_connections = connections;
+                let config = AdaptiveConfig {
+                    max_connections: connections,
+                    ..AdaptiveConfig::default()
+                };
 
                 let task = AdaptiveDownloadTask {
                     id: Uuid::new_v4(),
@@ -72,6 +72,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     config,
                     limiter: None,
                     cancelled: Arc::new(AtomicBool::new(false)),
+                    cookies: None,
+                    referer: None,
+                    user_agent: None,
                 };
 
                 let telemetry_cb = Arc::new(|telem: AdaptiveTelemetry| {

@@ -1,186 +1,435 @@
 // EDM Background Service Worker (Manifest V3)
-const NMH_HOST = "com.edm.nmh";
-const FALLBACK_HTTP_URL = "http://127.0.0.1:8998/api";
+// Direct High-Performance Local WebSocket Client for 127.0.0.1:14370
 
-type ConnectionState = "connected" | "connecting" | "connection_failed" | "application_not_running" | "reconnecting";
+export interface WsTaskItem {
+  id: string;
+  filename: string;
+  total: number | null;
+  downloaded: number;
+  speed: number;
+  status: "queued" | "downloading" | "paused" | "completed" | "failed";
+}
 
-let connectionState: ConnectionState = "connecting";
-let lastPingTime = 0;
+interface PendingAck {
+  resolve: (ack: { ok: boolean; id?: string; error?: string }) => void;
+  timer: any;
+}
+
+const WS_URL = "ws://127.0.0.1:14370";
+let socket: WebSocket | null = null;
+let connectionStatus: "connecting" | "connected" | "disconnected" = "disconnected";
+let reconnectTimer: any = null;
+let pingInterval: any = null;
 let bypassNextDownload = false;
-const notifiedCompletedIds = new Set<string>();
-const notifiedFailedIds = new Set<string>();
 
-// Cached telemetry for popup instant load
-let cachedStatus: any = {
-  status: "connecting",
-  version: "0.0.1",
-  protocol: 1,
-  active_downloads: 0,
-  queued_tasks: 0,
-  completed_tasks: 0,
-  aggregate_speed_bps: 0,
-};
+// Shared state
+let latestTasks: WsTaskItem[] = [];
+const pendingAcks = new Map<string, PendingAck>();
+const popupPorts = new Set<chrome.runtime.Port>();
 
-let activeChannel: "native" | "http" | "unknown" = "unknown";
+// 1. Get Authentication Token from chrome.storage.local
+async function getToken(): Promise<string> {
+  const store = await chrome.storage.local.get("edm_ws_token");
+  if (store && store.edm_ws_token && typeof store.edm_ws_token === "string" && store.edm_ws_token.trim().length >= 32) {
+    return store.edm_ws_token.trim();
+  }
+  // Default development fallback token if none configured yet
+  return "ed00000000000000000000000000000000000000000000000000000000000000";
+}
 
-async function sendViaNative(message: any): Promise<any> {
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error("Native host timeout")), 1500);
+// 2. Broadcast snapshot and status to open popup ports
+function notifyPopupPorts() {
+  const msg = {
+    type: "snapshot",
+    tasks: latestTasks,
+    connectionStatus,
+  };
+  for (const port of popupPorts) {
     try {
-      chrome.runtime.sendNativeMessage(NMH_HOST, message, (resp) => {
-        clearTimeout(timeout);
-        if (chrome.runtime.lastError) {
-          reject(chrome.runtime.lastError);
-        } else {
-          resolve(resp);
+      port.postMessage(msg);
+    } catch {
+      popupPorts.delete(port);
+    }
+  }
+
+  // Update extension badge
+  const activeCount = latestTasks.filter((t) => t.status === "downloading").length;
+  if (activeCount > 0) {
+    chrome.action.setBadgeText({ text: String(activeCount) });
+    chrome.action.setBadgeBackgroundColor({ color: "#2563EB" });
+  } else {
+    chrome.action.setBadgeText({ text: "" });
+  }
+}
+
+// 3. Connect to Desktop App WebSocket Server
+async function connectWebSocket() {
+  if (socket && (socket.readyState === WebSocket.CONNECTING || socket.readyState === WebSocket.OPEN)) {
+    return;
+  }
+
+  connectionStatus = "connecting";
+  notifyPopupPorts();
+
+  const token = await getToken();
+
+  try {
+    socket = new WebSocket(WS_URL);
+  } catch (err) {
+    console.warn("[EDM Extension] WebSocket creation failed:", err);
+    scheduleReconnect();
+    return;
+  }
+
+  socket.onopen = () => {
+    // Phase 1 Invariant: First frame MUST be hello { token }
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: "hello", token }));
+    }
+  };
+
+  socket.onmessage = (event) => {
+    try {
+      const data = JSON.parse(event.data);
+      switch (data.type) {
+        case "ready": {
+          connectionStatus = "connected";
+          // Phase 4 Invariant: Send subscribe after ready
+          if (socket && socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({ type: "subscribe" }));
+          }
+          startPingInterval();
+          notifyPopupPorts();
+          break;
         }
-      });
+
+        case "pong": {
+          // Keep-alive acknowledged
+          break;
+        }
+
+        case "snapshot": {
+          if (Array.isArray(data.tasks)) {
+            latestTasks = data.tasks;
+            notifyPopupPorts();
+          }
+          break;
+        }
+
+        case "ack": {
+          if (data.req_id && pendingAcks.has(data.req_id)) {
+            const pending = pendingAcks.get(data.req_id)!;
+            clearTimeout(pending.timer);
+            pendingAcks.delete(data.req_id);
+            pending.resolve({
+              ok: !!data.ok,
+              id: data.id,
+              error: data.error,
+            });
+          }
+          break;
+        }
+
+        default:
+          break;
+      }
     } catch (e) {
-      clearTimeout(timeout);
-      reject(e);
+      console.warn("[EDM Extension] Error handling inbound message:", e);
     }
-  });
-}
+  };
 
-async function sendViaHttp(message: any): Promise<any> {
-  const ctrl = new AbortController();
-  const timeout = setTimeout(() => ctrl.abort(), 2000);
-  try {
-    const res = await fetch(FALLBACK_HTTP_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-EDM-Client": "extension",
-      },
-      body: JSON.stringify(message),
-      signal: ctrl.signal,
-    });
-    clearTimeout(timeout);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return await res.json();
-  } catch (e) {
-    clearTimeout(timeout);
-    throw e;
-  }
-}
+  socket.onclose = () => {
+    connectionStatus = "disconnected";
+    socket = null;
+    stopPingInterval();
+    notifyPopupPorts();
+    scheduleReconnect();
+  };
 
-// Dispatch message to EDM Desktop Host with automatic dual-channel failover
-async function sendHostMessage(message: any): Promise<any> {
-  // If activeChannel is already known, try it first for zero-latency response
-  if (activeChannel === "http") {
-    try {
-      const resp = await sendViaHttp(message);
-      connectionState = "connected";
-      lastPingTime = Date.now();
-      return resp;
-    } catch {
-      activeChannel = "unknown";
+  socket.onerror = (err) => {
+    console.warn("[EDM Extension] WebSocket error:", err);
+    if (socket) {
+      socket.close();
     }
-  } else if (activeChannel === "native") {
-    try {
-      const resp = await sendViaNative(message);
-      connectionState = "connected";
-      lastPingTime = Date.now();
-      return resp;
-    } catch {
-      activeChannel = "unknown";
-    }
-  }
-
-  // 1. Try local loopback HTTP Bridge first (instant when EDM desktop is running)
-  try {
-    const httpReply = await sendViaHttp(message);
-    activeChannel = "http";
-    connectionState = "connected";
-    lastPingTime = Date.now();
-    return httpReply;
-  } catch {
-    // 2. Fall back to Chromium Native Messaging Host
-    try {
-      const nativeReply = await sendViaNative(message);
-      activeChannel = "native";
-      connectionState = "connected";
-      lastPingTime = Date.now();
-      return nativeReply;
-    } catch {}
-  }
-
-  connectionState = "connection_failed";
-  return {
-    type: "error",
-    message: "EDM Desktop is not running. Please launch the EDM application.",
   };
 }
 
-// Check desktop host connection status
-async function probeConnection() {
-  const reply = await sendHostMessage({ type: "ping" });
-  if (reply && reply.type === "pong") {
-    connectionState = "connected";
-    // Sync status
-    const statusReply = await sendHostMessage({ type: "get_status" });
-    if (statusReply && statusReply.type === "status") {
-      cachedStatus = statusReply;
+function scheduleReconnect() {
+  if (reconnectTimer) clearTimeout(reconnectTimer);
+  // Auto-reconnect every 2 seconds
+  reconnectTimer = setTimeout(() => {
+    connectWebSocket();
+  }, 2000);
+}
+
+function startPingInterval() {
+  stopPingInterval();
+  // Keep service worker alive: Send ping every 20 seconds
+  pingInterval = setInterval(() => {
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: "ping" }));
     }
-  } else {
-    connectionState = "application_not_running";
+  }, 20000);
+}
+
+function stopPingInterval() {
+  if (pingInterval) {
+    clearInterval(pingInterval);
+    pingInterval = null;
   }
 }
 
-// Background polling loop for download updates & notifications
-setInterval(async () => {
-  try {
-    const listRes = await sendHostMessage({ type: "list_downloads", filter: "all" });
-    if (listRes && listRes.type === "download_list") {
-      connectionState = "connected";
-      cachedStatus.active_downloads = listRes.active_count;
-      cachedStatus.queued_tasks = listRes.queued_count;
-      cachedStatus.completed_tasks = listRes.completed_count;
-      cachedStatus.aggregate_speed_bps = listRes.aggregate_speed_bps;
+// 4. Send Create Task request and wait for ACK (with configurable timeout)
+export function sendWsCreateTask(payload: {
+  type: "create_task";
+  req_id: string;
+  url: string;
+  cookies?: Array<{ name: string; value: string; domain?: string; path?: string }>;
+  referrer?: string;
+  user_agent?: string;
+  filename?: string;
+}, timeoutMs = 3000): Promise<{ ok: boolean; id?: string; error?: string }> {
+  return new Promise((resolve) => {
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      return resolve({ ok: false, error: "WebSocket not connected to EDM Desktop" });
+    }
 
-      // Update extension badge with active download count
-      if (listRes.active_count > 0) {
-        chrome.action.setBadgeText({ text: String(listRes.active_count) });
-        chrome.action.setBadgeBackgroundColor({ color: "#2563EB" });
-      } else {
-        chrome.action.setBadgeText({ text: "" });
+    const timer = setTimeout(() => {
+      pendingAcks.delete(payload.req_id);
+      resolve({ ok: false, error: "Timeout waiting for EDM desktop ack" });
+    }, timeoutMs);
+
+    pendingAcks.set(payload.req_id, { resolve, timer });
+    socket.send(JSON.stringify(payload));
+  });
+}
+
+// 5. Send Task Action (pause, resume, cancel, remove, open_file, open_folder)
+export function sendWsTaskAction(id: string, action: string) {
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify({
+      type: "task_action",
+      id,
+      action,
+    }));
+  }
+}
+
+// 6. Connect with Popup UI via Port
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name === "popup") {
+    popupPorts.add(port);
+
+    // Instantly receive last snapshot and connection status on connect
+    port.postMessage({
+      type: "snapshot",
+      tasks: latestTasks,
+      connectionStatus,
+    });
+
+    port.onMessage.addListener((msg) => {
+      if (msg.type === "task_action" && msg.id && msg.action) {
+        sendWsTaskAction(msg.id, msg.action);
+      } else if (msg.type === "create_task") {
+        const req_id = msg.req_id || crypto.randomUUID();
+        sendWsCreateTask({ ...msg, req_id }).then((ack) => {
+          try {
+            port.postMessage({ type: "ack", ...ack, req_id });
+          } catch {}
+        });
+      } else if (msg.type === "reconnect") {
+        connectWebSocket();
       }
+    });
 
-      // Check notifications
-      const settings = (await chrome.storage.local.get("edm_settings"))?.edm_settings || {};
-      const notifyComplete = settings.notifyComplete !== false;
-      const notifyFail = settings.notifyFail !== false;
+    port.onDisconnect.addListener(() => {
+      popupPorts.delete(port);
+    });
+  }
+});
 
-      for (const dl of listRes.downloads || []) {
-        if (dl.state === "completed" && notifyComplete && !notifiedCompletedIds.has(dl.id)) {
-          notifiedCompletedIds.add(dl.id);
-          chrome.notifications.create(`complete-${dl.id}`, {
-            type: "basic",
-            iconUrl: "logo.png",
-            title: "EDM — Download Completed",
-            message: `${dl.filename} is ready.`,
-            priority: 1,
-          });
+// 7. Download Interception Engine (MV3 downloads.onCreated)
+chrome.downloads.onCreated.addListener(async (item) => {
+  // Check interception setting (default enabled)
+  const store = await chrome.storage.local.get("edm_interception_enabled");
+  if (store && store.edm_interception_enabled === false) {
+    return;
+  }
+
+  // Shift-click / Alt bypass
+  if (bypassNextDownload) {
+    bypassNextDownload = false;
+    return;
+  }
+
+  // Step 1: Skip non-http(s) URLs
+  const url = item.finalUrl || item.url;
+  if (!url || (!url.startsWith("http://") && !url.startsWith("https://"))) {
+    return;
+  }
+
+  // Step 2: Pause the browser download
+  try {
+    await chrome.downloads.pause(item.id);
+  } catch (err) {
+    console.warn("[EDM Extension] Could not pause browser download:", err);
+  }
+
+  // Step 3: Collect cookies, referrer, User-Agent, final URL, filename
+  let cookies: Array<{ name: string; value: string; domain?: string; path?: string }> = [];
+  try {
+    const rawCookies = await chrome.cookies.getAll({ url });
+    cookies = rawCookies.map((c) => ({
+      name: c.name,
+      value: c.value,
+      domain: c.domain,
+      path: c.path,
+    }));
+  } catch (e) {
+    console.warn("[EDM Extension] Cookie retrieval:", e);
+  }
+
+  const referrer = item.referrer || "";
+  const userAgent = navigator.userAgent;
+  let filename = item.filename ? item.filename.split(/[\\/]/).pop() : undefined;
+  if (!filename || filename === "download" || filename === "download.bin" || !filename.includes(".")) {
+    try {
+      const u = new URL(url);
+      const last = u.pathname.split("/").pop();
+      if (last && last.includes(".")) {
+        filename = decodeURIComponent(last);
+      }
+    } catch {}
+  }
+
+  // Step 4: Send create_task and wait for ack (3s timeout)
+  const req_id = crypto.randomUUID();
+  try {
+    const ack = await sendWsCreateTask(
+      {
+        type: "create_task",
+        req_id,
+        url,
+        cookies,
+        referrer,
+        user_agent: userAgent,
+        filename,
+      },
+      3000
+    );
+
+    // Step 5: If ack.ok: cancel and erase browser download. Otherwise resume it!
+    if (ack && ack.ok) {
+      try {
+        await chrome.downloads.cancel(item.id);
+        await chrome.downloads.erase({ id: item.id });
+      } catch {}
+    } else {
+      console.warn("[EDM Extension] App rejected task or ack false. Resuming browser download.");
+      try {
+        await chrome.downloads.resume(item.id);
+      } catch {}
+    }
+  } catch (e) {
+    console.warn("[EDM Extension] create_task failed or timed out. Resuming browser download.", e);
+    try {
+      await chrome.downloads.resume(item.id);
+    } catch {}
+  }
+});
+
+// 8. Runtime Messages from Content Script & Options Page
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg.action === "bypass_next") {
+    bypassNextDownload = true;
+    setTimeout(() => {
+      bypassNextDownload = false;
+    }, 4000);
+    sendResponse({ ok: true });
+    return true;
+  }
+
+  if (msg.action === "get_status") {
+    sendResponse({
+      connectionStatus,
+      tasksCount: latestTasks.length,
+      activeTasks: latestTasks.filter((t) => t.status === "downloading").length,
+    });
+    return true;
+  }
+
+  if (msg.action === "update_token") {
+    if (msg.token) {
+      chrome.storage.local.set({ edm_ws_token: msg.token }).then(() => {
+        if (socket) {
+          socket.close();
         }
-        if (dl.state === "failed" && notifyFail && !notifiedFailedIds.has(dl.id)) {
-          notifiedFailedIds.add(dl.id);
-          chrome.notifications.create(`fail-${dl.id}`, {
-            type: "basic",
-            iconUrl: "logo.png",
-            title: "EDM — Download Failed",
-            message: `${dl.filename} encountered an error.`,
-            priority: 2,
-          });
+        connectWebSocket();
+        sendResponse({ ok: true });
+      });
+      return true;
+    }
+  }
+
+  if (msg.action === "test_token") {
+    const testToken = msg.token;
+    const start = Date.now();
+    let testWs: WebSocket | null = null;
+    let finished = false;
+
+    const timer = setTimeout(() => {
+      if (!finished) {
+        finished = true;
+        if (testWs) testWs.close();
+        sendResponse({ ok: false, error: "Connection timed out after 3 seconds" });
+      }
+    }, 3000);
+
+    try {
+      testWs = new WebSocket(WS_URL);
+      testWs.onopen = () => {
+        testWs?.send(JSON.stringify({ type: "hello", token: testToken }));
+      };
+      testWs.onmessage = (event) => {
+        if (!finished) {
+          try {
+            const data = JSON.parse(event.data);
+            if (data.type === "ready") {
+              finished = true;
+              clearTimeout(timer);
+              const latency = Date.now() - start;
+              testWs?.close();
+              sendResponse({ ok: true, latency });
+            }
+          } catch {}
         }
+      };
+      testWs.onerror = () => {
+        if (!finished) {
+          finished = true;
+          clearTimeout(timer);
+          sendResponse({ ok: false, error: "WebSocket connection error to 127.0.0.1:14370" });
+        }
+      };
+      testWs.onclose = () => {
+        if (!finished) {
+          finished = true;
+          clearTimeout(timer);
+          sendResponse({ ok: false, error: "Connection closed (Invalid token or origin)" });
+        }
+      };
+    } catch (e: any) {
+      if (!finished) {
+        finished = true;
+        clearTimeout(timer);
+        sendResponse({ ok: false, error: e?.message || "Failed to initiate WebSocket test" });
       }
     }
-  } catch {}
-}, 2000);
+    return true;
+  }
+});
 
-// Initial probe
-probeConnection();
-
-// Context Menu: "Download with EDM"
+// 9. Context Menus: "Download with EDM"
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({
     id: "edm_download_link",
@@ -193,103 +442,31 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   const targetUrl = info.linkUrl || info.srcUrl;
   if (!targetUrl) return;
 
-  await sendHostMessage({
-    type: "add_download",
+  const req_id = crypto.randomUUID();
+  let cookies: Array<{ name: string; value: string }> = [];
+  try {
+    const rawCookies = await chrome.cookies.getAll({ url: targetUrl });
+    cookies = rawCookies.map((c) => ({ name: c.name, value: c.value }));
+  } catch {}
+
+  const ack = await sendWsCreateTask({
+    type: "create_task",
+    req_id,
     url: targetUrl,
     referrer: tab?.url,
-    source: "context_menu",
+    user_agent: navigator.userAgent,
+    cookies,
   });
 
-  chrome.notifications.create({
-    type: "basic",
-    iconUrl: "logo.png",
-    title: "EDM — Task Added",
-    message: `Sent to EDM: ${targetUrl.split("/").pop()?.split("?")[0] || "Download"}`,
-  });
-});
-
-// Intercept browser downloads
-chrome.downloads.onCreated.addListener(async (downloadItem) => {
-  if (bypassNextDownload) {
-    bypassNextDownload = false;
-    return;
-  }
-
-  const url = downloadItem.finalUrl || downloadItem.url;
-  if (!url || url.startsWith("blob:") || url.startsWith("data:") || url.startsWith("file:")) {
-    return;
-  }
-
-  try {
-    const cookies = await chrome.cookies.getAll({ url });
-    const cookiePayload = cookies.map((c) => ({
-      name: c.name,
-      value: c.value,
-      domain: c.domain,
-      path: c.path,
-    }));
-
-    let derivedName = downloadItem.filename;
-    if (!derivedName || derivedName === "download" || derivedName === "download.bin" || !derivedName.includes(".")) {
-      try {
-        const u = new URL(url);
-        const lastPart = u.pathname.split("/").pop() || "";
-        if (lastPart && lastPart.includes(".") && lastPart.length > 2) {
-          derivedName = decodeURIComponent(lastPart);
-        } else {
-          for (const [k, v] of u.searchParams.entries()) {
-            if (["filename", "file", "title", "name"].includes(k.toLowerCase()) && v.trim()) {
-              derivedName = decodeURIComponent(v.trim());
-              break;
-            }
-          }
-        }
-      } catch {}
-    }
-
-    const payload = {
-      type: "add_download",
-      url: downloadItem.url,
-      finalUrl: downloadItem.finalUrl,
-      referrer: downloadItem.referrer,
-      userAgent: navigator.userAgent,
-      cookies: cookiePayload,
-      filename: derivedName || downloadItem.filename,
-      mime: downloadItem.mime,
-      size: downloadItem.totalBytes > 0 ? downloadItem.totalBytes : undefined,
-      source: "browser_interception",
-    };
-
-    const reply = await sendHostMessage(payload);
-    if (reply && reply.type === "accepted") {
-      try {
-        await chrome.downloads.cancel(downloadItem.id);
-        await chrome.downloads.erase({ id: downloadItem.id });
-      } catch {}
-    }
-  } catch (err) {
-    console.warn("EDM download interception fallback:", err);
-  }
-});
-
-// Handle messages from Popup
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  if (msg.action === "bypass_next") {
-    bypassNextDownload = true;
-    setTimeout(() => { bypassNextDownload = false; }, 5000);
-    sendResponse({ ok: true });
-    return true;
-  }
-
-  if (msg.action === "get_connection_state") {
-    sendResponse({ state: connectionState, cachedStatus });
-    return true;
-  }
-
-  if (msg.action === "forward_to_host") {
-    sendHostMessage(msg.payload).then((resp) => {
-      sendResponse(resp);
+  if (ack && ack.ok) {
+    chrome.notifications.create({
+      type: "basic",
+      iconUrl: "logo.png",
+      title: "EDM — Task Added",
+      message: `Started: ${targetUrl.split("/").pop()?.split("?")[0] || "Download"}`,
     });
-    return true;
   }
 });
+
+// Start initial WebSocket connection on worker start
+connectWebSocket();

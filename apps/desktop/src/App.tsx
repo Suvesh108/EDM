@@ -30,12 +30,18 @@ import {
   ArrowDown,
   ArrowUp,
   Settings,
-  PanelLeftClose,
-  PanelLeftOpen,
   Minus,
 } from "lucide-react";
 import SettingsPage from "./components/SettingsPage";
 import { loadSettings, saveSettings, EdmSettings } from "./types/settings";
+import { formatBytes, formatSpeed, formatEta } from "./utils/format";
+import { motion, AnimatePresence } from "motion/react";
+import {
+  backdropVariants,
+  modalVariants,
+  popoverVariants,
+  viewVariants,
+} from "./utils/motion";
 import {
   tauriProbeUrl,
   tauriStartDownload,
@@ -81,30 +87,6 @@ export interface DownloadItem {
   speedHistory?: number[];
   peakSpeedBps?: number;
 }
-
-export const formatBytes = (bytes: number) => {
-  if (!bytes || bytes <= 0) return "0 B";
-  const k = 1024;
-  const sizes = ["B", "KB", "MB", "GB", "TB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return (bytes / Math.pow(k, i)).toFixed(1) + " " + sizes[i];
-};
-
-export const formatSpeed = (bytesPerSec: number) => {
-  if (!bytesPerSec || bytesPerSec <= 0) return "0 B/s";
-  return formatBytes(bytesPerSec) + "/s";
-};
-
-export const formatEta = (seconds: number) => {
-  if (!seconds || seconds <= 0) return "Finished";
-  if (seconds < 60) return `${seconds}s`;
-  const mins = Math.floor(seconds / 60);
-  const secs = seconds % 60;
-  if (mins < 60) return `${mins}m ${secs}s`;
-  const hours = Math.floor(mins / 60);
-  const remMins = mins % 60;
-  return `${hours}h ${remMins}m`;
-};
 
 export const generateSpeedSvgPath = (history: number[] = [], peakBps: number = 0) => {
   if (!history || history.length === 0) {
@@ -158,9 +140,6 @@ export default function App() {
   };
 
   const [viewMode, setViewMode] = useState<"table" | "grid">("table");
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() =>
-    typeof window !== "undefined" ? window.innerWidth < 920 : false
-  );
 
   // Synchronize hash routing with activeView
   useEffect(() => {
@@ -264,9 +243,10 @@ export default function App() {
           })();
 
           const itemState = stateMap[b.state] || (existing?.state || "downloading");
+          const currentBps = itemState === "downloading" ? speedVal : 0;
           const history = existing?.speedHistory
-            ? (speedVal > 0 ? [...existing.speedHistory.slice(-39), speedVal] : existing.speedHistory)
-            : (speedVal > 0 ? [speedVal] : [0]);
+            ? [...existing.speedHistory.slice(-39), currentBps]
+            : [currentBps];
 
           return {
             id: b.id,
@@ -318,17 +298,7 @@ export default function App() {
     document.documentElement.setAttribute("data-theme", mode);
   }, [mode, palette]);
 
-  // Responsive: Auto-collapse sidebar on narrower viewports (< 920px)
-  useEffect(() => {
-    const handleResize = () => {
-      if (window.innerWidth < 920) {
-        setIsSidebarCollapsed(true);
-      }
-    };
-    handleResize();
-    window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
-  }, []);
+
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -542,7 +512,8 @@ export default function App() {
               });
             }
 
-            const history = [...(task.speedHistory || []).slice(-39), currentSpeedBps];
+            const actualBps = isFinished ? 0 : currentSpeedBps;
+            const history = [...(task.speedHistory || []).slice(-39), actualBps];
             const peak = Math.max(task.peakSpeedBps || 0, ...history);
 
             return {
@@ -594,7 +565,8 @@ export default function App() {
               };
             });
 
-            const history = [...(task.speedHistory || []).slice(-39), currentSpeedBps];
+            const actualBps = isFinished ? 0 : currentSpeedBps;
+            const history = [...(task.speedHistory || []).slice(-39), actualBps];
             const peak = Math.max(task.peakSpeedBps || 0, ...history);
 
             return {
@@ -786,30 +758,35 @@ export default function App() {
     switch (state) {
       case "downloading":
         return (
-          <span className="badge-3d inline-flex items-center gap-1 sm:gap-1.5 px-2 py-0.5 rounded-full text-[10px] sm:text-xs font-medium bg-[var(--accent-badge-bg)] text-[var(--accent-badge-text)] border border-[var(--accent-badge-border)] whitespace-nowrap">
-            <span className="w-1.5 h-1.5 rounded-full bg-[var(--accent)] animate-pulse shadow-[0_0_6px_var(--accent-glow)]" />
-            Downloading
+          <span
+            className="inline-flex items-center justify-center w-5 h-5"
+            title="Downloading"
+          >
+            <span className="w-2.5 h-2.5 rounded-full bg-[var(--accent)] animate-pulse shadow-[0_0_8px_var(--accent-glow)]" />
           </span>
         );
       case "completed":
         return (
-          <span className="badge-3d inline-flex items-center gap-1 sm:gap-1.5 px-2 py-0.5 rounded-full text-[10px] sm:text-xs font-medium bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 whitespace-nowrap">
-            <CheckCircle2 className="w-3 h-3 text-emerald-400" />
-            Completed
+          <span className="inline-flex items-center justify-center w-5 h-5 text-emerald-400" title="Completed">
+            <CheckCircle2 className="w-4 h-4" />
           </span>
         );
       case "paused":
         return (
-          <span className="badge-3d inline-flex items-center gap-1 sm:gap-1.5 px-2 py-0.5 rounded-full text-[10px] sm:text-xs font-medium bg-amber-500/15 text-amber-300 border border-amber-500/30 whitespace-nowrap">
-            <Pause className="w-3 h-3 text-amber-400" />
-            Paused
+          <span className="inline-flex items-center justify-center w-5 h-5 text-amber-400" title="Paused">
+            <Pause className="w-4 h-4" />
+          </span>
+        );
+      case "failed":
+        return (
+          <span className="inline-flex items-center justify-center w-5 h-5 text-rose-400" title="Failed">
+            <X className="w-4 h-4" />
           </span>
         );
       default:
         return (
-          <span className="badge-3d inline-flex items-center gap-1 sm:gap-1.5 px-2 py-0.5 rounded-full text-[10px] sm:text-xs font-medium bg-zinc-500/15 text-zinc-300 border border-zinc-500/30 whitespace-nowrap">
-            <Clock className="w-3 h-3" />
-            Queued
+          <span className="inline-flex items-center justify-center w-5 h-5 text-zinc-400" title="Queued">
+            <Clock className="w-4 h-4" />
           </span>
         );
     }
@@ -817,26 +794,44 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden text-sm bg-[var(--bg-chassis)] text-[var(--text-primary)]">
-      {activeView === "settings" ? (
-        <SettingsPage
-          settings={settings}
-          onUpdateSettings={handleUpdateSettings}
-          onBack={() => {
-            setActiveView("downloads");
-            window.location.hash = "";
-          }}
-          speedLimit={speedLimit}
-          onSpeedLimitChange={setSpeedLimit}
-          selectedDownload={activeSelectedDownload}
-          onInspectDownload={() => setIsInspectorOpen(true)}
-          totalSpeed={totalSpeedDisplay}
-          activeThreads={totalActiveThreads}
-        />
-      ) : (
-        <>
-          {/* ─────────────────────────────────────────────────────────────
-              1. WINDOW HEADER & TOP COMMAND DECK
-          ────────────────────────────────────────────────────────────── */}
+      <AnimatePresence mode="wait">
+        {activeView === "settings" ? (
+          <motion.div
+            key="settings-view"
+            variants={viewVariants}
+            initial="initial"
+            animate="animate"
+            exit="exit"
+            className="flex-1 flex flex-col min-h-0 overflow-hidden w-full h-full"
+          >
+            <SettingsPage
+              settings={settings}
+              onUpdateSettings={handleUpdateSettings}
+              onBack={() => {
+                setActiveView("downloads");
+                window.location.hash = "";
+              }}
+              speedLimit={speedLimit}
+              onSpeedLimitChange={setSpeedLimit}
+              selectedDownload={activeSelectedDownload}
+              onInspectDownload={() => setIsInspectorOpen(true)}
+              totalSpeed={totalSpeedDisplay}
+              activeThreads={totalActiveThreads}
+              totalSessionBytes={totalSessionBytes}
+            />
+          </motion.div>
+        ) : (
+          <motion.div
+            key="downloads-view"
+            variants={viewVariants}
+            initial="initial"
+            animate="animate"
+            exit="exit"
+            className="flex-1 flex flex-col min-h-0 overflow-hidden w-full h-full"
+          >
+            {/* ─────────────────────────────────────────────────────────────
+                1. WINDOW HEADER & TOP COMMAND DECK
+            ────────────────────────────────────────────────────────────── */}
           <header
             data-tauri-drag-region
             onMouseDown={(e) => {
@@ -844,10 +839,10 @@ export default function App() {
                 tauriStartDragging();
               }
             }}
-            className="h-14 px-3 sm:px-4 bg-[var(--bg-header)] border-b border-[var(--border-subtle)] flex items-center justify-between gap-2 shrink-0 z-20 select-none"
+            className="h-14 px-3 sm:px-4 header-3d flex items-center justify-between gap-2 shrink-0 z-20 select-none relative"
           >
             {/* Left: Brand Identity with Official 3D Logo & Context Actions */}
-            <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+            <div className="flex items-center gap-2 sm:gap-2.5 shrink-0 z-10">
               <div className="flex items-center gap-2 sm:gap-2.5 shrink-0">
                 <img
                   src="/logo.png"
@@ -855,140 +850,152 @@ export default function App() {
                   className="w-7 h-7 sm:w-8 sm:h-8 object-contain drop-shadow-md transition-transform hover:scale-105 duration-150 shrink-0 pointer-events-none"
                 />
                 <div className="shrink-0 flex flex-col justify-center">
-                  <div className="flex items-center gap-1.5">
-                    <span className="font-bold tracking-tight text-xs sm:text-sm">EDM</span>
-                    <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider bg-[var(--accent-badge-bg)] text-[var(--accent-badge-text)] border border-[var(--accent-badge-border)]">
-                      v0.0.1 PRO
-                    </span>
-                  </div>
-                  <div className="text-[10px] text-[var(--text-muted)] whitespace-nowrap font-medium leading-tight mt-0.5">
+                  <span className="font-bold tracking-tight text-xs sm:text-sm">EDM</span>
+                  <div className="text-[10px] text-[var(--text-muted)] whitespace-nowrap font-medium leading-tight mt-0.5 hidden xs:block">
                     Edge Download Manager
                   </div>
                 </div>
               </div>
 
-              {/* Contextual Toolbar when tasks are selected */}
-              {selectedIds.length > 0 && (
-                <div className="flex items-center gap-1 sm:gap-1.5 shrink-0 animate-in fade-in zoom-in-95 duration-150">
-                  <button
-                    onClick={() => {
-                      setDownloads((prev) =>
-                        prev.map((d) =>
-                          selectedIds.includes(d.id) && d.state === "paused"
-                            ? { ...d, state: "downloading", speed: "12.4 MB/s" }
-                            : d
-                        )
-                      );
-                      setSelectedDownload((prev) =>
-                        prev && selectedIds.includes(prev.id) && prev.state === "paused"
-                          ? { ...prev, state: "downloading", speed: "12.4 MB/s" }
-                          : prev
-                      );
-                    }}
-                    className="btn-3d h-8 px-2 sm:px-2.5 rounded-lg text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
-                    title="Resume Selected"
-                  >
-                    <Play className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                    <span className="hidden md:inline">Resume</span>
-                  </button>
-
-                  <button
-                    onClick={() => {
-                      setDownloads((prev) =>
-                        prev.map((d) =>
-                          selectedIds.includes(d.id) && d.state === "downloading"
-                            ? { ...d, state: "paused", speed: "0 B/s" }
-                            : d
-                        )
-                      );
-                      setSelectedDownload((prev) =>
-                        prev && selectedIds.includes(prev.id) && prev.state === "downloading"
-                          ? { ...prev, state: "paused", speed: "0 B/s" }
-                          : prev
-                      );
-                    }}
-                    className="btn-3d h-8 px-2 sm:px-2.5 rounded-lg text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
-                    title="Pause Selected"
-                  >
-                    <Pause className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                    <span className="hidden md:inline">Pause</span>
-                  </button>
-
-                  <button
-                    onClick={() => {
-                      setDownloads((prev) => prev.map((d) => ({ ...d, state: "paused", speed: "0 B/s" })));
-                      setSelectedDownload((prev) => (prev ? { ...prev, state: "paused", speed: "0 B/s" } : null));
-                    }}
-                    className="btn-3d h-8 px-2 sm:px-2.5 rounded-lg text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
-                    title="Stop All Downloads"
-                  >
-                    <Square className="w-3.5 h-3.5 text-rose-400 shrink-0" />
-                    <span className="hidden md:inline">Stop All</span>
-                  </button>
-
-                  <button
-                    onClick={deleteSelected}
-                    className="btn-3d h-8 px-2 sm:px-2.5 rounded-lg text-xs font-medium text-[var(--text-secondary)] hover:text-rose-400 inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
-                    title="Delete Selected Tasks"
-                  >
-                    <Trash2 className="w-3.5 h-3.5 shrink-0" />
-                    <span className="hidden md:inline">Delete</span>
-                  </button>
-                </div>
-              )}
-            </div>
-
-            {/* Center: Command Deck (Add URL, Search Box, View Mode Toggle) */}
-            <div className="flex-1 flex items-center justify-center gap-2 sm:gap-2.5 min-w-0 px-2" data-tauri-drag-region>
-              <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-                {/* Primary Action: Add URL */}
+              {/* Contextual Toolbar (Always visible; grayed out when no task is selected) */}
+              <div className="flex items-center gap-1 shrink-0 pl-2 border-l border-[var(--border-subtle)]">
                 <button
-                  onClick={() => setIsAddModalOpen(true)}
-                  className="btn-primary-3d h-8 px-3 sm:px-3.5 rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
-                  title="Add URL (Ctrl+N)"
+                  disabled={selectedIds.length === 0}
+                  onClick={() => {
+                    if (selectedIds.length === 0) return;
+                    setDownloads((prev) =>
+                      prev.map((d) =>
+                        selectedIds.includes(d.id) && d.state === "paused"
+                          ? { ...d, state: "downloading", speed: "12.4 MB/s" }
+                          : d
+                      )
+                    );
+                    setSelectedDownload((prev) =>
+                      prev && selectedIds.includes(prev.id) && prev.state === "paused"
+                        ? { ...prev, state: "downloading", speed: "12.4 MB/s" }
+                        : prev
+                    );
+                  }}
+                  className={`btn-3d h-8 w-8 rounded-lg flex items-center justify-center shrink-0 transition-all ${
+                    selectedIds.length > 0
+                      ? "text-[var(--text-secondary)] hover:text-emerald-400 cursor-pointer"
+                      : "opacity-30 cursor-not-allowed text-[var(--text-muted)] pointer-events-none"
+                  }`}
+                  title={selectedIds.length > 0 ? "Resume Selected Tasks" : "Resume (Select task first)"}
                 >
-                  <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
-                  <span>Add URL</span>
+                  <Play className="w-3.5 h-3.5 text-emerald-400 fill-emerald-400/20" />
                 </button>
 
-                {/* Search Box */}
-                <div className="relative shrink-0">
-                  <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--text-muted)] pointer-events-none" />
-                  <input
-                    type="text"
-                    placeholder="Search..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="w-24 sm:w-36 md:w-48 focus:w-32 sm:focus:w-56 h-8 pl-8 pr-2.5 rounded-lg text-xs bg-[var(--bg-chassis)] border border-[var(--border-subtle)] text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)] transition-all truncate"
-                  />
-                </div>
+                <button
+                  disabled={selectedIds.length === 0}
+                  onClick={() => {
+                    if (selectedIds.length === 0) return;
+                    setDownloads((prev) =>
+                      prev.map((d) =>
+                        selectedIds.includes(d.id) && d.state === "downloading"
+                          ? { ...d, state: "paused", speed: "0 B/s" }
+                          : d
+                      )
+                    );
+                    setSelectedDownload((prev) =>
+                      prev && selectedIds.includes(prev.id) && prev.state === "downloading"
+                        ? { ...prev, state: "paused", speed: "0 B/s" }
+                        : prev
+                    );
+                  }}
+                  className={`btn-3d h-8 w-8 rounded-lg flex items-center justify-center shrink-0 transition-all ${
+                    selectedIds.length > 0
+                      ? "text-[var(--text-secondary)] hover:text-amber-400 cursor-pointer"
+                      : "opacity-30 cursor-not-allowed text-[var(--text-muted)] pointer-events-none"
+                  }`}
+                  title={selectedIds.length > 0 ? "Pause Selected Tasks" : "Pause (Select task first)"}
+                >
+                  <Pause className="w-3.5 h-3.5 text-amber-400 fill-amber-400/20" />
+                </button>
 
-                {/* View Mode Toggle */}
-                <div className="h-8 flex items-center p-0.5 rounded-lg bg-[var(--bg-chassis)] border border-[var(--border-subtle)] shrink-0">
-                  <button
-                    onClick={() => setViewMode("table")}
-                    className={`h-full px-2 rounded-md cursor-pointer transition-colors inline-flex items-center ${
-                      viewMode === "table" ? "bg-[var(--bg-card)] text-[var(--accent)]" : "text-[var(--text-muted)]"
-                    }`}
-                    title="Table View"
-                  >
-                    <LayoutList className="w-3.5 h-3.5" />
-                  </button>
-                  <button
-                    onClick={() => setViewMode("grid")}
-                    className={`h-full px-2 rounded-md cursor-pointer transition-colors inline-flex items-center ${
-                      viewMode === "grid" ? "bg-[var(--bg-card)] text-[var(--accent)]" : "text-[var(--text-muted)]"
-                    }`}
-                    title="Grid View"
-                  >
-                    <LayoutGrid className="w-3.5 h-3.5" />
-                  </button>
-                </div>
+                <button
+                  disabled={selectedIds.length === 0}
+                  onClick={() => {
+                    if (selectedIds.length === 0) return;
+                    setDownloads((prev) => prev.map((d) => ({ ...d, state: "paused", speed: "0 B/s" })));
+                    setSelectedDownload((prev) => (prev ? { ...prev, state: "paused", speed: "0 B/s" } : null));
+                  }}
+                  className={`btn-3d h-8 w-8 rounded-lg flex items-center justify-center shrink-0 transition-all ${
+                    selectedIds.length > 0
+                      ? "text-[var(--text-secondary)] hover:text-rose-400 cursor-pointer"
+                      : "opacity-30 cursor-not-allowed text-[var(--text-muted)] pointer-events-none"
+                  }`}
+                  title={selectedIds.length > 0 ? "Stop Selected Downloads" : "Stop (Select task first)"}
+                >
+                  <Square className="w-3 h-3 text-rose-400 fill-rose-400/20" />
+                </button>
+
+                <button
+                  disabled={selectedIds.length === 0}
+                  onClick={() => {
+                    if (selectedIds.length === 0) return;
+                    deleteSelected();
+                  }}
+                  className={`btn-3d h-8 w-8 rounded-lg flex items-center justify-center shrink-0 transition-all ${
+                    selectedIds.length > 0
+                      ? "text-[var(--text-secondary)] hover:text-rose-400 cursor-pointer"
+                      : "opacity-30 cursor-not-allowed text-[var(--text-muted)] pointer-events-none"
+                  }`}
+                  title={selectedIds.length > 0 ? "Delete Selected Tasks" : "Delete (Select task first)"}
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Center: Command Deck Pinned to Exact Geometric Center */}
+            <div className="absolute left-1/2 -translate-x-1/2 flex items-center gap-1.5 sm:gap-2 shrink-0 z-10" data-tauri-drag-region>
+              {/* Primary Action: Add URL (Icon Only) */}
+              <button
+                onClick={() => setIsAddModalOpen(true)}
+                className="btn-primary-3d h-8 w-8 rounded-lg flex items-center justify-center shrink-0 cursor-pointer"
+                title="Add Download URL (Ctrl+N)"
+              >
+                <Plus className="w-4 h-4 stroke-[2.5]" />
+              </button>
+
+              {/* Search Box */}
+              <div className="relative shrink-0">
+                <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--text-muted)] pointer-events-none icon-3d" />
+                <input
+                  type="text"
+                  placeholder="Search..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-28 sm:w-36 md:w-48 focus:w-36 sm:focus:w-56 h-8 pl-8 pr-2.5 rounded-lg text-xs input-3d text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none transition-all truncate"
+                />
+              </div>
+
+              {/* View Mode Toggle */}
+              <div className="h-8 flex items-center p-0.5 rounded-lg input-3d shrink-0">
+                <button
+                  onClick={() => setViewMode("table")}
+                  className={`h-full px-2 rounded-md cursor-pointer transition-all inline-flex items-center ${
+                    viewMode === "table" ? "btn-3d text-[var(--accent)] shadow-sm font-semibold" : "text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+                  }`}
+                  title="Table View"
+                >
+                  <LayoutList className="w-3.5 h-3.5 icon-3d" />
+                </button>
+                <button
+                  onClick={() => setViewMode("grid")}
+                  className={`h-full px-2 rounded-md cursor-pointer transition-all inline-flex items-center ${
+                    viewMode === "grid" ? "btn-3d text-[var(--accent)] shadow-sm font-semibold" : "text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+                  }`}
+                  title="Grid View"
+                >
+                  <LayoutGrid className="w-3.5 h-3.5 icon-3d" />
+                </button>
               </div>
             </div>
 
             {/* Right: Unified Integrated Window Controls */}
-            <div className="flex items-center gap-0.5 shrink-0" data-tauri-drag-region="false">
+            <div className="flex items-center gap-0.5 shrink-0 z-10 ml-auto" data-tauri-drag-region="false">
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -1026,146 +1033,89 @@ export default function App() {
           2. WORKSPACE BODY: SIDEBAR + MAIN CONTENT AREA
       ────────────────────────────────────────────────────────────── */}
       <div className="flex flex-1 min-h-0">
-        {/* Left Navigation Spine (EDM Modern Aesthetic) */}
-        <aside
-          className={`${
-            isSidebarCollapsed ? "w-14" : "w-52 lg:w-56"
-          } bg-[var(--bg-sidebar)] border-r border-[var(--border-subtle)] flex flex-col justify-between shrink-0 select-none transition-all duration-200`}
-        >
-          <div className="p-3 space-y-5 overflow-y-auto">
+        {/* Left Navigation Spine (EDM Modern Aesthetic - Permanently Minimized Icon Rail) */}
+        <aside className="w-14 sidebar-3d flex flex-col shrink-0 select-none py-2.5 overflow-hidden">
+          <div className="space-y-2 px-2 flex flex-col items-center">
             {/* Status Filters */}
-            <div>
-              <div
-                className={`flex items-center ${
-                  isSidebarCollapsed ? "justify-center" : "justify-between"
-                } px-1 mb-2`}
-              >
-                {!isSidebarCollapsed && (
-                  <div className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] px-1">
-                    Tasks
-                  </div>
-                )}
-                <button
-                  onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
-                  className="p-1 rounded-md text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-card-hover)] transition-colors cursor-pointer shrink-0"
-                  title={isSidebarCollapsed ? "Expand Sidebar" : "Collapse Sidebar"}
-                >
-                  {isSidebarCollapsed ? (
-                    <PanelLeftOpen className="w-3.5 h-3.5" />
-                  ) : (
-                    <PanelLeftClose className="w-3.5 h-3.5" />
-                  )}
-                </button>
-              </div>
-
-              <div className="space-y-0.5">
-                {[
-                  { id: "all", label: "All Tasks", count: downloads.length, icon: Compass },
-                  {
-                    id: "downloading",
-                    label: "Active",
-                    count: downloads.filter((d) => d.state === "downloading").length,
-                    icon: Activity,
-                  },
-                  {
-                    id: "completed",
-                    label: "Completed",
-                    count: downloads.filter((d) => d.state === "completed").length,
-                    icon: CheckCircle2,
-                  },
-                  {
-                    id: "paused",
-                    label: "Paused",
-                    count: downloads.filter((d) => d.state === "paused").length,
-                    icon: Pause,
-                  },
-                  {
-                    id: "queued",
-                    label: "Queued",
-                    count: downloads.filter((d) => d.state === "queued").length,
-                    icon: Clock,
-                  },
-                ].map((item) => {
-                  const Icon = item.icon;
-                  const isActive = statusFilter === item.id;
-                  return (
-                    <button
-                      key={item.id}
-                      onClick={() => setStatusFilter(item.id)}
-                      title={`${item.label} (${item.count})`}
-                      className={`w-full flex items-center ${
-                        isSidebarCollapsed ? "justify-center p-2" : "justify-between px-2.5 py-1.5"
-                      } rounded-lg text-xs font-medium transition-all duration-150 cursor-pointer ${
-                        isActive
-                          ? "sidebar-item-active-3d text-[var(--text-primary)] font-semibold"
-                          : "sidebar-item-inactive-3d text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
-                      }`}
-                    >
-                      <div className="flex items-center gap-2">
-                        <Icon
-                          className={`w-3.5 h-3.5 ${
-                            isActive ? "text-[var(--accent)]" : "text-[var(--text-muted)]"
-                          }`}
-                        />
-                        {!isSidebarCollapsed && <span>{item.label}</span>}
-                      </div>
-                      {!isSidebarCollapsed && (
-                        <span className={`text-[10px] tabular-nums font-mono px-1.5 py-0.5 rounded-md ${
-                          isActive
-                            ? "pill-count-3d text-[var(--accent-badge-text)] font-bold"
-                            : "bg-[var(--bg-chassis)] text-[var(--text-muted)] border border-[var(--border-subtle)]"
-                        }`}>
-                          {item.count}
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
+            <div className="space-y-0.5">
+              {[
+                { id: "all", label: "All Tasks", count: downloads.length, icon: Compass },
+                {
+                  id: "downloading",
+                  label: "Active",
+                  count: downloads.filter((d) => d.state === "downloading").length,
+                  icon: Activity,
+                },
+                {
+                  id: "completed",
+                  label: "Completed",
+                  count: downloads.filter((d) => d.state === "completed").length,
+                  icon: CheckCircle2,
+                },
+                {
+                  id: "paused",
+                  label: "Paused",
+                  count: downloads.filter((d) => d.state === "paused").length,
+                  icon: Pause,
+                },
+                {
+                  id: "queued",
+                  label: "Queued",
+                  count: downloads.filter((d) => d.state === "queued").length,
+                  icon: Clock,
+                },
+              ].map((item) => {
+                const Icon = item.icon;
+                const isActive = statusFilter === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    onClick={() => setStatusFilter(item.id)}
+                    title={`${item.label} (${item.count})`}
+                    className={`w-8 h-8 mx-auto flex items-center justify-center rounded-lg text-xs font-medium transition-all duration-150 cursor-pointer ${
+                      isActive
+                        ? "sidebar-item-active-3d text-[var(--accent)] font-semibold shadow-sm"
+                        : "sidebar-item-inactive-3d text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+                    }`}
+                  >
+                    <Icon className="w-3.5 h-3.5" />
+                  </button>
+                );
+              })}
             </div>
 
+            <div className="w-5 h-[1px] bg-[var(--border-subtle)] my-0.5" />
+
             {/* Categories */}
-            <div>
-              {!isSidebarCollapsed && (
-                <div className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-2 px-2">
-                  Categories
-                </div>
-              )}
-              <div className="space-y-0.5">
-                {[
-                  { id: "all", label: "All Categories", icon: FolderOpen, color: "" },
-                  ...settings.categories
-                    .filter((c) => c.enabled)
-                    .map((c) => ({
-                      id: c.name.toLowerCase(),
-                      label: c.name,
-                      icon: getCategoryLucideIcon(c.name),
-                      color: getCategoryColor(c.name),
-                    })),
-                ].map((item) => {
-                  const Icon = item.icon;
-                  const isActive = categoryFilter === item.id;
-                  return (
-                    <button
-                      key={item.id}
-                      onClick={() => setCategoryFilter(item.id)}
-                      title={item.label}
-                      className={`w-full flex items-center ${
-                        isSidebarCollapsed ? "justify-center p-2" : "justify-between px-2.5 py-1.5"
-                      } rounded-lg text-xs font-medium transition-all duration-150 cursor-pointer ${
-                        isActive
-                          ? "sidebar-item-active-3d text-[var(--text-primary)] font-semibold"
-                          : "sidebar-item-inactive-3d text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
-                      }`}
-                    >
-                      <div className="flex items-center gap-2">
-                        <Icon className={`w-3.5 h-3.5 ${item.color || "text-[var(--text-muted)]"}`} />
-                        {!isSidebarCollapsed && <span>{item.label}</span>}
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
+            <div className="space-y-0.5">
+              {[
+                { id: "all", label: "All Categories", icon: FolderOpen, color: "" },
+                ...settings.categories
+                  .filter((c) => c.enabled)
+                  .map((c) => ({
+                    id: c.name.toLowerCase(),
+                    label: c.name,
+                    icon: getCategoryLucideIcon(c.name),
+                    color: getCategoryColor(c.name),
+                  })),
+              ].map((item) => {
+                const Icon = item.icon;
+                const isActive = categoryFilter === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    onClick={() => setCategoryFilter(item.id)}
+                    title={item.label}
+                    className={`w-8 h-8 mx-auto flex items-center justify-center rounded-lg text-xs font-medium transition-all duration-150 cursor-pointer ${
+                      isActive
+                        ? "sidebar-item-active-3d text-[var(--accent)] font-semibold shadow-sm"
+                        : "sidebar-item-inactive-3d text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+                    }`}
+                  >
+                    <Icon className={`w-3.5 h-3.5 ${item.color || "text-[var(--text-muted)]"}`} />
+                  </button>
+                );
+              })}
             </div>
           </div>
         </aside>
@@ -1174,11 +1124,11 @@ export default function App() {
         <main className="flex-1 flex flex-col min-w-0 bg-[var(--bg-chassis)] overflow-hidden">
           {viewMode === "table" ? (
             /* Table View with responsive auto-fitting layout (Zero clipping on resize) */
-            <div className="flex-1 flex flex-col min-h-0 overflow-y-auto overflow-x-hidden">
-              <table className="w-full table-fixed text-left border-collapse">
-                <thead className="sticky top-0 bg-[var(--bg-panel)] border-b border-[var(--border-subtle)] text-[11px] font-semibold text-[var(--text-muted)] z-10 shadow-sm">
+            <div className="flex-1 flex flex-col min-h-0 overflow-y-auto overflow-x-auto px-2.5 sm:px-3 pt-1 pb-2">
+              <table className="w-full table-fixed text-left border-separate border-spacing-y-1.5 min-w-[700px]">
+                <thead className="sticky top-0 bg-[var(--bg-chassis)] border-b border-[var(--border-subtle)] text-[11px] font-semibold text-[var(--text-muted)] z-10 shadow-sm">
                   <tr>
-                    <th className="py-2.5 px-2 w-10 text-center whitespace-nowrap">
+                    <th className="py-2 px-2 w-10 text-center whitespace-nowrap">
                       <input
                         type="checkbox"
                         checked={selectedIds.length === filteredDownloads.length && filteredDownloads.length > 0}
@@ -1194,28 +1144,23 @@ export default function App() {
                         className="edm-checkbox transition-transform active:scale-90"
                       />
                     </th>
-                    <th className="py-2.5 px-3 w-[36%] whitespace-nowrap">File Name</th>
-                    <th className="py-2.5 px-2 w-32 md:w-36 lg:w-40 text-center whitespace-nowrap">Status</th>
-                    <th className="py-2.5 px-2 w-16 lg:w-20 text-center whitespace-nowrap">Size</th>
-                    <th className="py-2.5 px-3 w-[26%] md:w-[28%] lg:w-[30%] whitespace-nowrap">Progress</th>
-                    <th className="py-2.5 px-2 w-20 lg:w-28 text-center whitespace-nowrap">Transfer Rate</th>
-                    <th className="py-2.5 pl-2 pr-6 sm:pr-8 w-32 sm:w-36 text-center whitespace-nowrap">Actions</th>
+                    <th className="py-2 px-3 w-[38%] xl:w-[42%] min-w-[180px] whitespace-nowrap">File Name</th>
+                    <th className="py-2 px-2 w-20 sm:w-24 text-center whitespace-nowrap">Size</th>
+                    <th className="py-2 px-3 w-[28%] md:w-[26%] xl:w-[24%] min-w-[200px] whitespace-nowrap">Progress</th>
+                    <th className="py-2 px-2 w-24 md:w-28 text-center whitespace-nowrap">Transfer Rate</th>
+                    <th className="py-2 px-2 w-24 sm:w-28 text-center whitespace-nowrap">Actions</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-[var(--border-dim)] text-xs">
-                  {filteredDownloads.map((item, idx) => {
+                <tbody className="text-xs">
+                  {filteredDownloads.map((item) => {
                     const isSelected = selectedIds.includes(item.id);
                     return (
                       <tr
                         key={item.id}
                         onClick={() => selectRow(item)}
                         onDoubleClick={() => setIsInspectorOpen(true)}
-                        className={`group transition-all duration-150 cursor-pointer ${
-                          isSelected
-                            ? "table-row-selected-3d text-[var(--text-primary)]"
-                            : idx % 2 === 1
-                            ? "bg-[var(--bg-row-alt)] hover:bg-[var(--bg-card-hover)]"
-                            : "hover:bg-[var(--bg-card-hover)]"
+                        className={`group cursor-pointer table-row-3d ${
+                          isSelected ? "table-row-selected-3d text-[var(--text-primary)]" : ""
                         }`}
                       >
                         <td className="py-2.5 px-2 text-center whitespace-nowrap" onClick={(e) => toggleSelect(item.id, e)}>
@@ -1245,17 +1190,17 @@ export default function App() {
                             </div>
                           </div>
                         </td>
-                        <td className="py-2.5 px-2 text-center whitespace-nowrap">
-                          <div className="flex justify-center">{getStatusBadge(item.state)}</div>
-                        </td>
                         <td className="py-2.5 px-2 font-mono tabular-nums text-[11px] sm:text-xs text-[var(--text-secondary)] text-center whitespace-nowrap">
                           {formatBytes(item.sizeTotal)}
                         </td>
-                        <td className="py-2.5 px-3 min-w-0">
-                          <div className="space-y-1">
-                            <div className="flex justify-between text-[11px] font-mono tabular-nums whitespace-nowrap">
-                              <span className="font-semibold text-[var(--accent)]">{item.progress}%</span>
-                              <span className="text-[var(--text-muted)] hidden md:inline ml-1.5">
+                        <td className="py-2.5 px-3 min-w-0 overflow-hidden">
+                          <div className="space-y-1 min-w-0">
+                            <div className="flex items-center justify-between text-[11px] font-mono tabular-nums min-w-0 gap-1.5">
+                              <div className="flex items-center gap-1.5 shrink-0">
+                                {getStatusBadge(item.state)}
+                                <span className="font-semibold text-[var(--accent)]">{item.progress}%</span>
+                              </div>
+                              <span className="text-[var(--text-muted)] truncate text-right">
                                 {formatBytes(item.sizeDone)} / {formatBytes(item.sizeTotal)}
                               </span>
                             </div>
@@ -1272,12 +1217,6 @@ export default function App() {
                                   const fillWidth = (chunkWidth * done) / range;
                                   return (
                                     <React.Fragment key={w.idx || wIdx}>
-                                      {wIdx > 0 && (
-                                        <div
-                                          className="absolute top-0 bottom-0 w-[1px] bg-rose-500/80 z-20 pointer-events-none"
-                                          style={{ left: `${startPct}%` }}
-                                        />
-                                      )}
                                       <div
                                         className="absolute top-0 bottom-0 progress-fill-3d z-10 transition-all duration-300"
                                         style={{ left: `${startPct}%`, width: `${fillWidth}%` }}
@@ -1301,17 +1240,17 @@ export default function App() {
                         <td className="py-2.5 px-2 font-mono tabular-nums font-semibold text-[var(--accent)] text-center whitespace-nowrap text-[11px] sm:text-xs">
                           {item.speed}
                         </td>
-                        <td className="py-2.5 pl-2 pr-6 sm:pr-8 text-center whitespace-nowrap">
+                        <td className="py-2.5 px-2 text-center whitespace-nowrap">
                           <div className="flex items-center justify-center gap-1.5 opacity-70 group-hover:opacity-100 transition-opacity">
                             <button
                               onClick={(e) => toggleDownloadState(item.id, e)}
-                              className="p-1.5 rounded-md hover:bg-[var(--bg-card)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] cursor-pointer transition-colors"
+                              className="p-1.5 rounded-lg btn-3d text-[var(--text-secondary)] hover:text-[var(--text-primary)] cursor-pointer"
                               title={item.state === "downloading" ? "Pause" : "Resume"}
                             >
                               {item.state === "downloading" ? (
-                                <Pause className="w-4 h-4" />
+                                <Pause className="w-3.5 h-3.5 icon-3d" />
                               ) : (
-                                <Play className="w-4 h-4 text-emerald-400" />
+                                <Play className="w-3.5 h-3.5 text-emerald-400 icon-3d" />
                               )}
                             </button>
                             <button
@@ -1323,20 +1262,20 @@ export default function App() {
                                 }
                                 setIsInspectorOpen(true);
                               }}
-                              className="p-1.5 rounded-md hover:bg-[var(--bg-card)] text-[var(--accent)] hover:brightness-110 cursor-pointer transition-colors"
+                              className="p-1.5 rounded-lg btn-3d text-[var(--accent)] hover:brightness-110 cursor-pointer"
                               title="Download Status"
                             >
-                              <Layers className="w-4 h-4" />
+                              <Layers className="w-3.5 h-3.5 icon-3d" />
                             </button>
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
                                 tauriOpenFolder(item.id);
                               }}
-                              className="p-1.5 rounded-md hover:bg-[var(--bg-card)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] cursor-pointer transition-colors"
+                              className="p-1.5 rounded-lg btn-3d text-[var(--text-secondary)] hover:text-[var(--text-primary)] cursor-pointer"
                               title="Reveal in Explorer"
                             >
-                              <FolderOpen className="w-4 h-4" />
+                              <FolderOpen className="w-3.5 h-3.5 icon-3d" />
                             </button>
                           </div>
                         </td>
@@ -1386,7 +1325,7 @@ export default function App() {
                     {/* Top Row: File Identity & Status */}
                     <div className="flex items-start justify-between gap-2.5">
                       <div className="flex items-center gap-2.5 min-w-0">
-                        <div className="p-2 rounded-lg bg-[var(--bg-chassis)] border border-[var(--border-subtle)] shrink-0">
+                        <div className="p-2 rounded-lg icon-box-3d shrink-0">
                           {getCategoryIcon(item.category)}
                         </div>
                         <div className="min-w-0">
@@ -1404,7 +1343,7 @@ export default function App() {
                     </div>
 
                     {/* Middle Info Strip: Technical Metadata */}
-                    <div className="flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-[var(--bg-chassis)] border border-[var(--border-subtle)] text-[11px] font-mono tabular-nums text-[var(--text-secondary)]">
+                    <div className="flex items-center justify-between px-2.5 py-1.5 rounded-lg input-3d text-[11px] font-mono tabular-nums text-[var(--text-secondary)]">
                       <div className="flex items-center gap-1.5">
                         <Cpu className="w-3 h-3 text-[var(--accent)]" />
                         <span>{item.connections > 0 ? `${item.connections} Streams` : "Idle"}</span>
@@ -1436,12 +1375,6 @@ export default function App() {
                             const fillWidth = (chunkWidth * done) / range;
                             return (
                               <React.Fragment key={w.idx || wIdx}>
-                                {wIdx > 0 && (
-                                  <div
-                                    className="absolute top-0 bottom-0 w-[1px] bg-rose-500/80 z-20 pointer-events-none"
-                                    style={{ left: `${startPct}%` }}
-                                  />
-                                )}
                                 <div
                                   className="absolute top-0 bottom-0 bg-[var(--accent)] z-10 transition-all duration-300"
                                   style={{ left: `${startPct}%`, width: `${fillWidth}%` }}
@@ -1533,16 +1466,16 @@ export default function App() {
       {/* ─────────────────────────────────────────────────────────────
           3. FULL-WIDTH INTEGRATED BOTTOM STATUS BAR (With Speed Limiter)
       ────────────────────────────────────────────────────────────── */}
-      <footer className="h-11 px-3 sm:px-4 bg-[var(--bg-panel)] border-t border-[var(--border-subtle)] flex items-center justify-between text-xs shrink-0 select-none gap-2 w-full z-20">
+      <footer className="h-11 px-3 sm:px-4 footer-3d flex items-center justify-between text-xs shrink-0 select-none gap-2 w-full z-20">
         {/* Left: Settings Button + Speed Limiter Controller + Selected Task Quick Readout */}
         <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
           {/* Settings Trigger placed immediately to the left of Speed Throttle */}
           <button
             onClick={() => setActiveView("settings")}
-            className="h-7 px-2.5 rounded-md text-[11px] sm:text-xs font-medium bg-[var(--bg-card)] border border-[var(--border-subtle)] hover:border-[var(--border-strong)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors"
+            className="h-7 px-2.5 rounded-md text-[11px] sm:text-xs font-medium btn-3d text-[var(--text-secondary)] hover:text-[var(--text-primary)] inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
             title="Settings & Preferences (Ctrl+,)"
           >
-            <Settings className="w-3.5 h-3.5 text-[var(--accent)] shrink-0" />
+            <Settings className="w-3.5 h-3.5 text-[var(--accent)] shrink-0 icon-3d" />
             <span className="hidden xs:inline">Settings</span>
           </button>
 
@@ -1550,10 +1483,10 @@ export default function App() {
           <div className="relative shrink-0">
             <button
               onClick={() => setIsLimiterOpen(!isLimiterOpen)}
-              className="h-7 px-2.5 rounded-md text-[11px] sm:text-xs font-medium bg-[var(--bg-card)] border border-[var(--border-subtle)] hover:border-[var(--border-strong)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors"
+              className="h-7 px-2.5 rounded-md text-[11px] sm:text-xs font-medium btn-3d text-[var(--text-secondary)] hover:text-[var(--text-primary)] inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
               title="Global Bandwidth Limiter"
             >
-              <Gauge className="w-3.5 h-3.5 text-[var(--accent)] shrink-0" />
+              <Gauge className="w-3.5 h-3.5 text-[var(--accent)] shrink-0 icon-3d" />
               <span>Limit: {speedLimit}</span>
               <ChevronDown
                 className={`w-3 h-3 text-[var(--text-muted)] shrink-0 transition-transform ${
@@ -1562,29 +1495,39 @@ export default function App() {
               />
             </button>
 
-            {isLimiterOpen && (
-              <div className="absolute bottom-full left-0 mb-1.5 w-40 rounded-xl bg-[var(--bg-card)] border border-[var(--border-strong)] shadow-2xl p-1.5 z-50 animate-in fade-in zoom-in-95 duration-100">
-                <div className="text-[10px] uppercase font-bold tracking-wider text-[var(--text-muted)] px-2 py-0.5 mb-1 border-b border-[var(--border-dim)]">
-                  Speed Throttle
-                </div>
-                {["Unlimited", "15 MB/s", "5 MB/s", "2 MB/s", "500 KB/s"].map((val) => (
-                  <button
-                    key={val}
-                    onClick={() => {
-                      setSpeedLimit(val);
-                      setIsLimiterOpen(false);
-                    }}
-                    className={`w-full text-left px-2.5 py-1 text-xs rounded-lg transition-colors cursor-pointer ${
-                      speedLimit === val
-                        ? "bg-[var(--accent)] text-[var(--accent-on)] font-medium"
-                        : "text-[var(--text-secondary)] hover:bg-[var(--bg-card-hover)] hover:text-[var(--text-primary)]"
-                    }`}
-                  >
-                    {val}
-                  </button>
-                ))}
-              </div>
-            )}
+            <AnimatePresence>
+              {isLimiterOpen && (
+                <motion.div
+                  variants={popoverVariants}
+                  initial="initial"
+                  animate="animate"
+                  exit="exit"
+                  className="absolute bottom-full left-0 mb-1.5 w-40 rounded-xl panel-3d shadow-2xl p-1.5 z-50 origin-bottom"
+                >
+                  <div className="text-[10px] uppercase font-bold tracking-wider text-[var(--text-muted)] px-2 py-0.5 mb-1 border-b border-[var(--border-dim)]">
+                    Speed Throttle
+                  </div>
+                  {["Unlimited", "50 MB/s", "20 MB/s", "10 MB/s", "5 MB/s", "2 MB/s", "500 KB/s"].map((val) => (
+                    <motion.button
+                      key={val}
+                      whileHover={{ x: 2 }}
+                      whileTap={{ scale: 0.97 }}
+                      onClick={() => {
+                        setSpeedLimit(val);
+                        setIsLimiterOpen(false);
+                      }}
+                      className={`w-full text-left px-2.5 py-1 text-xs rounded-lg transition-colors cursor-pointer ${
+                        speedLimit === val
+                          ? "bg-[var(--accent)] text-[var(--accent-on)] font-medium"
+                          : "text-[var(--text-secondary)] hover:bg-[var(--bg-card-hover)] hover:text-[var(--text-primary)]"
+                      }`}
+                    >
+                      {val}
+                    </motion.button>
+                  ))}
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
 
           <div className="h-5 w-[1px] bg-[var(--border-subtle)] shrink-0" />
@@ -1640,15 +1583,31 @@ export default function App() {
           </div>
         </div>
       </footer>
-        </>
-      )}
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* ─────────────────────────────────────────────────────────────
           4. SIGNATURE DOWNLOAD PROGRESS & SEGMENT TELEMETRY MODAL
       ────────────────────────────────────────────────────────────── */}
-      {isInspectorOpen && activeSelectedDownload && (
-        <div className="fixed inset-0 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="panel-3d w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+      <AnimatePresence>
+        {isInspectorOpen && activeSelectedDownload && (
+          <motion.div
+            variants={backdropVariants}
+            initial="initial"
+            animate="animate"
+            exit="exit"
+            className="fixed inset-0 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 z-50"
+            onClick={() => setIsInspectorOpen(false)}
+          >
+            <motion.div
+              variants={modalVariants}
+              initial="initial"
+              animate="animate"
+              exit="exit"
+              className="panel-3d w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden"
+              onClick={(e) => e.stopPropagation()}
+            >
             {/* Modal Title Bar */}
             <div className="px-4 py-2.5 bg-[var(--bg-card)] border-b border-[var(--border-subtle)] flex items-center justify-between shrink-0">
               <div className="flex items-center gap-2 min-w-0">
@@ -1760,15 +1719,6 @@ export default function App() {
 
                           return (
                             <React.Fragment key={w.idx || idx}>
-                              {/* Red Divider Marker at the connection START position (for idx > 0) */}
-                              {idx > 0 && (
-                                <div
-                                  className="absolute top-0 bottom-0 w-[1.5px] bg-[#F43F5E] z-20 pointer-events-none shadow-[0_0_4px_rgba(244,63,94,0.7)]"
-                                  style={{ left: `${startPct}%` }}
-                                  title={`Thread #${w.idx} partition start: ${formatBytes(w.start)}`}
-                                />
-                              )}
-
                               {/* Chunk Progress Fill extending from startPct towards the right */}
                               <div
                                 className={`absolute top-0 bottom-0 z-10 transition-all duration-300 ${
@@ -1806,23 +1756,26 @@ export default function App() {
                         </span>
                         <span className="font-mono tabular-nums text-emerald-400 font-semibold text-xs">
                           {activeSelectedDownload.state === "downloading"
-                            ? `${
+                            ? `${activeSelectedDownload.speed} (${
                                 activeSelectedDownload.peakSpeedBps && activeSelectedDownload.peakSpeedBps > 0
                                   ? formatSpeed(activeSelectedDownload.peakSpeedBps)
                                   : activeSelectedDownload.speed
-                              } Peak`
+                              } Peak)`
                             : activeSelectedDownload.state === "completed"
-                            ? "Completed"
+                            ? "Completed (0 B/s)"
                             : "0 B/s (Paused)"}
                         </span>
                       </div>
                       <div className="h-14 w-full relative">
                         {(() => {
-                          const { linePath, areaPath } = generateSpeedSvgPath(
-                            activeSelectedDownload.speedHistory || [],
-                            activeSelectedDownload.peakSpeedBps || 0
-                          );
                           const isD = activeSelectedDownload.state === "downloading";
+                          const historyData = isD
+                            ? (activeSelectedDownload.speedHistory && activeSelectedDownload.speedHistory.length > 0
+                                ? activeSelectedDownload.speedHistory
+                                : [0])
+                            : [0];
+                          const peak = isD ? (activeSelectedDownload.peakSpeedBps || 0) : 0;
+                          const { linePath, areaPath } = generateSpeedSvgPath(historyData, peak);
                           return (
                             <svg className="w-full h-full overflow-visible" preserveAspectRatio="none" viewBox="0 0 100 35">
                               <defs>
@@ -1947,33 +1900,54 @@ export default function App() {
                 </button>
               </div>
             </div>
-          </div>
-        </div>
-      )}
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* ─────────────────────────────────────────────────────────────
           5. ADD URL PRE-DOWNLOAD DIALOG
       ────────────────────────────────────────────────────────────── */}
-      {isAddModalOpen && (
-        <div className="fixed inset-0 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="panel-3d w-full max-w-lg overflow-hidden animate-in fade-in zoom-in-95 duration-150">
-            <div className="px-5 py-3 bg-[var(--bg-card)] border-b border-[var(--border-subtle)] flex items-center justify-between">
-              <span className="font-bold tracking-tight text-sm flex items-center gap-2">
-                <img src="/logo.png" alt="EDM Logo" className="w-4 h-4 object-contain" />
-                Add New Download Task
-              </span>
-              <button
-                onClick={() => {
-                  setIsAddModalOpen(false);
-                  setUrlInput("");
-                  setFileNameInput("");
-                  setProbeResult(null);
-                }}
-                className="p-1 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
+      <AnimatePresence>
+        {isAddModalOpen && (
+          <motion.div
+            variants={backdropVariants}
+            initial="initial"
+            animate="animate"
+            exit="exit"
+            className="fixed inset-0 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 z-50"
+            onClick={() => {
+              setIsAddModalOpen(false);
+              setUrlInput("");
+              setFileNameInput("");
+              setProbeResult(null);
+            }}
+          >
+            <motion.div
+              variants={modalVariants}
+              initial="initial"
+              animate="animate"
+              exit="exit"
+              className="panel-3d w-full max-w-lg overflow-hidden"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="px-5 py-3 bg-[var(--bg-card)] border-b border-[var(--border-subtle)] flex items-center justify-between">
+                <span className="font-bold tracking-tight text-sm flex items-center gap-2">
+                  <img src="/logo.png" alt="EDM Logo" className="w-4 h-4 object-contain" />
+                  Add New Download Task
+                </span>
+                <button
+                  onClick={() => {
+                    setIsAddModalOpen(false);
+                    setUrlInput("");
+                    setFileNameInput("");
+                    setProbeResult(null);
+                  }}
+                  className="p-1 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
 
             <div className="p-5 space-y-4">
               <div>
@@ -1986,12 +1960,12 @@ export default function App() {
                     placeholder="https://example.com/file.zip or paste download link..."
                     value={urlInput}
                     onChange={(e) => handleUrlInputChange(e.target.value)}
-                    className="flex-1 px-3 py-2 rounded-lg text-xs bg-[var(--bg-chassis)] border border-[var(--border-subtle)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
+                    className="flex-1 px-3 py-2 rounded-lg text-xs input-3d text-[var(--text-primary)] focus:outline-none"
                   />
                   <button
                     onClick={handleProbe}
                     disabled={isProbing || !urlInput.trim()}
-                    className="btn-3d px-3 py-2 rounded-lg text-xs font-medium text-[var(--accent)] disabled:opacity-40 cursor-pointer"
+                    className="btn-3d px-3 py-2 rounded-lg text-xs font-semibold text-[var(--accent)] disabled:opacity-40 cursor-pointer"
                   >
                     {isProbing ? "Probing..." : "Probe Server"}
                   </button>
@@ -2007,14 +1981,14 @@ export default function App() {
                   placeholder="Enter file name (e.g. video.mp4)..."
                   value={fileNameInput}
                   onChange={(e) => setFileNameInput(e.target.value)}
-                  className="w-full px-3 py-2 rounded-lg text-xs bg-[var(--bg-chassis)] border border-[var(--border-subtle)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)] font-medium"
+                  className="w-full px-3 py-2 rounded-lg text-xs input-3d text-[var(--text-primary)] focus:outline-none font-medium"
                 />
               </div>
 
               {probeResult && (
-                <div className="p-3 rounded-xl bg-[var(--accent-badge-bg)] border border-[var(--accent-badge-border)] text-xs space-y-1">
+                <div className="p-3 rounded-xl card-3d border border-[var(--accent-badge-border)] text-xs space-y-1">
                   <div className="font-semibold text-[var(--accent)] flex items-center gap-1.5">
-                    <CheckCircle2 className="w-4 h-4" /> Endpoint Validated & Resumable
+                    <CheckCircle2 className="w-4 h-4 icon-3d" /> Endpoint Validated & Resumable
                   </div>
                   <div className="text-[11px] text-[var(--text-secondary)] font-mono">
                     Size: {probeResult.size} • Accept-Ranges: bytes • Sparse Pre-allocation Ready
@@ -2025,7 +1999,7 @@ export default function App() {
               <div className="grid grid-cols-2 gap-3 text-xs">
                 <div>
                   <label className="block font-medium text-[var(--text-secondary)] mb-1">Category</label>
-                  <select className="w-full px-3 py-2 rounded-lg bg-[var(--bg-chassis)] border border-[var(--border-subtle)] text-[var(--text-primary)] focus:outline-none">
+                  <select className="w-full px-3 py-2 rounded-lg input-3d text-[var(--text-primary)] focus:outline-none cursor-pointer">
                     {settings.categories
                       .filter((c) => c.enabled)
                       .map((c) => (
@@ -2039,7 +2013,7 @@ export default function App() {
                   <label className="block font-medium text-[var(--text-secondary)] mb-1">TCP Worker Streams</label>
                   <select
                     defaultValue={String(settings.downloads.maxConnectionsPerFile || 8)}
-                    className="w-full px-3 py-2 rounded-lg bg-[var(--bg-chassis)] border border-[var(--border-subtle)] text-[var(--text-primary)] focus:outline-none"
+                    className="w-full px-3 py-2 rounded-lg input-3d text-[var(--text-primary)] focus:outline-none cursor-pointer"
                   >
                     <option value="8">8 Parallel Streams (Recommended)</option>
                     <option value="16">16 Parallel Streams (Fast)</option>
@@ -2057,7 +2031,7 @@ export default function App() {
                   <input
                     type="text"
                     defaultValue={settings.downloads.defaultDirectory}
-                    className="flex-1 px-3 py-2 rounded-lg text-xs bg-[var(--bg-chassis)] border border-[var(--border-subtle)] text-[var(--text-primary)] font-mono"
+                    className="flex-1 px-3 py-2 rounded-lg text-xs input-3d text-[var(--text-primary)] font-mono"
                   />
                   <button className="btn-3d px-3 py-2 rounded-lg text-xs font-medium text-[var(--text-secondary)] cursor-pointer">
                     Browse...
@@ -2086,76 +2060,93 @@ export default function App() {
                 Start Download
               </button>
             </div>
-          </div>
-        </div>
-      )}
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* ─────────────────────────────────────────────────────────────
           6. VIDEO STREAM RADAR DIALOG (Browser Extension Grabber)
       ────────────────────────────────────────────────────────────── */}
-      {isVideoModalOpen && (
-        <div className="fixed inset-0 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="panel-3d w-full max-w-md overflow-hidden animate-in fade-in zoom-in-95 duration-150">
-            <div className="px-5 py-3 bg-[var(--bg-card)] border-b border-[var(--border-subtle)] flex items-center justify-between">
-              <span className="font-bold tracking-tight text-sm flex items-center gap-2">
-                <Video className="w-4 h-4 text-cyan-400" />
-                Browser Video Stream Grabber
-              </span>
-              <button
-                onClick={() => setIsVideoModalOpen(false)}
-                className="p-1 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
+      <AnimatePresence>
+        {isVideoModalOpen && (
+          <motion.div
+            variants={backdropVariants}
+            initial="initial"
+            animate="animate"
+            exit="exit"
+            className="fixed inset-0 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 z-50"
+            onClick={() => setIsVideoModalOpen(false)}
+          >
+            <motion.div
+              variants={modalVariants}
+              initial="initial"
+              animate="animate"
+              exit="exit"
+              className="panel-3d w-full max-w-md overflow-hidden"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="px-5 py-3 bg-[var(--bg-card)] border-b border-[var(--border-subtle)] flex items-center justify-between">
+                <span className="font-bold tracking-tight text-sm flex items-center gap-2">
+                  <Video className="w-4 h-4 text-cyan-400" />
+                  Browser Video Stream Grabber
+                </span>
+                <button
+                  onClick={() => setIsVideoModalOpen(false)}
+                  className="p-1 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
 
-            <div className="p-5 space-y-3 text-xs">
-              <div className="p-3 rounded-xl bg-cyan-500/10 border border-cyan-500/20 space-y-1">
-                <div className="font-semibold text-cyan-400">Stream Discovered via Native Messaging</div>
-                <div className="text-[11px] text-[var(--text-secondary)] font-mono">
-                  HLS Master Playlist • 1080p 60fps • No DRM Detected
+              <div className="p-5 space-y-3 text-xs">
+                <div className="p-3 rounded-xl bg-cyan-500/10 border border-cyan-500/20 space-y-1">
+                  <div className="font-semibold text-cyan-400">Stream Discovered via Native Messaging</div>
+                  <div className="text-[11px] text-[var(--text-secondary)] font-mono">
+                    HLS Master Playlist • 1080p 60fps • No DRM Detected
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block font-medium text-[var(--text-secondary)] mb-1">Stream Quality</label>
+                  <select className="w-full px-3 py-2 rounded-lg bg-[var(--bg-chassis)] border border-[var(--border-subtle)] text-[var(--text-primary)] focus:outline-none">
+                    <option>1080p 60fps (Full HD • ~248 MB)</option>
+                    <option>720p 30fps (HD • ~124 MB)</option>
+                    <option>Audio Only (AAC 256kbps • ~18 MB)</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block font-medium text-[var(--text-secondary)] mb-1">Target Filename</label>
+                  <input
+                    type="text"
+                    defaultValue="webinar-high-performance-systems-2026.mp4"
+                    className="w-full px-3 py-2 rounded-lg bg-[var(--bg-chassis)] border border-[var(--border-subtle)] text-[var(--text-primary)] font-mono"
+                  />
                 </div>
               </div>
 
-              <div>
-                <label className="block font-medium text-[var(--text-secondary)] mb-1">Stream Quality</label>
-                <select className="w-full px-3 py-2 rounded-lg bg-[var(--bg-chassis)] border border-[var(--border-subtle)] text-[var(--text-primary)] focus:outline-none">
-                  <option>1080p 60fps (Full HD • ~248 MB)</option>
-                  <option>720p 30fps (HD • ~124 MB)</option>
-                  <option>Audio Only (AAC 256kbps • ~18 MB)</option>
-                </select>
+              <div className="px-5 py-3 bg-[var(--bg-card)] border-t border-[var(--border-subtle)] flex items-center justify-end gap-2">
+                <button
+                  onClick={() => setIsVideoModalOpen(false)}
+                  className="btn-3d px-4 py-1.5 rounded-lg text-xs font-medium cursor-pointer"
+                >
+                  Dismiss
+                </button>
+                <button
+                  onClick={() => {
+                    alert("Started HLS stream segment pipeline!");
+                    setIsVideoModalOpen(false);
+                  }}
+                  className="btn-primary-3d px-4 py-1.5 rounded-lg text-xs font-semibold cursor-pointer"
+                >
+                  Grab Video Stream
+                </button>
               </div>
-
-              <div>
-                <label className="block font-medium text-[var(--text-secondary)] mb-1">Target Filename</label>
-                <input
-                  type="text"
-                  defaultValue="webinar-high-performance-systems-2026.mp4"
-                  className="w-full px-3 py-2 rounded-lg bg-[var(--bg-chassis)] border border-[var(--border-subtle)] text-[var(--text-primary)] font-mono"
-                />
-              </div>
-            </div>
-
-            <div className="px-5 py-3 bg-[var(--bg-card)] border-t border-[var(--border-subtle)] flex items-center justify-end gap-2">
-              <button
-                onClick={() => setIsVideoModalOpen(false)}
-                className="btn-3d px-4 py-1.5 rounded-lg text-xs font-medium cursor-pointer"
-              >
-                Dismiss
-              </button>
-              <button
-                onClick={() => {
-                  alert("Started HLS stream segment pipeline!");
-                  setIsVideoModalOpen(false);
-                }}
-                className="btn-primary-3d px-4 py-1.5 rounded-lg text-xs font-semibold cursor-pointer"
-              >
-                Grab Video Stream
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

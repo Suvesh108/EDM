@@ -354,8 +354,14 @@ impl Store {
 
     pub fn delete_download(&self, id: Uuid) -> std::result::Result<(), StoreError> {
         let conn = self.conn.lock().unwrap();
-        conn.execute("DELETE FROM segments WHERE download_id = ?1", params![id.to_string()])?;
-        conn.execute("DELETE FROM downloads WHERE id = ?1", params![id.to_string()])?;
+        conn.execute(
+            "DELETE FROM segments WHERE download_id = ?1",
+            params![id.to_string()],
+        )?;
+        conn.execute(
+            "DELETE FROM downloads WHERE id = ?1",
+            params![id.to_string()],
+        )?;
         Ok(())
     }
 }
