@@ -57,7 +57,8 @@ Get the latest binaries from the [**Releases Page**](https://github.com/Suvesh10
 
 | File | Description |
 | :--- | :--- |
-| **[`edm-desktop-app.exe`](https://github.com/Suvesh108/EDM/releases/download/v0.0.1/edm-desktop-app.exe)** | Standalone desktop application. Run directly without installation. |
+| **[`EDM-v0.0.1-setup.exe`](https://github.com/Suvesh108/EDM/releases/download/v0.0.1/EDM-v0.0.1-setup.exe)** | **Recommended:** Official Windows NSIS Installer. Installs EDM, sets up shortcuts, and configures native hooks. |
+| **[`edm-desktop-app.exe`](https://github.com/Suvesh108/EDM/releases/download/v0.0.1/edm-desktop-app.exe)** | Portable standalone executable (no installation required). |
 | **[`edm-extension.tar.gz`](https://github.com/Suvesh108/EDM/releases/download/v0.0.1/edm-extension.tar.gz)** | Chromium browser extension for Chrome, Edge, Brave, and Opera. |
 
 ---

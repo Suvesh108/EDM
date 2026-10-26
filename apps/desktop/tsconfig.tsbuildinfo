@@ -1,1 +1,1 @@
-{"root":["./src/app.tsx","./src/main.tsx","./src/components/settingspage.tsx","./src/services/tauribridge.ts","./src/types/settings.ts"],"version":"5.9.3"}
+{"root":["./src/app.tsx","./src/main.tsx","./src/components/settingspage.tsx","./src/services/tauribridge.ts","./src/types/featurepacks.ts","./src/types/settings.ts","./src/utils/format.ts","./src/utils/motion.ts"],"version":"5.9.3"}
