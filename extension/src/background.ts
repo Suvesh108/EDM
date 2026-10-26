@@ -1,7 +1,7 @@
 // EDM Background Service Worker (Manifest V3)
 // Direct High-Performance Local WebSocket Client for 127.0.0.1:14370
 
-export interface WsTaskItem {
+interface WsTaskItem {
   id: string;
   filename: string;
   total: number | null;
@@ -180,7 +180,7 @@ function stopPingInterval() {
 }
 
 // 4. Send Create Task request and wait for ACK (with configurable timeout)
-export function sendWsCreateTask(payload: {
+async function sendWsCreateTask(payload: {
   type: "create_task";
   req_id: string;
   url: string;
@@ -205,7 +205,7 @@ export function sendWsCreateTask(payload: {
 }
 
 // 5. Send Task Action (pause, resume, cancel, remove, open_file, open_folder)
-export function sendWsTaskAction(id: string, action: string) {
+function sendWsTaskAction(id: string, action: string) {
   if (socket && socket.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify({
       type: "task_action",

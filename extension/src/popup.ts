@@ -957,7 +957,6 @@ class PopupController {
       rateSelect.addEventListener("change", async () => {
         const val = parseInt(rateSelect.value, 10);
         this.refreshRateMs = val;
-        this.startPolling();
         await chrome.storage.local.set({ edm_refresh_rate: val });
       });
     }

@@ -131,7 +131,7 @@ function stopPingInterval() {
     pingInterval = null;
   }
 }
-export function sendWsCreateTask(payload, timeoutMs = 3e3) {
+async function sendWsCreateTask(payload, timeoutMs = 3e3) {
   return new Promise((resolve) => {
     if (!socket || socket.readyState !== WebSocket.OPEN) {
       return resolve({ ok: false, error: "WebSocket not connected to EDM Desktop" });
@@ -144,7 +144,7 @@ export function sendWsCreateTask(payload, timeoutMs = 3e3) {
     socket.send(JSON.stringify(payload));
   });
 }
-export function sendWsTaskAction(id, action) {
+function sendWsTaskAction(id, action) {
   if (socket && socket.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify({
       type: "task_action",
