@@ -382,3 +382,39 @@ async fn test_bandwidth_limiter() {
         elapsed
     );
 }
+
+#[test]
+fn test_single_stream_rolling_throughput_speed_calculation() {
+    // Invariant: Non-resumable single stream downloads must calculate rolling throughput
+    // and never stick at 0 B/s.
+    let config = AdaptiveConfig {
+        initial_connections: 1,
+        min_connections: 1,
+        max_connections: 1,
+        ..Default::default()
+    };
+
+    let mut controller = AdaptiveController::new(config, false); // is_resumable_range = false
+    assert_eq!(controller.current_connections(), 1);
+    assert_eq!(controller.rolling_throughput_bps(), 0);
+
+    // Feed a sample of 250,000 bytes over 500ms = 500,000 B/s = 4,000,000 bps
+    let decision = controller.evaluate_sample(
+        250_000,
+        Duration::from_millis(500),
+        0,
+        false,
+        None,
+    );
+
+    match decision {
+        AdaptiveDecision::FallbackSingleStream { reason } => {
+            assert!(reason.contains("Single stream fallback enforced"));
+        }
+        other => panic!("Expected FallbackSingleStream decision, got {:?}", other),
+    }
+
+    // Verify throughput is updated and non-zero
+    assert_eq!(controller.rolling_throughput_bps(), 4_000_000);
+}
+

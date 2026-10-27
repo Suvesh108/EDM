@@ -7,13 +7,9 @@
   "permissions": [
     "downloads",
     "cookies",
-    "webRequest",
-    "contextMenus",
     "storage",
-    "notifications",
-    "nativeMessaging",
-    "tabs",
-    "activeTab"
+    "contextMenus",
+    "notifications"
   ],
   "host_permissions": [
     "<all_urls>"

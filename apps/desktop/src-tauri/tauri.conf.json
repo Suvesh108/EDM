@@ -39,7 +39,8 @@
     ],
     "resources": [
       "../../../target/release/edm-nmh.exe",
-      "../../../crates/edm-nmh/com.edm.nmh.json"
+      "../../../crates/edm-nmh/com.edm.nmh.json",
+      "../../../target/release/WebView2Loader.dll"
     ]
   }
 }

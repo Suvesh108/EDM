@@ -11,7 +11,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use tauri::{command, State};
+use tauri::{command, Manager, State};
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use uuid::Uuid;
 
 mod ws_server;
@@ -29,6 +31,35 @@ struct AppState {
     tasks: Arc<Mutex<HashMap<String, ActiveTaskHandle>>>,
     rt_handle: tokio::runtime::Handle,
     ws_manager: Arc<ws_server::WsManager>,
+    tray_handle: Arc<Mutex<Option<tauri::tray::TrayIcon>>>,
+}
+
+fn init_logging() {
+    let log_dir = match std::env::var("APPDATA") {
+        Ok(dir) => PathBuf::from(dir).join("EDM").join("logs"),
+        Err(_) => std::env::temp_dir().join("EDM").join("logs"),
+    };
+    let _ = std::fs::create_dir_all(&log_dir);
+
+    let file_appender = tracing_appender::rolling::daily(&log_dir, "edm.log");
+    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+    Box::leak(Box::new(_guard));
+
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(non_blocking)
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::from_default_env()
+                .add_directive(tracing::Level::INFO.into()),
+        )
+        .finish();
+
+    let _ = tracing::subscriber::set_global_default(subscriber);
+
+    // Register panic hook
+    std::panic::set_hook(Box::new(|info| {
+        tracing::error!("PANIC DETECTED: {:?}", info);
+        eprintln!("PANIC: {:?}", info);
+    }));
 }
 
 fn get_db_path() -> PathBuf {
@@ -59,13 +90,9 @@ fn register_native_messaging_host() {
 
     let current_exe = std::env::current_exe().unwrap_or_default();
     let current_dir = current_exe.parent().unwrap_or(&app_dir);
-    let mut nmh_path = current_dir.join("edm-nmh.exe");
+    let nmh_path = current_dir.join("edm-nmh.exe");
     if !nmh_path.exists() {
-        let dev_path =
-            PathBuf::from(r"C:\Users\Suvesh\Desktop\projects\EDM\target\release\edm-nmh.exe");
-        if dev_path.exists() {
-            nmh_path = dev_path;
-        }
+        tracing::warn!("edm-nmh.exe not found next to current executable at {}", nmh_path.display());
     }
 
     let manifest_path = app_dir.join("com.edm.nmh.json");
@@ -487,9 +514,6 @@ async fn handle_extension_message(msg: ExtensionMessage, state: &AppState) -> Ap
                     }
                 }
             }
-            if agg_speed == 0 && active > 0 {
-                agg_speed = active as u64 * 3_500_000;
-            }
 
             AppReply::Status {
                 status: "connected".into(),
@@ -534,9 +558,6 @@ async fn handle_extension_message(msg: ExtensionMessage, state: &AppState) -> Ap
                                 }
                             }
                         }
-                    }
-                    if current_speed == 0 {
-                        current_speed = 3_500_000;
                     }
                     aggregate_speed += current_speed;
                 }
@@ -604,9 +625,6 @@ async fn handle_extension_message(msg: ExtensionMessage, state: &AppState) -> Ap
                                 }
                             }
                         }
-                    }
-                    if speed == 0 {
-                        speed = 3_500_000;
                     }
                 }
                 AppReply::DownloadDetail {
@@ -780,56 +798,48 @@ fn spawn_extension_bridge(state: AppState, rt_handle: tokio::runtime::Handle) {
                     |headers: HeaderMap,
                      AxumState(state): AxumState<AppState>,
                      Json(msg): Json<ExtensionMessage>| async move {
-                        // Guard 1: Loopback Host enforcement
-                        if let Some(host) = headers.get(axum::http::header::HOST) {
-                            if let Ok(h) = host.to_str() {
-                                if !h.starts_with("127.0.0.1") && !h.starts_with("localhost") {
-                                    return Err((
-                                        StatusCode::FORBIDDEN,
-                                        "Forbidden: Host must be loopback",
-                                    ));
-                                }
-                            }
+                        // Guard 1: Strict Host enforcement (127.0.0.1:8998 or localhost:8998)
+                        let host_val = headers.get(axum::http::header::HOST).and_then(|h| h.to_str().ok());
+                        if !ws_server::is_valid_loopback_host(host_val, 8998) {
+                            return Err((
+                                StatusCode::FORBIDDEN,
+                                "Forbidden: Host must be loopback",
+                            ));
                         }
 
-                        // Guard 2: Origin check (allow browser extensions and loopback)
+                        // Guard 2: Token verification on /api requests
+                        let auth_header = headers
+                            .get(axum::http::header::AUTHORIZATION)
+                            .and_then(|a| a.to_str().ok())
+                            .or_else(|| headers.get("x-edm-token").and_then(|a| a.to_str().ok()));
+                        
+                        let token_valid = if let Some(auth) = auth_header {
+                            let clean_token = auth.strip_prefix("Bearer ").unwrap_or(auth).trim();
+                            state.ws_manager.verify_token_constant_time(clean_token)
+                        } else {
+                            false
+                        };
+
+                        if !token_valid {
+                            return Err((
+                                StatusCode::UNAUTHORIZED,
+                                "Unauthorized: Valid token required",
+                            ));
+                        }
+
+                        // Guard 3: Origin check (only browser extensions or desktop local UI)
                         if let Some(origin) = headers.get(axum::http::header::ORIGIN) {
                             if let Ok(o) = origin.to_str() {
-                                let is_ext = o.starts_with("chrome-extension://")
-                                    || o.starts_with("moz-extension://");
+                                let is_chrome = o.starts_with("chrome-extension://") && o.contains(ws_server::EXTENSION_ID);
+                                let is_firefox = o.starts_with("moz-extension://");
                                 let is_local = o.starts_with("http://localhost:")
                                     || o.starts_with("http://127.0.0.1:")
                                     || o.starts_with("tauri://");
-                                if !is_ext && !is_local {
+                                if !is_chrome && !is_firefox && !is_local {
                                     return Err((
                                         StatusCode::FORBIDDEN,
                                         "Forbidden: Untrusted Origin",
                                     ));
-                                }
-                            }
-                        }
-
-                        // Guard 3: Sec-Fetch-Site check
-                        if let Some(sec_site) = headers.get("sec-fetch-site") {
-                            if let Ok(site) = sec_site.to_str() {
-                                if site == "cross-site" {
-                                    if let Some(origin) = headers.get(axum::http::header::ORIGIN) {
-                                        if let Ok(o) = origin.to_str() {
-                                            if !o.starts_with("chrome-extension://")
-                                                && !o.starts_with("moz-extension://")
-                                            {
-                                                return Err((
-                                                    StatusCode::FORBIDDEN,
-                                                    "Forbidden: Cross-site request rejected",
-                                                ));
-                                            }
-                                        }
-                                    } else {
-                                        return Err((
-                                            StatusCode::FORBIDDEN,
-                                            "Forbidden: Cross-site request rejected",
-                                        ));
-                                    }
                                 }
                             }
                         }
@@ -1159,8 +1169,54 @@ fn app_toggle_maximize(window: tauri::WebviewWindow) {
 }
 
 #[tauri::command]
-fn app_close(window: tauri::WebviewWindow) {
-    let _ = window.close();
+fn app_close(window: tauri::WebviewWindow, state: State<'_, AppState>) {
+    // Read user settings for minimizeToTray / close_to_tray
+    let close_to_tray = if let Ok(Some(json_str)) = state.store.get_setting("app_settings") {
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&json_str) {
+            val.get("general")
+                .and_then(|g| g.get("minimizeToTray"))
+                .and_then(|m| m.as_bool())
+                .unwrap_or(true)
+        } else {
+            true
+        }
+    } else {
+        true
+    };
+
+    if close_to_tray {
+        let _ = window.hide();
+    } else {
+        trigger_graceful_quit(window.app_handle().clone(), state.inner().clone());
+    }
+}
+
+fn trigger_graceful_quit(app_handle: tauri::AppHandle, state: AppState) {
+    // 5-second watchdog timer to force exit if cleanup hangs
+    std::thread::spawn(|| {
+        std::thread::sleep(std::time::Duration::from_secs(5));
+        std::process::exit(0);
+    });
+
+    // Cancel all running tasks and flush state
+    let task_handles = {
+        let tasks = state.tasks.lock().unwrap();
+        tasks.values().cloned().collect::<Vec<_>>()
+    };
+    for h in task_handles {
+        h.cancelled.store(true, Ordering::SeqCst);
+    }
+
+    // Flush any pending database operations
+    if let Ok(records) = state.store.list_all_downloads() {
+        for r in records {
+            if r.state == DownloadState::Downloading {
+                let _ = state.store.update_download_state(r.id, DownloadState::Paused, None);
+            }
+        }
+    }
+
+    app_handle.exit(0);
 }
 
 #[tauri::command]
@@ -1173,39 +1229,11 @@ fn get_extension_token(state: State<'_, AppState>) -> String {
     state.ws_manager.get_token().to_string()
 }
 
-#[cfg(windows)]
-fn enforce_single_instance() {
-    use std::ffi::OsStr;
-    use std::os::windows::ffi::OsStrExt;
-    extern "system" {
-        fn CreateMutexW(
-            lpMutexAttributes: *mut std::ffi::c_void,
-            bInitialOwner: i32,
-            lpName: *const u16,
-        ) -> *mut std::ffi::c_void;
-        fn GetLastError() -> u32;
-    }
-    const ERROR_ALREADY_EXISTS: u32 = 183;
-    let mutex_name: Vec<u16> = OsStr::new("Global\\EDM_SingleInstance_Mutex_14370")
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
-    let handle = unsafe { CreateMutexW(std::ptr::null_mut(), 1, mutex_name.as_ptr()) };
-    if handle.is_null() || unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
-        eprintln!("EDM is already running. Exiting second instance.");
-        std::process::exit(0);
-    }
-    let _ = handle;
-}
-
-#[cfg(not(windows))]
-fn enforce_single_instance() {}
-
 fn main() {
+    init_logging();
+
     #[cfg(windows)]
     set_app_user_model_id();
-
-    enforce_single_instance();
 
     register_native_messaging_host();
 
@@ -1239,6 +1267,7 @@ fn main() {
         tasks: Arc::new(Mutex::new(HashMap::new())),
         rt_handle: rt_handle.clone(),
         ws_manager: ws_manager.clone(),
+        tray_handle: Arc::new(Mutex::new(None)),
     };
 
     spawn_extension_bridge(app_state.clone(), rt_handle.clone());
@@ -1433,25 +1462,170 @@ fn main() {
         }
     });
 
-    // Keep Tokio runtime active in background thread
-    std::thread::spawn(move || {
-        rt.block_on(async {
-            loop {
-                tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
-            }
-        });
-    });
-
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+                // If saved window position was moved off-screen, center it
+                if let Ok(pos) = window.outer_position() {
+                    if pos.x < -2000 || pos.y < -2000 || pos.x > 10000 || pos.y > 10000 {
+                        let _ = window.center();
+                    }
+                }
+            }
+        }))
         .setup(|app| {
-            use tauri::Manager;
             if let Some(window) = app.get_webview_window("main") {
                 if let Ok(icon) =
                     tauri::image::Image::from_bytes(include_bytes!("../icons/128x128.png"))
                 {
                     let _ = window.set_icon(icon);
                 }
+                let _ = window.center();
+                tracing::info!("Main desktop window successfully loaded: {:?}", window.url());
             }
+
+            // Phase 3: Tray Icon Setup
+            let open_i = MenuItem::with_id(app, "open", "Open EDM", true, None::<&str>)?;
+            let pause_all_i = MenuItem::with_id(app, "pause_all", "Pause all", true, None::<&str>)?;
+            let resume_all_i = MenuItem::with_id(app, "resume_all", "Resume all", true, None::<&str>)?;
+            let settings_i = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
+            let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+
+            let tray_menu = Menu::with_items(
+                app,
+                &[&open_i, &pause_all_i, &resume_all_i, &settings_i, &quit_i],
+            )?;
+
+            let tray_icon_bytes = include_bytes!("../icons/icon.ico");
+            let icon_img = tauri::image::Image::from_bytes(tray_icon_bytes)
+                .map_err(|e| tauri::Error::Anyhow(anyhow::anyhow!("Failed to parse icon.ico: {}", e)))?;
+
+            let tray = TrayIconBuilder::new()
+                .icon(icon_img)
+                .tooltip("EDM — Edge Download Manager")
+                .menu(&tray_menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(move |app, event| {
+                    match event.id.as_ref() {
+                        "open" => {
+                            if let Some(w) = app.get_webview_window("main") {
+                                let _ = w.unminimize();
+                                let _ = w.show();
+                                let _ = w.set_focus();
+                            }
+                        }
+                        "pause_all" => {
+                            let state = app.state::<AppState>();
+                            let tasks = state.tasks.lock().unwrap();
+                            for handle in tasks.values() {
+                                handle.cancelled.store(true, Ordering::SeqCst);
+                            }
+                        }
+                        "resume_all" => {
+                            let state = app.state::<AppState>();
+                            if let Ok(records) = state.store.list_all_downloads() {
+                                for r in records {
+                                    if r.state == DownloadState::Paused {
+                                        let _ = execute_download(
+                                            &state,
+                                            r.id,
+                                            r.url,
+                                            Some(r.filename),
+                                            Some(PathBuf::from(r.save_dir)),
+                                            Some(r.connections),
+                                            r.size_total,
+                                            None,
+                                            r.referer,
+                                            r.user_agent,
+                                        );
+                                        let _ = state.store.update_download_state(
+                                            r.id,
+                                            DownloadState::Downloading,
+                                            None,
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        "settings" => {
+                            if let Some(w) = app.get_webview_window("main") {
+                                let _ = w.unminimize();
+                                let _ = w.show();
+                                let _ = w.set_focus();
+                            }
+                        }
+                        "quit" => {
+                            let state = app.state::<AppState>();
+                            trigger_graceful_quit(app.clone(), state.inner().clone());
+                        }
+                        _ => {}
+                    }
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        let app = tray.app_handle();
+                        if let Some(w) = app.get_webview_window("main") {
+                            let _ = w.unminimize();
+                            let _ = w.show();
+                            let _ = w.set_focus();
+                        }
+                    }
+                })
+                .build(app)?;
+
+            let app_state_ref = app.state::<AppState>();
+            *app_state_ref.tray_handle.lock().unwrap() = Some(tray.clone());
+
+            // Tray tooltip ticker (at most once per second)
+            let tray_app_state = app_state_ref.inner().clone();
+            let ticker_tray = tray.clone();
+            app_state_ref.rt_handle.spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
+                loop {
+                    interval.tick().await;
+                    let (active_count, total_speed) = {
+                        let mut active = 0;
+                        let mut speed = 0;
+                        let tasks = tray_app_state.tasks.lock().unwrap();
+                        for handle in tasks.values() {
+                            if !handle.cancelled.load(Ordering::Relaxed) {
+                                active += 1;
+                                if let Ok(lock) = handle.telemetry.lock() {
+                                    if let Some(ref telem) = *lock {
+                                        speed += telem.rolling_throughput_bps / 8;
+                                    }
+                                }
+                            }
+                        }
+                        (active, speed)
+                    };
+
+                    let speed_str = if total_speed > 1024 * 1024 {
+                        format!("{:.1} MB/s", total_speed as f64 / (1024.0 * 1024.0))
+                    } else if total_speed > 1024 {
+                        format!("{:.1} KB/s", total_speed as f64 / 1024.0)
+                    } else {
+                        format!("{} B/s", total_speed)
+                    };
+
+                    let tooltip = if active_count > 0 {
+                        format!("EDM: {} active ({})", active_count, speed_str)
+                    } else {
+                        "EDM — Edge Download Manager (Idle)".to_string()
+                    };
+
+                    let _ = ticker_tray.set_tooltip(Some(tooltip));
+                }
+            });
+
             Ok(())
         })
         .manage(app_state)

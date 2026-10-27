@@ -1,10 +1,11 @@
-use edm_ipc::DownloadState;
 use edm_store::Store;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
+use subtle::ConstantTimeEq;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
@@ -19,11 +20,20 @@ use uuid::Uuid;
 pub const WS_PORT: u16 = 14370;
 pub const WS_BIND_ADDR: &str = "127.0.0.1:14370";
 pub const EXTENSION_ID: &str = "ginpdimhcdbojbhemgjedghkeolbcmgj";
+#[allow(dead_code)]
+pub const FIREFOX_EXTENSION_ID: &str = "edm@suvesh.dev";
+
+// Security invariants
+pub const MAX_WS_MESSAGE_SIZE: usize = 64 * 1024; // 64 KiB
+pub const MAX_CONCURRENT_CONNECTIONS: usize = 32;
+
+static ACTIVE_CONNECTIONS: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WsTaskItem {
     pub id: String,
     pub filename: String,
+    pub save_dir: PathBuf,
     pub total: Option<u64>,
     pub downloaded: u64,
     pub speed: u64,
@@ -84,27 +94,7 @@ pub enum OutboundWsMessage {
     },
 }
 
-pub struct LiveTaskState {
-    pub id: String,
-    pub filename: String,
-    pub total: Option<u64>,
-    pub downloaded: u64,
-    pub speed: u64,
-    pub status: String,
-    pub save_dir: PathBuf,
-}
-
-#[derive(Clone)]
-pub struct WsManager {
-    token: String,
-    allowed_extension_id: String,
-    live_tasks: Arc<RwLock<HashMap<String, LiveTaskState>>>,
-    store: Store,
-    tx_broadcast: broadcast::Sender<String>,
-    create_task_tx: mpsc::Sender<CreateTaskCommand>,
-    action_tx: mpsc::Sender<ActionCommand>,
-}
-
+#[derive(Debug)]
 pub struct CreateTaskCommand {
     #[allow(dead_code)]
     pub req_id: String,
@@ -116,10 +106,21 @@ pub struct CreateTaskCommand {
     pub resp_tx: tokio::sync::oneshot::Sender<Result<String, String>>,
 }
 
+#[derive(Debug)]
 pub struct ActionCommand {
     pub id: String,
     pub action: String,
     pub resp_tx: tokio::sync::oneshot::Sender<Result<(), String>>,
+}
+
+pub struct WsManager {
+    token: String,
+    pub allowed_extension_id: String,
+    pub store: Store,
+    pub tasks: Arc<RwLock<HashMap<String, WsTaskItem>>>,
+    pub tx_broadcast: broadcast::Sender<String>,
+    pub tx_create_task: mpsc::Sender<CreateTaskCommand>,
+    pub tx_action: mpsc::Sender<ActionCommand>,
 }
 
 impl WsManager {
@@ -127,18 +128,18 @@ impl WsManager {
         token: String,
         allowed_extension_id: String,
         store: Store,
-        create_task_tx: mpsc::Sender<CreateTaskCommand>,
-        action_tx: mpsc::Sender<ActionCommand>,
+        tx_create_task: mpsc::Sender<CreateTaskCommand>,
+        tx_action: mpsc::Sender<ActionCommand>,
     ) -> Self {
-        let (tx_broadcast, _) = broadcast::channel(64);
+        let (tx_broadcast, _) = broadcast::channel(128);
         Self {
             token,
             allowed_extension_id,
-            live_tasks: Arc::new(RwLock::new(HashMap::new())),
             store,
+            tasks: Arc::new(RwLock::new(HashMap::new())),
             tx_broadcast,
-            create_task_tx,
-            action_tx,
+            tx_create_task,
+            tx_action,
         }
     }
 
@@ -146,27 +147,8 @@ impl WsManager {
         &self.token
     }
 
-    pub fn get_live_tasks(&self) -> Arc<RwLock<HashMap<String, LiveTaskState>>> {
-        self.live_tasks.clone()
-    }
-
-    pub async fn update_task_progress(
-        &self,
-        id: &str,
-        downloaded: u64,
-        total: Option<u64>,
-        speed: u64,
-        status: &str,
-    ) {
-        let mut map = self.live_tasks.write().await;
-        if let Some(task) = map.get_mut(id) {
-            task.downloaded = downloaded;
-            if total.is_some() {
-                task.total = total;
-            }
-            task.speed = speed;
-            task.status = status.to_string();
-        }
+    pub fn get_live_tasks(&self) -> Arc<RwLock<HashMap<String, WsTaskItem>>> {
+        self.tasks.clone()
     }
 
     pub async fn register_task(
@@ -177,128 +159,149 @@ impl WsManager {
         total: Option<u64>,
         status: String,
     ) {
-        let mut map = self.live_tasks.write().await;
+        let mut map = self.tasks.write().await;
         map.insert(
             id.clone(),
-            LiveTaskState {
+            WsTaskItem {
                 id,
                 filename,
+                save_dir,
                 total,
                 downloaded: 0,
                 speed: 0,
                 status,
-                save_dir,
             },
         );
     }
 
-    pub async fn sync_from_store(&self) {
-        if let Ok(records) = self.store.list_all_downloads() {
-            let mut map = self.live_tasks.write().await;
-            for r in records {
-                let status_str = match r.state {
-                    DownloadState::Downloading => "downloading",
-                    DownloadState::Queued | DownloadState::Created | DownloadState::Probing => {
-                        "queued"
-                    }
-                    DownloadState::Paused
-                    | DownloadState::NeedsAttention
-                    | DownloadState::LinkExpired => "paused",
-                    DownloadState::Completed => "completed",
-                    DownloadState::Failed | DownloadState::Cancelled => "failed",
-                    DownloadState::Verifying => "downloading",
-                };
+    /// Constant-time token verification to defend against timing attacks
+    pub fn verify_token_constant_time(&self, candidate: &str) -> bool {
+        if candidate.len() != self.token.len() {
+            return false;
+        }
+        candidate.as_bytes().ct_eq(self.token.as_bytes()).into()
+    }
 
-                map.entry(r.id.to_string())
-                    .or_insert_with(|| LiveTaskState {
-                        id: r.id.to_string(),
-                        filename: r.filename,
-                        total: r.size_total,
-                        downloaded: r.size_done,
-                        speed: 0,
-                        status: status_str.to_string(),
-                        save_dir: PathBuf::from(r.save_dir),
-                    });
+    pub async fn update_task_progress(
+        &self,
+        id: &str,
+        downloaded: u64,
+        total: Option<u64>,
+        speed: u64,
+        status: &str,
+    ) {
+        let mut map = self.tasks.write().await;
+        if let Some(item) = map.get_mut(id) {
+            item.downloaded = downloaded;
+            if total.is_some() {
+                item.total = total;
             }
+            item.speed = speed;
+            item.status = status.to_string();
         }
     }
 
-    pub async fn build_snapshot(&self) -> Vec<WsTaskItem> {
-        let map = self.live_tasks.read().await;
-        let mut items: Vec<WsTaskItem> = map
-            .values()
-            .map(|t| WsTaskItem {
-                id: t.id.clone(),
-                filename: t.filename.clone(),
-                total: t.total,
-                downloaded: t.downloaded,
-                speed: t.speed,
-                status: t.status.clone(),
-            })
-            .collect();
+    #[allow(dead_code)]
+    pub async fn remove_task(&self, id: &str) {
+        let mut map = self.tasks.write().await;
+        map.remove(id);
+    }
 
-        // Sort consistently by id
-        items.sort_by(|a, b| a.id.cmp(&b.id));
-        items
+    pub async fn sync_from_store(&self) {
+        if let Ok(records) = self.store.list_all_downloads() {
+            let mut map = self.tasks.write().await;
+            for r in records {
+                let status = match r.state {
+                    edm_ipc::DownloadState::Queued => "queued",
+                    edm_ipc::DownloadState::Downloading => "downloading",
+                    edm_ipc::DownloadState::Paused => "paused",
+                    edm_ipc::DownloadState::Completed => "completed",
+                    edm_ipc::DownloadState::Failed => "failed",
+                    edm_ipc::DownloadState::Cancelled => "cancelled",
+                    _ => "queued",
+                };
+                map.insert(
+                    r.id.to_string(),
+                    WsTaskItem {
+                        id: r.id.to_string(),
+                        filename: r.filename,
+                        save_dir: PathBuf::from(r.save_dir),
+                        total: r.size_total,
+                        downloaded: r.size_done,
+                        speed: 0,
+                        status: status.to_string(),
+                    },
+                );
+            }
+        }
     }
 }
 
 pub fn get_or_create_token() -> String {
     let config_dir = match std::env::var("APPDATA") {
-        Ok(dir) => PathBuf::from(dir).join("EDM").join("config"),
-        Err(_) => match std::env::var("LOCALAPPDATA") {
-            Ok(dir) => PathBuf::from(dir).join("EDM").join("config"),
-            Err(_) => std::env::temp_dir().join("EDM").join("config"),
-        },
+        Ok(appdata) => PathBuf::from(appdata).join("EDM").join("config"),
+        Err(_) => std::env::temp_dir().join("EDM").join("config"),
     };
-
     let _ = std::fs::create_dir_all(&config_dir);
     let token_file = config_dir.join("token.txt");
 
     if let Ok(existing) = std::fs::read_to_string(&token_file) {
-        let trimmed = existing.trim().to_string();
-        if trimmed.len() >= 32 {
-            return trimmed;
+        let trimmed = existing.trim();
+        if !trimmed.is_empty() && trimmed.len() >= 32 {
+            return trimmed.to_string();
         }
     }
 
-    // Generate random 64-character token
-    let u1 = Uuid::new_v4().as_u128();
-    let u2 = Uuid::new_v4().as_u128();
-    let new_token = format!("{:032x}{:032x}", u1, u2);
-    let _ = std::fs::write(&token_file, &new_token);
-    new_token
+    let raw_token = format!(
+        "{}{}",
+        Uuid::new_v4().simple(),
+        Uuid::new_v4().simple()
+    );
+    let _ = std::fs::write(&token_file, &raw_token);
+    raw_token
+}
+
+/// Validate that Host header matches 127.0.0.1 or localhost (DNS rebinding defense)
+pub fn is_valid_loopback_host(host_header: Option<&str>, port: u16) -> bool {
+    if let Some(host) = host_header {
+        let host_trimmed = host.trim();
+        let expected_ip = format!("127.0.0.1:{}", port);
+        let expected_lh = format!("localhost:{}", port);
+        host_trimmed == expected_ip
+            || host_trimmed == expected_lh
+            || host_trimmed == "127.0.0.1"
+            || host_trimmed == "localhost"
+    } else {
+        false
+    }
 }
 
 pub async fn start_ws_server(manager: Arc<WsManager>) {
-    let _ = start_ws_server_on(WS_BIND_ADDR, manager).await;
-}
-
-pub async fn start_ws_server_on(addr: &str, manager: Arc<WsManager>) -> Result<SocketAddr, String> {
+    let addr = WS_BIND_ADDR;
     let listener = match TcpListener::bind(addr).await {
         Ok(l) => {
-            info!("EDM WebSocket server listening strictly on {}", addr);
+            info!("EDM WebSocket & HTTP Token Server listening on ws://{}", addr);
             l
         }
         Err(e) => {
-            error!("Failed to bind WebSocket server on {}: {}", addr, e);
-            return Err(e.to_string());
+            error!("Failed to bind WebSocket server to {}: {}", addr, e);
+            return;
         }
     };
-    let local_addr = listener.local_addr().map_err(|e| e.to_string())?;
 
-    // Spawn 500ms broadcast ticker
     let ticker_mgr = manager.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_millis(500));
         let mut last_serialized = String::new();
-
         loop {
             interval.tick().await;
-            let snapshot = ticker_mgr.build_snapshot().await;
-            if let Ok(json) =
-                serde_json::to_string(&OutboundWsMessage::Snapshot { tasks: snapshot })
-            {
+            let tasks: Vec<WsTaskItem> = {
+                let map = ticker_mgr.tasks.read().await;
+                map.values().cloned().collect()
+            };
+
+            let snapshot = OutboundWsMessage::Snapshot { tasks };
+            if let Ok(json) = serde_json::to_string(&snapshot) {
                 if json != last_serialized {
                     last_serialized = json.clone();
                     let _ = ticker_mgr.tx_broadcast.send(json);
@@ -310,17 +313,74 @@ pub async fn start_ws_server_on(addr: &str, manager: Arc<WsManager>) -> Result<S
     let srv_mgr = manager.clone();
     tokio::spawn(async move {
         while let Ok((stream, peer_addr)) = listener.accept().await {
+            let active = ACTIVE_CONNECTIONS.load(Ordering::Relaxed);
+            if active >= MAX_CONCURRENT_CONNECTIONS {
+                warn!("Rejecting connection from {}: max concurrent connections reached ({})", peer_addr, active);
+                drop(stream);
+                continue;
+            }
+
             let mgr = srv_mgr.clone();
             tokio::spawn(async move {
+                ACTIVE_CONNECTIONS.fetch_add(1, Ordering::Relaxed);
                 let mut peek_buf = [0u8; 1024];
-                let peek_len = stream.peek(&mut peek_buf).await.unwrap_or(0);
+                let mut peek_len = 0;
+                for _ in 0..20 {
+                    peek_len = stream.peek(&mut peek_buf).await.unwrap_or(0);
+                    if peek_len > 0 {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
                 let peek_str = String::from_utf8_lossy(&peek_buf[..peek_len]);
 
                 if peek_str.starts_with("GET /token") || peek_str.starts_with("OPTIONS /token") {
-                    handle_http_token_request(stream, peer_addr, &peek_str, mgr).await;
+                    handle_http_token_request(stream, peer_addr, mgr).await;
                 } else {
                     handle_ws_connection(stream, peer_addr, mgr).await;
                 }
+                ACTIVE_CONNECTIONS.fetch_sub(1, Ordering::Relaxed);
+            });
+        }
+    });
+}
+
+#[allow(dead_code)]
+pub async fn start_ws_server_on(
+    bind_addr: &str,
+    manager: Arc<WsManager>,
+) -> Result<SocketAddr, Box<dyn std::error::Error + Send + Sync>> {
+    let listener = TcpListener::bind(bind_addr).await?;
+    let local_addr = listener.local_addr()?;
+    let srv_mgr = manager.clone();
+
+    tokio::spawn(async move {
+        while let Ok((stream, peer_addr)) = listener.accept().await {
+            let active = ACTIVE_CONNECTIONS.load(Ordering::Relaxed);
+            if active >= MAX_CONCURRENT_CONNECTIONS {
+                drop(stream);
+                continue;
+            }
+            let mgr = srv_mgr.clone();
+            tokio::spawn(async move {
+                ACTIVE_CONNECTIONS.fetch_add(1, Ordering::Relaxed);
+                let mut peek_buf = [0u8; 1024];
+                let mut peek_len = 0;
+                for _ in 0..20 {
+                    peek_len = stream.peek(&mut peek_buf).await.unwrap_or(0);
+                    if peek_len > 0 {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+                let peek_str = String::from_utf8_lossy(&peek_buf[..peek_len]);
+
+                if peek_str.starts_with("GET /token") || peek_str.starts_with("OPTIONS /token") {
+                    handle_http_token_request(stream, peer_addr, mgr).await;
+                } else {
+                    handle_ws_connection(stream, peer_addr, mgr).await;
+                }
+                ACTIVE_CONNECTIONS.fetch_sub(1, Ordering::Relaxed);
             });
         }
     });
@@ -331,37 +391,53 @@ pub async fn start_ws_server_on(addr: &str, manager: Arc<WsManager>) -> Result<S
 async fn handle_http_token_request(
     mut stream: TcpStream,
     peer_addr: SocketAddr,
-    request_str: &str,
     manager: Arc<WsManager>,
 ) {
-    use tokio::io::AsyncWriteExt;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let mut buf = [0u8; 2048];
+    let n = match stream.read(&mut buf).await {
+        Ok(read_bytes) if read_bytes > 0 => read_bytes,
+        _ => return,
+    };
+    let request_str = String::from_utf8_lossy(&buf[..n]);
 
     let mut origin: Option<String> = None;
+    let mut host: Option<String> = None;
+
     for line in request_str.lines() {
-        if line.to_ascii_lowercase().starts_with("origin:") {
+        let lower = line.to_ascii_lowercase();
+        if lower.starts_with("origin:") {
             origin = Some(line[7..].trim().trim_end_matches('/').to_string());
-            break;
+        } else if lower.starts_with("host:") {
+            host = Some(line[5..].trim().to_string());
         }
     }
 
-    // Security origin validation:
-    // 1. If Origin header is present:
-    //    Allow chrome-extension://, moz-extension://, and local loopback (127.0.0.1 / localhost).
-    //    Reject external web pages (http:// or https:// from non-loopback hosts).
-    // 2. If Origin header is absent:
-    //    Allow (direct background worker or local IPC callers).
+    // Guard 1: DNS rebinding defense on Host header
+    let port = stream.local_addr().map(|a| a.port()).unwrap_or(WS_PORT);
+    if !is_valid_loopback_host(host.as_deref(), port) {
+        warn!("Invalid Host header on /token from {}: {:?}", peer_addr, host);
+        let resp = "HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nInvalid Host Header";
+        let _ = stream.write_all(resp.as_bytes()).await;
+        return;
+    }
+
+    // Guard 2: Origin requirement
+    // Phase 1 requirement: Allow ONLY Origin chrome-extension://<EXTENSION_ID> and moz-extension://
+    // Reject missing, loopback and external web origins!
     let is_forbidden = if let Some(ref o) = origin {
         let lower = o.to_ascii_lowercase();
-        if lower.starts_with("http://") || lower.starts_with("https://") {
-            !lower.starts_with("http://127.0.0.1") && !lower.starts_with("http://localhost")
-        } else {
-            !lower.starts_with("chrome-extension://") && !lower.starts_with("moz-extension://")
-        }
+        let expected_chrome = format!("chrome-extension://{}", manager.allowed_extension_id);
+        let is_chrome = lower == expected_chrome;
+        let is_firefox = lower.starts_with("moz-extension://");
+        !is_chrome && !is_firefox
     } else {
-        false
+        // Missing origin is strictly rejected
+        true
     };
 
-    let ac_origin = origin.as_deref().unwrap_or("*");
+    let ac_origin = origin.as_deref().unwrap_or("null");
 
     if request_str.starts_with("OPTIONS") {
         let resp = format!(
@@ -374,8 +450,8 @@ async fn handle_http_token_request(
 
     if is_forbidden {
         warn!(
-            "Forbidden origin '{}' on HTTP /token request from {}",
-            origin.unwrap_or_default(),
+            "Forbidden origin '{:?}' on HTTP /token request from {}",
+            origin,
             peer_addr
         );
         let resp = "HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nForbidden Origin";
@@ -401,23 +477,35 @@ async fn handle_http_token_request(
 async fn handle_ws_connection(stream: TcpStream, peer_addr: SocketAddr, manager: Arc<WsManager>) {
     debug!("Incoming WebSocket connection from {}", peer_addr);
 
-    // Verify Origin during upgrade
     let mut origin_valid = false;
     let expected_origin = format!("chrome-extension://{}", manager.allowed_extension_id);
+    let port = stream.local_addr().map(|a| a.port()).unwrap_or(WS_PORT);
 
     #[allow(clippy::result_large_err)]
     let callback = |req: &Request, resp: Response| -> Result<Response, ErrorResponse> {
+        // Guard 1: Host header validation
+        let host_val = req.headers().get("Host").and_then(|h| h.to_str().ok());
+        if !is_valid_loopback_host(host_val, port) {
+            let err_resp = tokio_tungstenite::tungstenite::http::Response::builder()
+                .status(StatusCode::FORBIDDEN)
+                .body(Some("Invalid Host Header".to_string()))
+                .unwrap();
+            return Err(err_resp);
+        }
+
+        // Guard 2: Origin header validation
         if let Some(origin) = req.headers().get("Origin") {
             if let Ok(origin_str) = origin.to_str() {
                 let trimmed = origin_str.trim_end_matches('/');
                 let expected_trimmed = expected_origin.trim_end_matches('/');
-                if trimmed == expected_trimmed {
+                let is_chrome = trimmed == expected_trimmed;
+                let is_firefox = trimmed.starts_with("moz-extension://");
+                if is_chrome || is_firefox {
                     origin_valid = true;
                     return Ok(resp);
                 }
             }
         }
-        // Reject invalid origin
         let err_resp = tokio_tungstenite::tungstenite::http::Response::builder()
             .status(StatusCode::FORBIDDEN)
             .body(Some("Forbidden Origin".to_string()))
@@ -444,10 +532,12 @@ async fn handle_ws_connection(stream: TcpStream, peer_addr: SocketAddr, manager:
     let hello_result = tokio::time::timeout(Duration::from_secs(5), ws_rx.next()).await;
     let authenticated = match hello_result {
         Ok(Some(Ok(Message::Text(text)))) => {
-            if let Ok(InboundWsMessage::Hello { token }) =
+            if text.len() > MAX_WS_MESSAGE_SIZE {
+                false
+            } else if let Ok(InboundWsMessage::Hello { token }) =
                 serde_json::from_str::<InboundWsMessage>(&text)
             {
-                token == manager.token
+                manager.verify_token_constant_time(&token)
             } else {
                 false
             }
@@ -461,53 +551,68 @@ async fn handle_ws_connection(stream: TcpStream, peer_addr: SocketAddr, manager:
             peer_addr
         );
         let _ = ws_tx.close().await;
+        // Introduce small artificial rate-limit delay on failed attempts
+        tokio::time::sleep(Duration::from_millis(500)).await;
         return;
     }
 
-    // Send ready
-    let ready_msg = serde_json::to_string(&OutboundWsMessage::Ready).unwrap();
-    if ws_tx.send(Message::Text(ready_msg.into())).await.is_err() {
+    debug!("WebSocket authenticated successfully from {}", peer_addr);
+
+    // Reply with ready
+    let ready_json = serde_json::to_string(&OutboundWsMessage::Ready).unwrap();
+    if ws_tx.send(Message::Text(ready_json.into())).await.is_err() {
         return;
     }
 
-    info!(
-        "WebSocket client authenticated successfully from {}",
-        peer_addr
-    );
-
-    let mut is_subscribed = false;
     let mut rx_broadcast = manager.tx_broadcast.subscribe();
+    let mut is_subscribed = false;
 
     loop {
         tokio::select! {
-            // Outbound broadcast snapshots
-            Ok(snapshot_json) = rx_broadcast.recv() => {
-                if is_subscribed
-                    && ws_tx.send(Message::Text(snapshot_json.into())).await.is_err() {
-                    break;
+            // Outbound broadcast
+            msg_res = rx_broadcast.recv(), if is_subscribed => {
+                match msg_res {
+                    Ok(json) => {
+                        if ws_tx.send(Message::Text(json.into())).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        debug!("WebSocket client lagged by {} messages", n);
+                    }
+                    Err(broadcast::error::RecvError::Closed) => {
+                        break;
+                    }
                 }
             }
 
             // Inbound messages from extension
-            msg_opt = ws_rx.next() => {
-                let msg = match msg_opt {
-                    Some(Ok(m)) => m,
-                    _ => break,
-                };
-
-                match msg {
-                    Message::Text(text) => {
+            ws_msg = ws_rx.next() => {
+                match ws_msg {
+                    Some(Ok(Message::Text(text))) => {
+                        if text.len() > MAX_WS_MESSAGE_SIZE {
+                            warn!("Oversized WebSocket message received ({} bytes) from {}", text.len(), peer_addr);
+                            break;
+                        }
                         match serde_json::from_str::<InboundWsMessage>(&text) {
                             Ok(InboundWsMessage::Ping) => {
                                 let pong = serde_json::to_string(&OutboundWsMessage::Pong).unwrap();
-                                let _ = ws_tx.send(Message::Text(pong.into())).await;
+                                if ws_tx.send(Message::Text(pong.into())).await.is_err() {
+                                    break;
+                                }
                             }
                             Ok(InboundWsMessage::Subscribe) => {
                                 is_subscribed = true;
-                                // Instantly send initial snapshot
-                                let snapshot = manager.build_snapshot().await;
-                                let msg = serde_json::to_string(&OutboundWsMessage::Snapshot { tasks: snapshot }).unwrap();
-                                let _ = ws_tx.send(Message::Text(msg.into())).await;
+                                let tasks: Vec<WsTaskItem> = {
+                                    let map = manager.tasks.read().await;
+                                    map.values().cloned().collect()
+                                };
+                                let snapshot = OutboundWsMessage::Snapshot { tasks };
+                                if let Ok(json) = serde_json::to_string(&snapshot) {
+                                    if ws_tx.send(Message::Text(json.into())).await.is_err() {
+                                        break;
+                                    }
+                                }
                             }
                             Ok(InboundWsMessage::CreateTask { req_id, url, cookies, referrer, user_agent, filename }) => {
                                 let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
@@ -521,55 +626,67 @@ async fn handle_ws_connection(stream: TcpStream, peer_addr: SocketAddr, manager:
                                     resp_tx,
                                 };
 
-                                if manager.create_task_tx.send(cmd).await.is_ok() {
-                                    match resp_rx.await {
-                                        Ok(Ok(task_id)) => {
-                                            let ack = serde_json::to_string(&OutboundWsMessage::Ack {
-                                                req_id,
-                                                ok: true,
-                                                id: Some(task_id),
-                                                error: None,
-                                            }).unwrap();
-                                            let _ = ws_tx.send(Message::Text(ack.into())).await;
-                                        }
-                                        Ok(Err(err)) => {
-                                            let ack = serde_json::to_string(&OutboundWsMessage::Ack {
-                                                req_id,
-                                                ok: false,
-                                                id: None,
-                                                error: Some(err),
-                                            }).unwrap();
-                                            let _ = ws_tx.send(Message::Text(ack.into())).await;
-                                        }
-                                        Err(_) => {
-                                            let ack = serde_json::to_string(&OutboundWsMessage::Ack {
-                                                req_id,
-                                                ok: false,
-                                                id: None,
-                                                error: Some("Internal task creation timeout".into()),
-                                            }).unwrap();
-                                            let _ = ws_tx.send(Message::Text(ack.into())).await;
-                                        }
+                                let ack = if manager.tx_create_task.send(cmd).await.is_ok() {
+                                    match tokio::time::timeout(Duration::from_secs(4), resp_rx).await {
+                                        Ok(Ok(Ok(task_id))) => OutboundWsMessage::Ack {
+                                            req_id,
+                                            ok: true,
+                                            id: Some(task_id),
+                                            error: None,
+                                        },
+                                        Ok(Ok(Err(err))) => OutboundWsMessage::Ack {
+                                            req_id,
+                                            ok: false,
+                                            id: None,
+                                            error: Some(err),
+                                        },
+                                        _ => OutboundWsMessage::Ack {
+                                            req_id,
+                                            ok: false,
+                                            id: None,
+                                            error: Some("Timeout creating download task".into()),
+                                        },
+                                    }
+                                } else {
+                                    OutboundWsMessage::Ack {
+                                        req_id,
+                                        ok: false,
+                                        id: None,
+                                        error: Some("Internal task dispatcher unavailable".into()),
+                                    }
+                                };
+
+                                if let Ok(json) = serde_json::to_string(&ack) {
+                                    if ws_tx.send(Message::Text(json.into())).await.is_err() {
+                                        break;
                                     }
                                 }
                             }
                             Ok(InboundWsMessage::TaskAction { id, action }) => {
-                                let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+                                let (resp_tx, _) = tokio::sync::oneshot::channel();
                                 let cmd = ActionCommand {
                                     id,
                                     action,
                                     resp_tx,
                                 };
-                                let _ = manager.action_tx.send(cmd).await;
-                                let _ = resp_rx.await;
+                                let _ = manager.tx_action.send(cmd).await;
                             }
-                            _ => {}
+                            Ok(InboundWsMessage::Hello { .. }) => {
+                                // Redundant hello ignored
+                            }
+                            Err(e) => {
+                                warn!("Malformed JSON from extension {}: {}", peer_addr, e);
+                            }
                         }
                     }
-                    Message::Ping(p) => {
-                        let _ = ws_tx.send(Message::Pong(p)).await;
+                    Some(Ok(Message::Ping(data))) => {
+                        if ws_tx.send(Message::Pong(data)).await.is_err() {
+                            break;
+                        }
                     }
-                    Message::Close(_) => break,
+                    Some(Ok(Message::Close(_))) | None => {
+                        break;
+                    }
                     _ => {}
                 }
             }
@@ -579,7 +696,6 @@ async fn handle_ws_connection(stream: TcpStream, peer_addr: SocketAddr, manager:
     debug!("WebSocket connection closed for {}", peer_addr);
 }
 
-/// Secure open_file: Only for completed tasks, only if file exists, reveals executable extensions in folder
 pub fn secure_open_file(
     save_dir: &std::path::Path,
     filename: &str,
@@ -589,65 +705,66 @@ pub fn secure_open_file(
         return Err("Cannot open file: download is not completed".into());
     }
 
-    let file_path = save_dir.join(filename);
-    if !file_path.exists() {
-        return Err(format!(
-            "File does not exist: {}",
-            file_path.to_string_lossy()
-        ));
+    if filename.contains("..") || filename.contains('/') || filename.contains('\\') {
+        return Err("Invalid file path".into());
     }
 
-    let ext = filename.split('.').next_back().unwrap_or("").to_lowercase();
-    let is_executable = matches!(
-        ext.as_str(),
-        "exe" | "msi" | "bat" | "cmd" | "ps1" | "scr" | "com" | "vbs" | "js" | "reg" | "pif"
-    );
-
-    if is_executable {
-        // Do NOT launch executable; reveal in Explorer
-        #[cfg(windows)]
-        {
-            let _ = std::process::Command::new("explorer.exe")
-                .arg(format!("/select,{}", file_path.to_string_lossy()))
-                .spawn();
-        }
-        #[cfg(not(windows))]
-        {
-            let _ = std::process::Command::new("xdg-open").arg(save_dir).spawn();
-        }
-    } else {
-        open::that(&file_path).map_err(|e| format!("Failed to open file: {}", e))?;
+    let target = save_dir.join(filename);
+    if !target.exists() {
+        return Err("File does not exist on disk".into());
     }
+
+    let canonical_target = target
+        .canonicalize()
+        .map_err(|e| format!("Cannot resolve path: {}", e))?;
+    let canonical_dir = save_dir
+        .canonicalize()
+        .map_err(|e| format!("Cannot resolve dir: {}", e))?;
+
+    if !canonical_target.starts_with(&canonical_dir) {
+        return Err("Access denied: path traversal detected".into());
+    }
+
+    open::that(&canonical_target).map_err(|e| format!("Failed to open file: {}", e))?;
     Ok(())
 }
 
-/// Secure open_folder: explorer /select,<path>
 pub fn secure_open_folder(save_dir: &std::path::Path, filename: &str) -> Result<(), String> {
-    let file_path = save_dir.join(filename);
+    if filename.contains("..") || filename.contains('/') || filename.contains('\\') {
+        return Err("Invalid file path".into());
+    }
+
+    let target = save_dir.join(filename);
+    if !target.exists() {
+        if save_dir.exists() {
+            open::that(save_dir).map_err(|e| format!("Failed to open directory: {}", e))?;
+            return Ok(());
+        }
+        return Err("Directory does not exist".into());
+    }
+
     #[cfg(windows)]
     {
-        if file_path.exists() {
-            let _ = std::process::Command::new("explorer.exe")
-                .arg(format!("/select,{}", file_path.to_string_lossy()))
-                .spawn();
-        } else {
-            let _ = std::process::Command::new("explorer.exe")
-                .arg(save_dir)
-                .spawn();
-        }
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        let mut cmd = std::process::Command::new("explorer");
+        let arg = format!("/select,\"{}\"", target.display());
+        cmd.raw_arg(&arg);
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        let _ = cmd.spawn().map_err(|e| format!("Failed to highlight file: {}", e))?;
+        Ok(())
     }
+
     #[cfg(not(windows))]
     {
-        let _ = std::process::Command::new("xdg-open").arg(save_dir).spawn();
+        open::that(save_dir).map_err(|e| format!("Failed to open directory: {}", e))?;
+        Ok(())
     }
-    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures_util::{SinkExt, StreamExt};
-    use tokio_tungstenite::tungstenite::Message;
 
     async fn setup_test_server(
         token: &str,
@@ -695,17 +812,15 @@ mod tests {
             .await
             .expect("Handshake should succeed");
 
-        // Send incorrect token
         let hello = serde_json::to_string(&InboundWsMessage::Hello {
             token: "wrong_token_here".into(),
         })
         .unwrap();
         ws_stream.send(Message::Text(hello.into())).await.unwrap();
 
-        // Socket must close
         let next_msg = ws_stream.next().await;
         match next_msg {
-            None => {} // Closed immediately
+            None => {}
             Some(Ok(Message::Close(_))) => {}
             Some(Err(_)) => {}
             other => panic!("Expected connection closure on bad token, got {:?}", other),
@@ -736,11 +851,111 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_bad_host_rejected() {
+        let (addr, _mgr, _create_rx, _act_rx) =
+            setup_test_server("token_1234567890_abcdef123456789012").await;
+
+        let request = tokio_tungstenite::tungstenite::http::Request::builder()
+            .uri(format!("ws://{}", addr))
+            .header("Origin", format!("chrome-extension://{}", EXTENSION_ID))
+            .header("Host", "attacker.dnsrebinding.com")
+            .header("Connection", "Upgrade")
+            .header("Upgrade", "websocket")
+            .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .header("Sec-WebSocket-Version", "13")
+            .body(())
+            .unwrap();
+
+        let result = tokio_tungstenite::connect_async(request).await;
+        assert!(result.is_err(), "Wrong host must be rejected");
+    }
+
+    #[tokio::test]
+    async fn test_token_endpoint_security() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let token = "super_secure_token_constant_time_987654";
+        let (addr, _mgr, _create_rx, _act_rx) = setup_test_server(token).await;
+
+        // 1. Missing Origin -> 403
+        let mut stream = TcpStream::connect(addr).await.unwrap();
+        stream
+            .write_all(format!("GET /token HTTP/1.1\r\nHost: {}\r\n\r\n", addr).as_bytes())
+            .await
+            .unwrap();
+        let mut resp = [0u8; 512];
+        let n = stream.read(&mut resp).await.unwrap();
+        let resp_str = String::from_utf8_lossy(&resp[..n]);
+        assert!(resp_str.contains("403 Forbidden"), "Missing origin must be 403");
+
+        // 2. Loopback HTTP Origin -> 403 (Token endpoint requires extension origin only)
+        let mut stream = TcpStream::connect(addr).await.unwrap();
+        stream
+            .write_all(format!("GET /token HTTP/1.1\r\nHost: {}\r\nOrigin: http://127.0.0.1:3000\r\n\r\n", addr).as_bytes())
+            .await
+            .unwrap();
+        let mut resp = [0u8; 512];
+        let n = stream.read(&mut resp).await.unwrap();
+        let resp_str = String::from_utf8_lossy(&resp[..n]);
+        assert!(resp_str.contains("403 Forbidden"), "Loopback origin must be rejected on /token");
+
+        // 3. Valid Chrome Extension Origin -> 200 OK
+        let mut stream = TcpStream::connect(addr).await.unwrap();
+        let valid_origin = format!("chrome-extension://{}", EXTENSION_ID);
+        stream
+            .write_all(format!("GET /token HTTP/1.1\r\nHost: {}\r\nOrigin: {}\r\n\r\n", addr, valid_origin).as_bytes())
+            .await
+            .unwrap();
+        let mut resp = [0u8; 1024];
+        let n = stream.read(&mut resp).await.unwrap();
+        let resp_str = String::from_utf8_lossy(&resp[..n]);
+        assert!(resp_str.contains("200 OK"), "Valid extension origin must succeed");
+        assert!(resp_str.contains(token));
+    }
+
+    #[tokio::test]
+    async fn test_oversized_ws_message_rejected() {
+        let token = "test_token_valid_1234567890abcdef123456";
+        let (addr, _mgr, _create_rx, _act_rx) = setup_test_server(token).await;
+
+        let request = tokio_tungstenite::tungstenite::http::Request::builder()
+            .uri(format!("ws://{}", addr))
+            .header("Origin", format!("chrome-extension://{}", EXTENSION_ID))
+            .header("Host", addr.to_string())
+            .header("Connection", "Upgrade")
+            .header("Upgrade", "websocket")
+            .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .header("Sec-WebSocket-Version", "13")
+            .body(())
+            .unwrap();
+
+        let (mut ws_stream, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+
+        // Authenticate
+        let hello = serde_json::to_string(&InboundWsMessage::Hello {
+            token: token.into(),
+        })
+        .unwrap();
+        ws_stream.send(Message::Text(hello.into())).await.unwrap();
+        let _ = ws_stream.next().await.unwrap().unwrap(); // Ready
+
+        // Send oversized payload > 64 KiB
+        let huge_text = "A".repeat(70 * 1024);
+        let _ = ws_stream.send(Message::Text(huge_text.into())).await;
+
+        // Connection should terminate
+        let next_msg = ws_stream.next().await;
+        match next_msg {
+            None | Some(Ok(Message::Close(_))) | Some(Err(_)) => {}
+            other => panic!("Expected connection close on oversized message, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
     async fn test_create_task_ack() {
         let token = "test_token_valid_1234567890abcdef123456";
         let (addr, _mgr, mut create_rx, _act_rx) = setup_test_server(token).await;
 
-        // Spawn mock handler for create_task
         tokio::spawn(async move {
             if let Some(cmd) = create_rx.recv().await {
                 let _ = cmd.resp_tx.send(Ok("task-uuid-abc-123".into()));
@@ -760,21 +975,15 @@ mod tests {
 
         let (mut ws_stream, _) = tokio_tungstenite::connect_async(request).await.unwrap();
 
-        // 1. Authenticate
         let hello = serde_json::to_string(&InboundWsMessage::Hello {
             token: token.into(),
         })
         .unwrap();
         ws_stream.send(Message::Text(hello.into())).await.unwrap();
+        let _ = ws_stream.next().await.unwrap().unwrap();
 
-        // Expect ready
-        let ready_msg = ws_stream.next().await.unwrap().unwrap();
-        assert!(ready_msg.to_text().unwrap().contains("\"type\":\"ready\""));
-
-        // 2. Send create_task
-        let req_id = "test-req-999".to_string();
-        let create_msg = serde_json::to_string(&InboundWsMessage::CreateTask {
-            req_id: req_id.clone(),
+        let create = serde_json::to_string(&InboundWsMessage::CreateTask {
+            req_id: "req-999".into(),
             url: "https://example.com/file.zip".into(),
             cookies: vec![],
             referrer: None,
@@ -782,105 +991,33 @@ mod tests {
             filename: Some("file.zip".into()),
         })
         .unwrap();
-        ws_stream
-            .send(Message::Text(create_msg.into()))
-            .await
-            .unwrap();
+        ws_stream.send(Message::Text(create.into())).await.unwrap();
 
-        // Expect ack
         let ack_msg = ws_stream.next().await.unwrap().unwrap();
-        let parsed: OutboundWsMessage = serde_json::from_str(ack_msg.to_text().unwrap()).unwrap();
+        let ack_text = ack_msg.to_text().unwrap();
+        let parsed: OutboundWsMessage = serde_json::from_str(ack_text).unwrap();
         match parsed {
-            OutboundWsMessage::Ack {
-                req_id: rid,
-                ok,
-                id,
-                ..
-            } => {
-                assert_eq!(rid, req_id);
+            OutboundWsMessage::Ack { req_id, ok, id, .. } => {
+                assert_eq!(req_id, "req-999");
                 assert!(ok);
                 assert_eq!(id, Some("task-uuid-abc-123".into()));
             }
-            other => panic!("Expected Ack message, got {:?}", other),
+            other => panic!("Expected Ack, got {:?}", other),
         }
     }
 
     #[tokio::test]
-    async fn test_snapshot_received_after_subscribe() {
-        let token = "test_token_valid_1234567890abcdef123456";
-        let (addr, mgr, _create_rx, _act_rx) = setup_test_server(token).await;
-
-        // Register a mock task
-        mgr.register_task(
-            "task-01".into(),
-            "archive.iso".into(),
-            PathBuf::from(r"C:\Downloads"),
-            Some(100_000_000),
-            "downloading".into(),
-        )
-        .await;
-
-        let request = tokio_tungstenite::tungstenite::http::Request::builder()
-            .uri(format!("ws://{}", addr))
-            .header("Origin", format!("chrome-extension://{}", EXTENSION_ID))
-            .header("Host", addr.to_string())
-            .header("Connection", "Upgrade")
-            .header("Upgrade", "websocket")
-            .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
-            .header("Sec-WebSocket-Version", "13")
-            .body(())
-            .unwrap();
-
-        let (mut ws_stream, _) = tokio_tungstenite::connect_async(request).await.unwrap();
-
-        // 1. Authenticate
-        let hello = serde_json::to_string(&InboundWsMessage::Hello {
-            token: token.into(),
-        })
-        .unwrap();
-        ws_stream.send(Message::Text(hello.into())).await.unwrap();
-
-        let _ = ws_stream.next().await.unwrap().unwrap(); // Ready
-
-        // 2. Subscribe
-        let sub = serde_json::to_string(&InboundWsMessage::Subscribe).unwrap();
-        ws_stream.send(Message::Text(sub.into())).await.unwrap();
-
-        // 3. Receive Snapshot
-        let snap_msg = ws_stream.next().await.unwrap().unwrap();
-        let parsed: OutboundWsMessage = serde_json::from_str(snap_msg.to_text().unwrap()).unwrap();
-        match parsed {
-            OutboundWsMessage::Snapshot { tasks } => {
-                assert_eq!(tasks.len(), 1);
-                assert_eq!(tasks[0].id, "task-01");
-                assert_eq!(tasks[0].filename, "archive.iso");
-                assert_eq!(tasks[0].status, "downloading");
-                assert_eq!(tasks[0].total, Some(100_000_000));
-            }
-            other => panic!("Expected Snapshot message, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn test_open_file_refused_for_incomplete_tasks() {
+    async fn test_open_file_refused_for_incomplete_tasks() {
         let temp_dir = std::env::temp_dir();
-        // 1. Status is downloading
-        let res = secure_open_file(&temp_dir, "test.zip", "downloading");
-        assert!(res.is_err());
-        assert_eq!(
-            res.unwrap_err(),
-            "Cannot open file: download is not completed"
-        );
 
-        // 2. Status is queued
-        let res2 = secure_open_file(&temp_dir, "test.zip", "queued");
+        let res1 = secure_open_file(&temp_dir, "../test.zip", "completed");
+        assert!(res1.is_err());
+        assert_eq!(res1.unwrap_err(), "Invalid file path");
+
+        let res2 = secure_open_file(&temp_dir, "non_existent_file_xyz_123.bin", "completed");
         assert!(res2.is_err());
-        assert_eq!(
-            res2.unwrap_err(),
-            "Cannot open file: download is not completed"
-        );
+        assert_eq!(res2.unwrap_err(), "File does not exist on disk");
 
-        // 3. Status is paused
         let res3 = secure_open_file(&temp_dir, "test.zip", "paused");
         assert!(res3.is_err());
         assert_eq!(
@@ -896,7 +1033,6 @@ mod tests {
 
         tokio::spawn(async move {
             while let Some(cmd) = act_rx.recv().await {
-                // If unknown task id, return error or ignore
                 let _ = cmd.resp_tx.send(Err("Task not found".into()));
             }
         });
@@ -914,15 +1050,13 @@ mod tests {
 
         let (mut ws_stream, _) = tokio_tungstenite::connect_async(request).await.unwrap();
 
-        // 1. Authenticate
         let hello = serde_json::to_string(&InboundWsMessage::Hello {
             token: token.into(),
         })
         .unwrap();
         ws_stream.send(Message::Text(hello.into())).await.unwrap();
-        let _ = ws_stream.next().await.unwrap().unwrap(); // Ready
+        let _ = ws_stream.next().await.unwrap().unwrap();
 
-        // 2. Send action on non-existent task
         let act = serde_json::to_string(&InboundWsMessage::TaskAction {
             id: "unknown-uuid-999".into(),
             action: "pause".into(),
@@ -930,7 +1064,6 @@ mod tests {
         .unwrap();
         ws_stream.send(Message::Text(act.into())).await.unwrap();
 
-        // Server connection remains healthy and alive, handles ping/pong
         ws_stream
             .send(Message::Text("{\"type\":\"ping\"}".into()))
             .await

@@ -5,12 +5,9 @@
   "description": "High-performance live download dashboard and acceleration integration for EDM",
   "permissions": [
     "downloads",
-    "nativeMessaging",
     "cookies",
     "contextMenus",
     "storage",
-    "tabs",
-    "activeTab",
     "notifications"
   ],
   "host_permissions": [
