@@ -125,14 +125,55 @@ class PopupController {
     if (data.edm_ws_token && data.edm_ws_token.length >= 32 && !data.edm_ws_token.startsWith("ed0000000000")) {
       this.token = data.edm_ws_token;
     } else {
-      chrome.runtime.sendMessage({ action: "auto_detect_token" }, (resp) => {
-        if (resp && resp.ok && resp.token) {
-          this.token = resp.token;
-          const input = document.getElementById("popupWsTokenInput");
-          if (input) input.value = resp.token;
-        }
-      });
+      this.detectTokenSilently();
     }
+  }
+  async detectTokenSilently() {
+    try {
+      const nmhToken = await new Promise((resolve) => {
+        chrome.runtime.sendNativeMessage("com.edm.nmh", { type: "get_token" }, (resp) => {
+          if (chrome.runtime.lastError || !resp || !resp.token) return resolve(null);
+          resolve(resp.token);
+        });
+      });
+      if (nmhToken && nmhToken.length >= 32) {
+        this.token = nmhToken;
+        await chrome.storage.local.set({ edm_ws_token: nmhToken });
+        chrome.runtime.sendMessage({ action: "update_token", token: nmhToken });
+        const input = document.getElementById("popupWsTokenInput");
+        if (input) input.value = nmhToken;
+        return;
+      }
+    } catch {
+    }
+    for (const url of ["http://127.0.0.1:14370/token", "http://localhost:14370/token"]) {
+      try {
+        const resp = await fetch(url, {
+          method: "GET",
+          headers: { "X-EDM-Client": "extension" },
+          cache: "no-store"
+        });
+        if (resp.ok) {
+          const data = await resp.json();
+          if (data && data.token && typeof data.token === "string" && data.token.length >= 32) {
+            this.token = data.token;
+            await chrome.storage.local.set({ edm_ws_token: data.token });
+            chrome.runtime.sendMessage({ action: "update_token", token: data.token });
+            const input = document.getElementById("popupWsTokenInput");
+            if (input) input.value = data.token;
+            return;
+          }
+        }
+      } catch {
+      }
+    }
+    chrome.runtime.sendMessage({ action: "auto_detect_token" }, (resp) => {
+      if (resp && resp.ok && resp.token) {
+        this.token = resp.token;
+        const input = document.getElementById("popupWsTokenInput");
+        if (input) input.value = resp.token;
+      }
+    });
   }
   bindHeaderNav() {
     document.querySelectorAll(".tab-btn").forEach((btn) => {
@@ -676,12 +717,56 @@ class PopupController {
       });
     }
     if (btnAutoDetect && tokenInput) {
-      btnAutoDetect.addEventListener("click", () => {
+      btnAutoDetect.addEventListener("click", async () => {
         if (tokenFeedback) {
           tokenFeedback.style.color = "#8FA0BE";
           tokenFeedback.textContent = "Auto-detecting token from EDM Desktop app...";
         }
         btnAutoDetect.disabled = true;
+        let detected = null;
+        try {
+          detected = await new Promise((resolve) => {
+            chrome.runtime.sendNativeMessage("com.edm.nmh", { type: "get_token" }, (resp) => {
+              if (chrome.runtime.lastError || !resp || !resp.token) return resolve(null);
+              resolve(resp.token);
+            });
+          });
+        } catch {
+        }
+        if (!detected) {
+          for (const url of ["http://127.0.0.1:14370/token", "http://localhost:14370/token"]) {
+            try {
+              const resp = await fetch(url, {
+                method: "GET",
+                headers: { "X-EDM-Client": "extension" },
+                cache: "no-store"
+              });
+              if (resp.ok) {
+                const data = await resp.json();
+                if (data && data.token && typeof data.token === "string" && data.token.length >= 32) {
+                  detected = data.token;
+                  break;
+                }
+              }
+            } catch {
+            }
+          }
+        }
+        if (detected) {
+          this.token = detected;
+          tokenInput.value = detected;
+          await chrome.storage.local.set({ edm_ws_token: detected });
+          chrome.runtime.sendMessage({ action: "update_token", token: detected });
+          btnAutoDetect.disabled = false;
+          if (tokenFeedback) {
+            tokenFeedback.style.color = "#10B981";
+            tokenFeedback.textContent = "Token auto-detected and synchronized successfully!";
+            setTimeout(() => {
+              if (tokenFeedback) tokenFeedback.textContent = "";
+            }, 3e3);
+          }
+          return;
+        }
         chrome.runtime.sendMessage({ action: "auto_detect_token" }, (resp) => {
           btnAutoDetect.disabled = false;
           if (resp && resp.ok && resp.token) {
@@ -736,11 +821,11 @@ class PopupController {
       btnReloadExt.addEventListener("click", () => {
         if (updateFeedback) {
           updateFeedback.style.color = "#10B981";
-          updateFeedback.textContent = "Reloading extension runtime...";
+          updateFeedback.textContent = "Extension reloaded. Reopen popup.";
         }
         chrome.runtime.sendMessage({ action: "reload_extension" });
         setTimeout(() => {
-          window.location.reload();
+          window.close();
         }, 300);
       });
     }

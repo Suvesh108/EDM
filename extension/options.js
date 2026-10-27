@@ -20,11 +20,37 @@ async function loadSettings() {
   toggleInterception.checked = stored.edm_interception_enabled !== false;
   checkStatus();
 }
-function triggerAutoDetect(interactive = true) {
+async function triggerAutoDetect(interactive = true) {
   if (interactive) {
     saveFeedback.className = "feedback-msg";
     saveFeedback.textContent = "Auto-detecting token from EDM Desktop app...";
     if (btnAutoDetect) btnAutoDetect.disabled = true;
+  }
+  for (const url of ["http://127.0.0.1:14370/token", "http://localhost:14370/token"]) {
+    try {
+      const resp = await fetch(url, {
+        method: "GET",
+        headers: { "X-EDM-Client": "extension" },
+        cache: "no-store"
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data && data.token && typeof data.token === "string" && data.token.length >= 32) {
+          inputToken.value = data.token;
+          await chrome.storage.local.set({ edm_ws_token: data.token });
+          chrome.runtime.sendMessage({ action: "update_token", token: data.token });
+          if (btnAutoDetect) btnAutoDetect.disabled = false;
+          saveFeedback.className = "feedback-msg success";
+          saveFeedback.textContent = "Token auto-detected and synchronized successfully!";
+          checkStatus();
+          setTimeout(() => {
+            saveFeedback.textContent = "";
+          }, 3e3);
+          return;
+        }
+      }
+    } catch {
+    }
   }
   chrome.runtime.sendMessage({ action: "auto_detect_token" }, (resp) => {
     if (btnAutoDetect) btnAutoDetect.disabled = false;

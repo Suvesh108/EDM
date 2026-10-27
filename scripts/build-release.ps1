@@ -57,7 +57,7 @@ if ($LASTEXITCODE -ne 0) { throw "Tauri application build failed" }
 
 # 6. CI Safety Check: Fail if release installer or packaged assets contain localhost:1420
 Write-Host "`n[6/6] Verifying Release Installer for embedded assets..." -ForegroundColor Yellow
-$setupExe = Get-ChildItem -Path "$RootDir/target/release/bundle/nsis" -Filter "EDM_*_x64-setup.exe" | Select-Object -First 1
+$setupExe = Get-ChildItem -Path "$RootDir/target" -Recurse -Filter "EDM_*_x64-setup.exe" | Select-Object -First 1
 
 if ($setupExe -and (Test-Path $setupExe.FullName)) {
     # Check that NSIS installer does not embed localhost devUrl

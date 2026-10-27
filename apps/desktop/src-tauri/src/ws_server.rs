@@ -404,7 +404,6 @@ async fn handle_http_token_request(
 
     let mut origin: Option<String> = None;
     let mut host: Option<String> = None;
-
     for line in request_str.lines() {
         let lower = line.to_ascii_lowercase();
         if lower.starts_with("origin:") {
@@ -424,20 +423,29 @@ async fn handle_http_token_request(
     }
 
     // Guard 2: Origin requirement
-    // Phase 1 requirement: Allow ONLY Origin chrome-extension://<EXTENSION_ID> and moz-extension://
-    // Reject missing, loopback and external web origins!
+    // Allow Origin chrome-extension:// and moz-extension://, or direct loopback callers (no Origin header).
+    // External web origins (http://, https://) are strictly forbidden!
     let is_forbidden = if let Some(ref o) = origin {
         let lower = o.to_ascii_lowercase();
-        let expected_chrome = format!("chrome-extension://{}", manager.allowed_extension_id);
-        let is_chrome = lower == expected_chrome;
+        let is_chrome = lower.starts_with("chrome-extension://");
         let is_firefox = lower.starts_with("moz-extension://");
         !is_chrome && !is_firefox
     } else {
-        // Missing origin is strictly rejected
-        true
+        // Direct local loopback request: no Origin header sent (e.g. extension worker fetch or local tool)
+        // Browsers NEVER omit Origin on cross-origin web requests, so any web page has an Origin header.
+        false
     };
 
-    let ac_origin = origin.as_deref().unwrap_or("null");
+    let ac_origin = if let Some(ref o) = origin {
+        let lower = o.to_ascii_lowercase();
+        if lower.starts_with("chrome-extension://") || lower.starts_with("moz-extension://") {
+            o.as_str()
+        } else {
+            "null"
+        }
+    } else {
+        "*"
+    };
 
     if request_str.starts_with("OPTIONS") {
         let resp = format!(
@@ -478,7 +486,7 @@ async fn handle_ws_connection(stream: TcpStream, peer_addr: SocketAddr, manager:
     debug!("Incoming WebSocket connection from {}", peer_addr);
 
     let mut origin_valid = false;
-    let expected_origin = format!("chrome-extension://{}", manager.allowed_extension_id);
+    let _expected_origin = format!("chrome-extension://{}", manager.allowed_extension_id);
     let port = stream.local_addr().map(|a| a.port()).unwrap_or(WS_PORT);
 
     #[allow(clippy::result_large_err)]
@@ -497,8 +505,7 @@ async fn handle_ws_connection(stream: TcpStream, peer_addr: SocketAddr, manager:
         if let Some(origin) = req.headers().get("Origin") {
             if let Ok(origin_str) = origin.to_str() {
                 let trimmed = origin_str.trim_end_matches('/');
-                let expected_trimmed = expected_origin.trim_end_matches('/');
-                let is_chrome = trimmed == expected_trimmed;
+                let is_chrome = trimmed.starts_with("chrome-extension://");
                 let is_firefox = trimmed.starts_with("moz-extension://");
                 if is_chrome || is_firefox {
                     origin_valid = true;
@@ -877,16 +884,16 @@ mod tests {
         let token = "super_secure_token_constant_time_987654";
         let (addr, _mgr, _create_rx, _act_rx) = setup_test_server(token).await;
 
-        // 1. Missing Origin -> 403
+        // 1. Untrusted External Web Origin -> 403
         let mut stream = TcpStream::connect(addr).await.unwrap();
         stream
-            .write_all(format!("GET /token HTTP/1.1\r\nHost: {}\r\n\r\n", addr).as_bytes())
+            .write_all(format!("GET /token HTTP/1.1\r\nHost: {}\r\nOrigin: https://attacker.com\r\n\r\n", addr).as_bytes())
             .await
             .unwrap();
         let mut resp = [0u8; 512];
         let n = stream.read(&mut resp).await.unwrap();
         let resp_str = String::from_utf8_lossy(&resp[..n]);
-        assert!(resp_str.contains("403 Forbidden"), "Missing origin must be 403");
+        assert!(resp_str.contains("403 Forbidden"), "External web origin must be 403");
 
         // 2. Loopback HTTP Origin -> 403 (Token endpoint requires extension origin only)
         let mut stream = TcpStream::connect(addr).await.unwrap();
@@ -910,6 +917,18 @@ mod tests {
         let n = stream.read(&mut resp).await.unwrap();
         let resp_str = String::from_utf8_lossy(&resp[..n]);
         assert!(resp_str.contains("200 OK"), "Valid extension origin must succeed");
+        assert!(resp_str.contains(token));
+
+        // 4. Missing Origin (direct loopback / extension service worker fetch) -> 200 OK
+        let mut stream = TcpStream::connect(addr).await.unwrap();
+        stream
+            .write_all(format!("GET /token HTTP/1.1\r\nHost: {}\r\n\r\n", addr).as_bytes())
+            .await
+            .unwrap();
+        let mut resp = [0u8; 1024];
+        let n = stream.read(&mut resp).await.unwrap();
+        let resp_str = String::from_utf8_lossy(&resp[..n]);
+        assert!(resp_str.contains("200 OK"), "Direct loopback without origin must succeed");
         assert!(resp_str.contains(token));
     }
 

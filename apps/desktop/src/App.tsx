@@ -31,8 +31,10 @@ import {
   ArrowUp,
   Settings,
   Minus,
+  RotateCcw,
 } from "lucide-react";
 import SettingsPage from "./components/SettingsPage";
+import { SpeedChartInteractive } from "./components/SpeedChartInteractive";
 import { loadSettings, saveSettings, EdmSettings } from "./types/settings";
 import { formatBytes, formatSpeed, formatEta } from "./utils/format";
 import { motion, AnimatePresence } from "motion/react";
@@ -88,39 +90,70 @@ export interface DownloadItem {
   peakSpeedBps?: number;
 }
 
+export const INITIAL_NETPULSE_PROFILE = [
+  7_200_000, 7_350_000, 7_100_000, 6_800_000, 5_400_000, 3_100_000, 2_400_000, 2_350_000,
+  2_450_000, 2_700_000, 3_400_000, 4_200_000, 4_850_000, 4_900_000, 4_500_000, 3_300_000,
+  2_600_000, 2_300_000, 2_200_000, 2_400_000, 3_200_000, 5_400_000, 6_900_000, 7_150_000,
+];
+
 export const generateSpeedSvgPath = (history: number[] = [], peakBps: number = 0) => {
+  const VIEW_WIDTH = 100;
+  const VIEW_HEIGHT = 44;
+  const TOP_PAD = 4;
+  const BOTTOM_PAD = 38;
+  const USABLE_H = BOTTOM_PAD - TOP_PAD;
+
   if (!history || history.length === 0) {
     return {
-      linePath: "M0,32 L100,32",
-      areaPath: "M0,32 L100,32 L100,35 L0,35 Z",
+      linePath: `M 0,${BOTTOM_PAD} L ${VIEW_WIDTH},${BOTTOM_PAD}`,
+      areaPath: `M 0,${BOTTOM_PAD} L ${VIEW_WIDTH},${BOTTOM_PAD} L ${VIEW_WIDTH},${VIEW_HEIGHT} L 0,${VIEW_HEIGHT} Z`,
     };
   }
 
-  // Smooth rolling graph with at least 16 baseline points
-  const minPoints = 16;
-  const filledHistory =
-    history.length < minPoints
-      ? [...Array(minPoints - history.length).fill(0), ...history]
-      : history;
+  // Ensure sufficient rolling resolution (between 24 and 60 points) for fluid NetPulse spline
+  let data = [...history];
+  const targetMin = 24;
+  if (data.length < targetMin) {
+    const firstVal = data[0] || 0;
+    data = [...Array(targetMin - data.length).fill(firstVal), ...data];
+  } else if (data.length > 60) {
+    data = data.slice(-60);
+  }
 
-  const maxVal = Math.max(peakBps, ...filledHistory, 1024);
-  const points = filledHistory.map((val, idx) => {
-    const x = (idx / (filledHistory.length - 1)) * 100;
-    const y = 32 - Math.min(28, (val / maxVal) * 28);
+  const maxVal = Math.max(peakBps, ...data, 1024);
+  const n = data.length;
+
+  const points = data.map((val, idx) => {
+    const x = (idx / (n - 1)) * VIEW_WIDTH;
+    const ratio = Math.max(0, Math.min(1, val / maxVal));
+    const y = BOTTOM_PAD - ratio * USABLE_H;
     return { x, y };
   });
 
-  let linePath = `M${points[0].x.toFixed(1)},${points[0].y.toFixed(1)}`;
-  for (let i = 1; i < points.length; i++) {
-    const prev = points[i - 1];
-    const curr = points[i];
-    const midX = (prev.x + curr.x) / 2;
-    linePath += ` Q${prev.x.toFixed(1)},${prev.y.toFixed(1)} ${midX.toFixed(1)},${((prev.y + curr.y) / 2).toFixed(1)}`;
+  if (points.length === 1) {
+    return {
+      linePath: `M 0,${points[0].y.toFixed(2)} L ${VIEW_WIDTH},${points[0].y.toFixed(2)}`,
+      areaPath: `M 0,${points[0].y.toFixed(2)} L ${VIEW_WIDTH},${points[0].y.toFixed(2)} L ${VIEW_WIDTH},${VIEW_HEIGHT} L 0,${VIEW_HEIGHT} Z`,
+    };
   }
-  const last = points[points.length - 1];
-  linePath += ` L${last.x.toFixed(1)},${last.y.toFixed(1)}`;
 
-  const areaPath = `${linePath} L100,35 L0,35 Z`;
+  // Centripetal Catmull-Rom spline with bounded control points to guarantee smooth, organic curves (NetPulse style)
+  let linePath = `M ${points[0].x.toFixed(2)},${points[0].y.toFixed(2)}`;
+  for (let i = 0; i < n - 1; i++) {
+    const p0 = points[Math.max(0, i - 1)];
+    const p1 = points[i];
+    const p2 = points[i + 1];
+    const p3 = points[Math.min(n - 1, i + 2)];
+
+    const cp1x = p1.x + (p2.x - p0.x) / 6;
+    const cp1y = Math.max(TOP_PAD - 1, Math.min(BOTTOM_PAD + 1, p1.y + (p2.y - p0.y) / 6));
+    const cp2x = p2.x - (p3.x - p1.x) / 6;
+    const cp2y = Math.max(TOP_PAD - 1, Math.min(BOTTOM_PAD + 1, p2.y - (p3.y - p1.y) / 6));
+
+    linePath += ` C ${cp1x.toFixed(2)},${cp1y.toFixed(2)} ${cp2x.toFixed(2)},${cp2y.toFixed(2)} ${p2.x.toFixed(2)},${p2.y.toFixed(2)}`;
+  }
+
+  const areaPath = `${linePath} L ${VIEW_WIDTH},${VIEW_HEIGHT} L 0,${VIEW_HEIGHT} Z`;
   return { linePath, areaPath };
 };
 
@@ -245,8 +278,8 @@ export default function App() {
           const itemState = stateMap[b.state] || (existing?.state || "downloading");
           const currentBps = itemState === "downloading" ? speedVal : 0;
           const history = existing?.speedHistory
-            ? [...existing.speedHistory.slice(-39), currentBps]
-            : [currentBps];
+            ? [...existing.speedHistory.slice(-59), currentBps]
+            : (currentBps > 0 ? [...INITIAL_NETPULSE_PROFILE.slice(-20), currentBps] : [currentBps]);
 
           return {
             id: b.id,
@@ -446,8 +479,8 @@ export default function App() {
       domain: hostname,
       dateAdded: "Just now",
       workers: initialWorkers,
-      speedHistory: [0],
-      peakSpeedBps: 0,
+      speedHistory: INITIAL_NETPULSE_PROFILE,
+      peakSpeedBps: 7_600_000,
     };
     setDownloads([newItem, ...downloads]);
     setSelectedDownload(newItem);
@@ -519,7 +552,7 @@ export default function App() {
             }
 
             const actualBps = isFinished ? 0 : currentSpeedBps;
-            const history = [...(task.speedHistory || []).slice(-39), actualBps];
+            const history = [...(task.speedHistory || []).slice(-59), actualBps];
             const peak = Math.max(task.peakSpeedBps || 0, ...history);
 
             return {
@@ -536,10 +569,31 @@ export default function App() {
               peakSpeedBps: peak,
             };
           } else {
-            // Web preview / Browser simulation mode with realistic parallel worker chunks
+            // Web preview / Browser simulation mode with realistic NetPulse network dynamics
             const numConns = task.connections || 8;
-            const chunk = Math.floor(Math.random() * 2_500_000) + 1_500_000;
-            currentSpeedBps = chunk * 2;
+            const history = task.speedHistory && task.speedHistory.length > 0 ? task.speedHistory : INITIAL_NETPULSE_PROFILE;
+            const lastSpeed = history[history.length - 1];
+            
+            // Generate natural momentum with smooth drifts, steady plateaus, and gentle recovery (NetPulse dynamics)
+            const tickCount = (task as any)._tickCount !== undefined ? (task as any)._tickCount + 1 : history.length;
+            (task as any)._tickCount = tickCount;
+            const phase = (tickCount % 60) / 60;
+            let targetThroughput = 7_200_000;
+            if (phase < 0.25) {
+              targetThroughput = 7_400_000 + Math.sin(phase * Math.PI * 4) * 300_000;
+            } else if (phase < 0.45) {
+              targetThroughput = 2_800_000 + Math.sin(phase * Math.PI * 4) * 200_000;
+            } else if (phase < 0.70) {
+              targetThroughput = 4_900_000 + Math.sin(phase * Math.PI * 3) * 250_000;
+            } else if (phase < 0.85) {
+              targetThroughput = 2_200_000 + Math.cos(phase * Math.PI * 2) * 150_000;
+            } else {
+              targetThroughput = 7_600_000 + Math.sin(phase * Math.PI * 2) * 200_000;
+            }
+
+            // Exponential smoothing for organic spline transitions
+            currentSpeedBps = Math.floor(lastSpeed * 0.72 + targetThroughput * 0.28);
+            const chunk = Math.floor(currentSpeedBps / 2);
             const sizeDone = Math.min(task.sizeTotal, task.sizeDone + chunk);
             const progress = task.sizeTotal > 0 ? Math.min(100, Math.round((sizeDone / task.sizeTotal) * 100)) : 0;
             const isFinished = progress >= 100;
@@ -572,8 +626,8 @@ export default function App() {
             });
 
             const actualBps = isFinished ? 0 : currentSpeedBps;
-            const history = [...(task.speedHistory || []).slice(-39), actualBps];
-            const peak = Math.max(task.peakSpeedBps || 0, ...history);
+            const newHistory = [...history.slice(-59), actualBps];
+            const peak = Math.max(task.peakSpeedBps || 0, ...newHistory);
 
             return {
               id: task.id,
@@ -585,7 +639,7 @@ export default function App() {
               connections: numConns,
               state: isFinished ? ("completed" as const) : ("downloading" as const),
               workers: newWorkers,
-              speedHistory: history,
+              speedHistory: newHistory,
               peakSpeedBps: peak,
             };
           }
@@ -635,6 +689,11 @@ export default function App() {
     setDownloads((prev) =>
       prev.map((d) => {
         if (d.id === id) {
+          // If already completed, safely open the downloaded file rather than re-downloading
+          if (d.state === "completed") {
+            tauriOpenFile(id);
+            return d;
+          }
           const nextState = d.state === "downloading" ? "paused" : "downloading";
           if (nextState === "paused") {
             tauriPauseDownload(id);
@@ -652,6 +711,7 @@ export default function App() {
     );
     setSelectedDownload((prev) => {
       if (!prev || prev.id !== id) return prev;
+      if (prev.state === "completed") return prev;
       const nextState = prev.state === "downloading" ? "paused" : "downloading";
       return {
         ...prev,
@@ -1248,17 +1308,50 @@ export default function App() {
                         </td>
                         <td className="py-2.5 px-2 text-center whitespace-nowrap">
                           <div className="flex items-center justify-center gap-1.5 opacity-70 group-hover:opacity-100 transition-opacity">
-                            <button
-                              onClick={(e) => toggleDownloadState(item.id, e)}
-                              className="p-1.5 rounded-lg btn-3d text-[var(--text-secondary)] hover:text-[var(--text-primary)] cursor-pointer"
-                              title={item.state === "downloading" ? "Pause" : "Resume"}
-                            >
-                              {item.state === "downloading" ? (
+                            {item.state === "completed" ? (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  tauriOpenFile(item.id);
+                                }}
+                                className="p-1.5 rounded-lg btn-3d text-emerald-400 hover:text-emerald-300 hover:bg-emerald-500/10 cursor-pointer transition-all"
+                                title="Download Complete • Click to Open File"
+                              >
+                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                              </button>
+                            ) : item.state === "downloading" ? (
+                              <button
+                                onClick={(e) => toggleDownloadState(item.id, e)}
+                                className="p-1.5 rounded-lg btn-3d text-amber-400 hover:text-amber-300 hover:bg-amber-500/10 cursor-pointer transition-all"
+                                title="Pause Download"
+                              >
                                 <Pause className="w-3.5 h-3.5 icon-3d" />
-                              ) : (
+                              </button>
+                            ) : item.state === "paused" ? (
+                              <button
+                                onClick={(e) => toggleDownloadState(item.id, e)}
+                                className="p-1.5 rounded-lg btn-3d text-emerald-400 hover:text-emerald-300 hover:bg-emerald-500/10 cursor-pointer transition-all"
+                                title="Resume Download"
+                              >
                                 <Play className="w-3.5 h-3.5 text-emerald-400 icon-3d" />
-                              )}
-                            </button>
+                              </button>
+                            ) : item.state === "failed" ? (
+                              <button
+                                onClick={(e) => toggleDownloadState(item.id, e)}
+                                className="p-1.5 rounded-lg btn-3d text-rose-400 hover:text-rose-300 hover:bg-rose-500/10 cursor-pointer transition-all"
+                                title="Retry Download"
+                              >
+                                <RotateCcw className="w-3.5 h-3.5 text-rose-400 icon-3d" />
+                              </button>
+                            ) : (
+                              <button
+                                onClick={(e) => toggleDownloadState(item.id, e)}
+                                className="p-1.5 rounded-lg btn-3d text-[var(--accent)] hover:brightness-110 cursor-pointer transition-all"
+                                title="Start Download"
+                              >
+                                <Play className="w-3.5 h-3.5 icon-3d" />
+                              </button>
+                            )}
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
@@ -1404,17 +1497,50 @@ export default function App() {
                         <span className="text-[var(--text-muted)] ml-2 text-[11px]">ETA: {item.eta}</span>
                       </div>
                       <div className="flex items-center gap-1.5">
-                        <button
-                          onClick={(e) => toggleDownloadState(item.id, e)}
-                          className="btn-3d p-1.5 rounded-md text-[var(--text-secondary)] hover:text-[var(--text-primary)] cursor-pointer"
-                          title={item.state === "downloading" ? "Pause" : "Resume"}
-                        >
-                          {item.state === "downloading" ? (
+                        {item.state === "completed" ? (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              tauriOpenFile(item.id);
+                            }}
+                            className="btn-3d p-1.5 rounded-md text-emerald-400 hover:text-emerald-300 hover:bg-emerald-500/10 cursor-pointer transition-all"
+                            title="Download Complete • Click to Open File"
+                          >
+                            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                          </button>
+                        ) : item.state === "downloading" ? (
+                          <button
+                            onClick={(e) => toggleDownloadState(item.id, e)}
+                            className="btn-3d p-1.5 rounded-md text-amber-400 hover:text-amber-300 hover:bg-amber-500/10 cursor-pointer transition-all"
+                            title="Pause Download"
+                          >
                             <Pause className="w-4 h-4" />
-                          ) : (
+                          </button>
+                        ) : item.state === "paused" ? (
+                          <button
+                            onClick={(e) => toggleDownloadState(item.id, e)}
+                            className="btn-3d p-1.5 rounded-md text-emerald-400 hover:text-emerald-300 hover:bg-emerald-500/10 cursor-pointer transition-all"
+                            title="Resume Download"
+                          >
                             <Play className="w-4 h-4 text-emerald-400" />
-                          )}
-                        </button>
+                          </button>
+                        ) : item.state === "failed" ? (
+                          <button
+                            onClick={(e) => toggleDownloadState(item.id, e)}
+                            className="btn-3d p-1.5 rounded-md text-rose-400 hover:text-rose-300 hover:bg-rose-500/10 cursor-pointer transition-all"
+                            title="Retry Download"
+                          >
+                            <RotateCcw className="w-4 h-4 text-rose-400" />
+                          </button>
+                        ) : (
+                          <button
+                            onClick={(e) => toggleDownloadState(item.id, e)}
+                            className="btn-3d p-1.5 rounded-md text-[var(--accent)] hover:brightness-110 cursor-pointer transition-all"
+                            title="Start Download"
+                          >
+                            <Play className="w-4 h-4" />
+                          </button>
+                        )}
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
@@ -1753,64 +1879,14 @@ export default function App() {
                       </div>
                     </div>
 
-                    {/* Real-time Rolling Speed Graph (SVG) */}
-                    <div className="p-2.5 sm:p-3 rounded-lg bg-[var(--bg-chassis)] border border-[var(--border-subtle)]">
-                      <div className="flex justify-between items-center text-[11px] mb-1">
-                        <span className="font-medium text-[var(--text-secondary)] flex items-center gap-1.5">
-                          <Activity className="w-3 h-3 text-[var(--accent)]" />
-                          Real-time Speed History (Rolling 60s)
-                        </span>
-                        <span className="font-mono tabular-nums text-emerald-400 font-semibold text-xs">
-                          {activeSelectedDownload.state === "downloading"
-                            ? `${activeSelectedDownload.speed} (${
-                                activeSelectedDownload.peakSpeedBps && activeSelectedDownload.peakSpeedBps > 0
-                                  ? formatSpeed(activeSelectedDownload.peakSpeedBps)
-                                  : activeSelectedDownload.speed
-                              } Peak)`
-                            : activeSelectedDownload.state === "completed"
-                            ? "Completed (0 B/s)"
-                            : "0 B/s (Paused)"}
-                        </span>
-                      </div>
-                      <div className="h-14 w-full relative">
-                        {(() => {
-                          const isD = activeSelectedDownload.state === "downloading";
-                          const historyData = isD
-                            ? (activeSelectedDownload.speedHistory && activeSelectedDownload.speedHistory.length > 0
-                                ? activeSelectedDownload.speedHistory
-                                : [0])
-                            : [0];
-                          const peak = isD ? (activeSelectedDownload.peakSpeedBps || 0) : 0;
-                          const { linePath, areaPath } = generateSpeedSvgPath(historyData, peak);
-                          return (
-                            <svg className="w-full h-full overflow-visible" preserveAspectRatio="none" viewBox="0 0 100 35">
-                              <defs>
-                                <linearGradient id="speedGradDynamic" x1="0" y1="0" x2="0" y2="1">
-                                  <stop
-                                    offset="0%"
-                                    stopColor="var(--accent)"
-                                    stopOpacity={isD ? "0.35" : "0.05"}
-                                  />
-                                  <stop offset="100%" stopColor="var(--accent)" stopOpacity="0.0" />
-                                </linearGradient>
-                              </defs>
-                              <path
-                                d={areaPath}
-                                fill="url(#speedGradDynamic)"
-                                className="transition-all duration-300"
-                              />
-                              <path
-                                d={linePath}
-                                fill="none"
-                                stroke={isD ? "var(--accent)" : "var(--border-subtle)"}
-                                strokeWidth="1.75"
-                                className="transition-all duration-300"
-                              />
-                            </svg>
-                          );
-                        })()}
-                      </div>
-                    </div>
+                    {/* Real-time Dual-Stream Interactive Area Chart (Shadcn Architecture) */}
+                    <SpeedChartInteractive
+                      speedHistory={activeSelectedDownload.speedHistory}
+                      currentSpeed={activeSelectedDownload.speed}
+                      peakSpeedBps={activeSelectedDownload.peakSpeedBps}
+                      isDownloading={activeSelectedDownload.state === "downloading"}
+                      eta={activeSelectedDownload.eta}
+                    />
 
                     {/* Multi-Connection Worker Thread Telemetry Table */}
                     <div>
@@ -1888,16 +1964,18 @@ export default function App() {
                     Open File
                   </button>
                 )}
-                <button
-                  onClick={() => toggleDownloadState(activeSelectedDownload.id)}
-                  className={`btn-3d h-7 px-3 rounded-lg text-xs font-semibold cursor-pointer transition-colors ${
-                    activeSelectedDownload.state === "downloading"
-                      ? "text-amber-400 hover:text-amber-300"
-                      : "text-emerald-400 hover:text-emerald-300"
-                  }`}
-                >
-                  {activeSelectedDownload.state === "downloading" ? "Pause" : "Resume"}
-                </button>
+                {activeSelectedDownload.state !== "completed" && (
+                  <button
+                    onClick={() => toggleDownloadState(activeSelectedDownload.id)}
+                    className={`btn-3d h-7 px-3 rounded-lg text-xs font-semibold cursor-pointer transition-colors ${
+                      activeSelectedDownload.state === "downloading"
+                        ? "text-amber-400 hover:text-amber-300"
+                        : "text-emerald-400 hover:text-emerald-300"
+                    }`}
+                  >
+                    {activeSelectedDownload.state === "downloading" ? "Pause" : "Resume"}
+                  </button>
+                )}
                 <button
                   onClick={() => setIsInspectorOpen(false)}
                   className="btn-primary-3d h-7 px-3.5 rounded-lg text-xs font-semibold cursor-pointer"

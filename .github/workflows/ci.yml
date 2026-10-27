@@ -62,7 +62,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p release-dist
-          cp target/release/bundle/nsis/EDM_*_x64-setup.exe release-dist/EDM-v0.0.1-setup.exe
+          find target -type f -name "EDM_*_x64-setup.exe" -exec cp {} release-dist/ \;
           tar -czvf release-dist/edm-extension.tar.gz -C extension/dist/chromium .
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4

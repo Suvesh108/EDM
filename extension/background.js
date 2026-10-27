@@ -9,36 +9,6 @@ const pendingAcks = /* @__PURE__ */ new Map();
 const popupPorts = /* @__PURE__ */ new Set();
 async function autoDetectAndSetToken() {
   try {
-    const resp = await fetch("http://127.0.0.1:14370/token", {
-      method: "GET",
-      cache: "no-store"
-    });
-    if (resp.ok) {
-      const data = await resp.json();
-      if (data && data.token && typeof data.token === "string" && data.token.length >= 32) {
-        await chrome.storage.local.set({ edm_ws_token: data.token });
-        console.log("[EDM Extension] Successfully auto-detected token from EDM HTTP handshake!");
-        return data.token;
-      }
-    }
-  } catch (_e) {
-  }
-  try {
-    const resp = await fetch("http://localhost:14370/token", {
-      method: "GET",
-      cache: "no-store"
-    });
-    if (resp.ok) {
-      const data = await resp.json();
-      if (data && data.token && typeof data.token === "string" && data.token.length >= 32) {
-        await chrome.storage.local.set({ edm_ws_token: data.token });
-        console.log("[EDM Extension] Successfully auto-detected token from localhost HTTP handshake!");
-        return data.token;
-      }
-    }
-  } catch (_e) {
-  }
-  try {
     const nmhToken = await new Promise((resolve) => {
       chrome.runtime.sendNativeMessage("com.edm.nmh", { type: "get_token" }, (response) => {
         if (chrome.runtime.lastError || !response) {
@@ -57,6 +27,28 @@ async function autoDetectAndSetToken() {
       return nmhToken;
     }
   } catch (_e) {
+  }
+  const headers = {
+    "X-EDM-Client": "extension",
+    "X-EDM-Extension-Id": typeof chrome !== "undefined" && chrome.runtime?.id ? chrome.runtime.id : "extension"
+  };
+  for (const url of ["http://127.0.0.1:14370/token", "http://localhost:14370/token"]) {
+    try {
+      const resp = await fetch(url, {
+        method: "GET",
+        headers,
+        cache: "no-store"
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data && data.token && typeof data.token === "string" && data.token.length >= 32) {
+          await chrome.storage.local.set({ edm_ws_token: data.token });
+          console.log("[EDM Extension] Successfully auto-detected token from HTTP handshake!");
+          return data.token;
+        }
+      }
+    } catch (_e) {
+    }
   }
   return null;
 }

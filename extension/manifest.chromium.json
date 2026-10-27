@@ -9,7 +9,8 @@
     "cookies",
     "storage",
     "contextMenus",
-    "notifications"
+    "notifications",
+    "nativeMessaging"
   ],
   "host_permissions": [
     "<all_urls>"

@@ -29,39 +29,7 @@ const popupPorts = new Set<chrome.runtime.Port>();
 
 // 1. Get Authentication Token from chrome.storage.local or auto-detect
 async function autoDetectAndSetToken(): Promise<string | null> {
-  // Try local loopback HTTP endpoint on 127.0.0.1:14370/token
-  try {
-    const resp = await fetch("http://127.0.0.1:14370/token", {
-      method: "GET",
-      cache: "no-store",
-    });
-    if (resp.ok) {
-      const data = await resp.json();
-      if (data && data.token && typeof data.token === "string" && data.token.length >= 32) {
-        await chrome.storage.local.set({ edm_ws_token: data.token });
-        console.log("[EDM Extension] Successfully auto-detected token from EDM HTTP handshake!");
-        return data.token;
-      }
-    }
-  } catch (_e) {}
-
-  // Try localhost:14370/token
-  try {
-    const resp = await fetch("http://localhost:14370/token", {
-      method: "GET",
-      cache: "no-store",
-    });
-    if (resp.ok) {
-      const data = await resp.json();
-      if (data && data.token && typeof data.token === "string" && data.token.length >= 32) {
-        await chrome.storage.local.set({ edm_ws_token: data.token });
-        console.log("[EDM Extension] Successfully auto-detected token from localhost HTTP handshake!");
-        return data.token;
-      }
-    }
-  } catch (_e) {}
-
-  // Try Native Messaging Host com.edm.nmh
+  // 1. Try Native Messaging Host com.edm.nmh first (fastest, reads token directly)
   try {
     const nmhToken = await new Promise<string | null>((resolve) => {
       chrome.runtime.sendNativeMessage("com.edm.nmh", { type: "get_token" }, (response) => {
@@ -82,6 +50,30 @@ async function autoDetectAndSetToken(): Promise<string | null> {
       return nmhToken;
     }
   } catch (_e) {}
+
+  // 2. Try HTTP loopback endpoints
+  const headers = {
+    "X-EDM-Client": "extension",
+    "X-EDM-Extension-Id": (typeof chrome !== "undefined" && chrome.runtime?.id) ? chrome.runtime.id : "extension",
+  };
+
+  for (const url of ["http://127.0.0.1:14370/token", "http://localhost:14370/token"]) {
+    try {
+      const resp = await fetch(url, {
+        method: "GET",
+        headers,
+        cache: "no-store",
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data && data.token && typeof data.token === "string" && data.token.length >= 32) {
+          await chrome.storage.local.set({ edm_ws_token: data.token });
+          console.log("[EDM Extension] Successfully auto-detected token from HTTP handshake!");
+          return data.token;
+        }
+      }
+    } catch (_e) {}
+  }
 
   return null;
 }
