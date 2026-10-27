@@ -17,6 +17,11 @@ jobs:
           targets: x86_64-pc-windows-msvc
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
+      - name: Ensure frontend dist exists for Tauri context
+        shell: bash
+        run: |
+          mkdir -p apps/desktop/dist
+          echo '<!doctype html><html><head><title>EDM</title></head><body><div id="root"></div></body></html>' > apps/desktop/dist/index.html
       - name: Clippy
         run: cargo clippy --workspace --all-targets
       - name: Tests
