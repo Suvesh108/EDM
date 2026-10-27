@@ -79,13 +79,6 @@ impl AdaptiveController {
         has_http_429: bool,
         retry_after: Option<Duration>,
     ) -> AdaptiveDecision {
-        // Single stream fallback invariant: never scale if server cannot handle ranges
-        if !self.is_resumable_range {
-            let reason = "Single stream fallback enforced (server non-resumable)".to_string();
-            self.status_reason = reason.clone();
-            return AdaptiveDecision::FallbackSingleStream { reason };
-        }
-
         let secs = sample_duration.as_secs_f64().max(0.001);
         let instant_bps = (bytes_transferred as f64 / secs) * 8.0;
 
@@ -94,6 +87,13 @@ impl AdaptiveController {
             self.rolling_throughput_bps = instant_bps;
         } else {
             self.rolling_throughput_bps = 0.40 * instant_bps + 0.60 * self.rolling_throughput_bps;
+        }
+
+        // Single stream fallback invariant: never scale if server cannot handle ranges
+        if !self.is_resumable_range {
+            let reason = "Single stream fallback enforced (server non-resumable)".to_string();
+            self.status_reason = reason.clone();
+            return AdaptiveDecision::FallbackSingleStream { reason };
         }
 
         // 1. Critical backoff: HTTP 429 Too Many Requests

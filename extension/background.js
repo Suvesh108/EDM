@@ -7,12 +7,69 @@ let bypassNextDownload = false;
 let latestTasks = [];
 const pendingAcks = /* @__PURE__ */ new Map();
 const popupPorts = /* @__PURE__ */ new Set();
+async function autoDetectAndSetToken() {
+  try {
+    const resp = await fetch("http://127.0.0.1:14370/token", {
+      method: "GET",
+      cache: "no-store"
+    });
+    if (resp.ok) {
+      const data = await resp.json();
+      if (data && data.token && typeof data.token === "string" && data.token.length >= 32) {
+        await chrome.storage.local.set({ edm_ws_token: data.token });
+        console.log("[EDM Extension] Successfully auto-detected token from EDM HTTP handshake!");
+        return data.token;
+      }
+    }
+  } catch (_e) {
+  }
+  try {
+    const resp = await fetch("http://localhost:14370/token", {
+      method: "GET",
+      cache: "no-store"
+    });
+    if (resp.ok) {
+      const data = await resp.json();
+      if (data && data.token && typeof data.token === "string" && data.token.length >= 32) {
+        await chrome.storage.local.set({ edm_ws_token: data.token });
+        console.log("[EDM Extension] Successfully auto-detected token from localhost HTTP handshake!");
+        return data.token;
+      }
+    }
+  } catch (_e) {
+  }
+  try {
+    const nmhToken = await new Promise((resolve) => {
+      chrome.runtime.sendNativeMessage("com.edm.nmh", { type: "get_token" }, (response) => {
+        if (chrome.runtime.lastError || !response) {
+          return resolve(null);
+        }
+        if (response.token && typeof response.token === "string" && response.token.length >= 32) {
+          resolve(response.token);
+        } else {
+          resolve(null);
+        }
+      });
+    });
+    if (nmhToken) {
+      await chrome.storage.local.set({ edm_ws_token: nmhToken });
+      console.log("[EDM Extension] Successfully auto-detected token from Native Messaging Host!");
+      return nmhToken;
+    }
+  } catch (_e) {
+  }
+  return null;
+}
 async function getToken() {
   const store = await chrome.storage.local.get("edm_ws_token");
-  if (store && store.edm_ws_token && typeof store.edm_ws_token === "string" && store.edm_ws_token.trim().length >= 32) {
+  if (store && store.edm_ws_token && typeof store.edm_ws_token === "string" && store.edm_ws_token.trim().length >= 32 && !store.edm_ws_token.startsWith("ed0000000000")) {
     return store.edm_ws_token.trim();
   }
-  return "ed00000000000000000000000000000000000000000000000000000000000000";
+  const detected = await autoDetectAndSetToken();
+  if (detected) {
+    return detected;
+  }
+  return store && store.edm_ws_token || "ed00000000000000000000000000000000000000000000000000000000000000";
 }
 function notifyPopupPorts() {
   const msg = {
@@ -181,83 +238,113 @@ chrome.runtime.onConnect.addListener((port) => {
     });
   }
 });
-chrome.downloads.onCreated.addListener(async (item) => {
-  const store = await chrome.storage.local.get("edm_interception_enabled");
-  if (store && store.edm_interception_enabled === false) {
-    return;
-  }
-  if (bypassNextDownload) {
-    bypassNextDownload = false;
-    return;
-  }
-  const url = item.finalUrl || item.url;
-  if (!url || !url.startsWith("http://") && !url.startsWith("https://")) {
-    return;
-  }
-  try {
-    await chrome.downloads.pause(item.id);
-  } catch (err) {
-    console.warn("[EDM Extension] Could not pause browser download:", err);
-  }
-  let cookies = [];
-  try {
-    const rawCookies = await chrome.cookies.getAll({ url });
-    cookies = rawCookies.map((c) => ({
-      name: c.name,
-      value: c.value,
-      domain: c.domain,
-      path: c.path
-    }));
-  } catch (e) {
-    console.warn("[EDM Extension] Cookie retrieval:", e);
-  }
-  const referrer = item.referrer || "";
-  const userAgent = navigator.userAgent;
-  let filename = item.filename ? item.filename.split(/[\\/]/).pop() : void 0;
-  if (!filename || filename === "download" || filename === "download.bin" || !filename.includes(".")) {
-    try {
-      const u = new URL(url);
-      const last = u.pathname.split("/").pop();
-      if (last && last.includes(".")) {
-        filename = decodeURIComponent(last);
+const handledDownloadIds = /* @__PURE__ */ new Set();
+chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
+  let suggested = false;
+  const safeSuggest = (options) => {
+    if (!suggested) {
+      suggested = true;
+      try {
+        if (options && options.filename) {
+          suggest(options);
+        } else {
+          suggest();
+        }
+      } catch (err) {
+        console.warn("[EDM Extension] suggest invocation:", err);
       }
-    } catch {
     }
+  };
+  if (handledDownloadIds.has(item.id)) {
+    safeSuggest();
+    return false;
   }
-  const req_id = crypto.randomUUID();
-  try {
-    const ack = await sendWsCreateTask(
-      {
-        type: "create_task",
-        req_id,
-        url,
-        cookies,
-        referrer,
-        user_agent: userAgent,
-        filename
-      },
-      3e3
-    );
-    if (ack && ack.ok) {
-      try {
-        await chrome.downloads.cancel(item.id);
-        await chrome.downloads.erase({ id: item.id });
-      } catch {
+  (async () => {
+    const store = await chrome.storage.local.get("edm_interception_enabled");
+    if (store && store.edm_interception_enabled === false) {
+      safeSuggest();
+      return;
+    }
+    if (bypassNextDownload) {
+      bypassNextDownload = false;
+      safeSuggest();
+      return;
+    }
+    const url = item.finalUrl || item.url;
+    if (!url || !url.startsWith("http://") && !url.startsWith("https://")) {
+      safeSuggest();
+      return;
+    }
+    handledDownloadIds.add(item.id);
+    if (handledDownloadIds.size > 500) {
+      const first = handledDownloadIds.values().next().value;
+      if (first !== void 0) handledDownloadIds.delete(first);
+    }
+    let filename = void 0;
+    if (item.filename) {
+      const base = item.filename.split(/[\\/]/).pop();
+      if (base && base !== "download" && base !== "download.bin") {
+        filename = base;
       }
-    } else {
-      console.warn("[EDM Extension] App rejected task or ack false. Resuming browser download.");
+    }
+    if (!filename || !filename.includes(".")) {
       try {
-        await chrome.downloads.resume(item.id);
+        const u = new URL(url);
+        const last = u.pathname.split("/").pop();
+        if (last && last.includes(".")) {
+          filename = decodeURIComponent(last);
+        }
       } catch {
       }
     }
-  } catch (e) {
-    console.warn("[EDM Extension] create_task failed or timed out. Resuming browser download.", e);
+    let cookies = [];
     try {
-      await chrome.downloads.resume(item.id);
-    } catch {
+      const rawCookies = await chrome.cookies.getAll({ url });
+      cookies = rawCookies.map((c) => ({
+        name: c.name,
+        value: c.value,
+        domain: c.domain,
+        path: c.path
+      }));
+    } catch (e) {
+      console.warn("[EDM Extension] Cookie retrieval failed:", e);
     }
-  }
+    const referrer = item.referrer || "";
+    const userAgent = navigator.userAgent;
+    const req_id = crypto.randomUUID();
+    try {
+      const ack = await sendWsCreateTask(
+        {
+          type: "create_task",
+          req_id,
+          url,
+          cookies,
+          referrer,
+          user_agent: userAgent,
+          filename
+        },
+        3e3
+      );
+      if (ack && ack.ok) {
+        try {
+          await chrome.downloads.cancel(item.id);
+        } catch {
+        }
+        try {
+          await chrome.downloads.erase({ id: item.id });
+        } catch {
+        }
+        safeSuggest();
+      } else {
+        console.warn("[EDM Extension] App rejected task or ack timeout. Calling suggest for normal browser download.");
+        safeSuggest();
+      }
+    } catch (err) {
+      console.warn("[EDM Extension] create_task failed, falling back to browser download:", err);
+      safeSuggest();
+    }
+  })();
+  return true;
 });
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.action === "bypass_next") {
@@ -341,6 +428,53 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         sendResponse({ ok: false, error: e?.message || "Failed to initiate WebSocket test" });
       }
     }
+    return true;
+  }
+  if (msg.action === "auto_detect_token") {
+    autoDetectAndSetToken().then((token) => {
+      if (token) {
+        if (socket) {
+          socket.close();
+        }
+        connectWebSocket();
+        sendResponse({ ok: true, token });
+      } else {
+        sendResponse({
+          ok: false,
+          error: "Could not auto-detect token from EDM Desktop. Please ensure EDM Desktop application is running."
+        });
+      }
+    });
+    return true;
+  }
+  if (msg.action === "check_update") {
+    try {
+      chrome.runtime.requestUpdateCheck((status, details) => {
+        if (chrome.runtime.lastError) {
+          sendResponse({ ok: false, error: chrome.runtime.lastError.message });
+        } else {
+          sendResponse({
+            ok: true,
+            status,
+            // "throttled" | "no_update" | "update_available"
+            version: details?.version || "0.0.1"
+          });
+        }
+      });
+    } catch (err) {
+      sendResponse({ ok: false, error: err?.message || "Update check failed" });
+    }
+    return true;
+  }
+  if (msg.action === "reload_extension") {
+    sendResponse({ ok: true });
+    setTimeout(() => {
+      try {
+        chrome.runtime.reload();
+      } catch (e) {
+        console.warn("[EDM Extension] reload error:", e);
+      }
+    }, 150);
     return true;
   }
 });

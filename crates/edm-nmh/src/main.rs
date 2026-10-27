@@ -24,8 +24,30 @@ fn open_store() -> Store {
     Store::open(&path).unwrap_or_else(|_| Store::open_in_memory().unwrap())
 }
 
+fn get_ws_token() -> String {
+    let config_dir = match env::var("APPDATA") {
+        Ok(dir) => PathBuf::from(dir).join("EDM").join("config"),
+        Err(_) => match env::var("LOCALAPPDATA") {
+            Ok(dir) => PathBuf::from(dir).join("EDM").join("config"),
+            Err(_) => env::temp_dir().join("EDM").join("config"),
+        },
+    };
+    let token_file = config_dir.join("token.txt");
+    if let Ok(content) = fs::read_to_string(&token_file) {
+        let trimmed = content.trim().to_string();
+        if trimmed.len() >= 32 {
+            return trimmed;
+        }
+    }
+    "ed00000000000000000000000000000000000000000000000000000000000000".to_string()
+}
+
 fn handle_message(msg: ExtensionMessage, store: &Arc<Mutex<Store>>) -> AppReply {
     match msg {
+        ExtensionMessage::GetToken => AppReply::Token {
+            token: get_ws_token(),
+        },
+
         ExtensionMessage::Ping => AppReply::Pong,
 
         ExtensionMessage::Hello { .. } => AppReply::Settings {

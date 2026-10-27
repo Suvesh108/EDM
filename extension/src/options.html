@@ -254,6 +254,7 @@
       </div>
       <div class="input-group">
         <input type="text" id="inputToken" placeholder="Paste 64-character token here" autocomplete="off" spellcheck="false">
+        <button id="btnAutoDetect" class="btn btn-secondary" title="Automatically fetch token from running EDM Desktop app">Auto-Detect</button>
         <button id="btnSave" class="btn">Save</button>
       </div>
       <div id="saveFeedback" class="feedback-msg"></div>
@@ -275,6 +276,19 @@
       <div class="section-desc" style="margin-top: 6px;">
         Tip: Hold <kbd style="background:#1e293b; padding:2px 5px; border-radius:4px; font-size:10px;">Shift</kbd> or <kbd style="background:#1e293b; padding:2px 5px; border-radius:4px; font-size:10px;">Alt</kbd> while clicking a link to bypass EDM and download directly in the browser.
       </div>
+    </div>
+
+    <!-- Extension Updates & Hot Reload -->
+    <div class="section">
+      <div class="section-title">Extension Updates &amp; Hot Reload</div>
+      <div class="section-desc">
+        Directly check for newer extension builds or hot reload the extension worker after editing source code.
+      </div>
+      <div style="display: flex; gap: 8px;">
+        <button id="btnCheckUpdate" class="btn btn-secondary">Check for Updates</button>
+        <button id="btnReloadExt" class="btn btn-secondary">Reload Extension</button>
+      </div>
+      <div id="updateFeedback" class="feedback-msg"></div>
     </div>
   </div>
 

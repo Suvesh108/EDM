@@ -69,8 +69,40 @@ impl AdaptiveEngine {
         .map_err(|e| format!("Probe failed: {}", e))?;
 
         let total_size = probe.size_total;
-        let filename = probe.filename.unwrap_or(task.filename);
         let is_resumable = probe.resumable && total_size.is_some() && total_size.unwrap() > 0;
+
+        info!(
+            "Task {}: Probed URL '{}' -> Final URL: '{}' | Status: {} | Range Support: {} | Total Size: {:?} | Content-Type: {:?} | Headers: {:?}",
+            task.id,
+            task.url,
+            probe.final_url,
+            probe.status_code,
+            if probe.resumable { "bytes" } else { "none" },
+            total_size,
+            probe.content_type,
+            probe.response_headers
+        );
+
+        // Prefer explicit non-generic filename from extension/task, otherwise probe filename, then fallback
+        let is_task_name_valid = !task.filename.trim().is_empty()
+            && task.filename != "download"
+            && task.filename != "download.bin";
+
+        let candidate_filename = if is_task_name_valid {
+            task.filename.clone()
+        } else if let Some(ref pf) = probe.filename {
+            pf.clone()
+        } else {
+            task.filename.clone()
+        };
+
+        let sanitized = crate::sanitizer::Sanitizer::sanitize_filename(&candidate_filename);
+        let resolved_path =
+            crate::sanitizer::Sanitizer::resolve_duplicate(&task.save_dir, &sanitized);
+        let filename = resolved_path
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or(sanitized);
 
         // 1. Prepare disk writer with NTFS sparse allocation
         let writer = FileWriter::new(&task.save_dir, &filename, total_size)
@@ -91,8 +123,8 @@ impl AdaptiveEngine {
             etag: probe.etag.clone(),
             last_modified: probe.last_modified.clone(),
             content_type: probe.content_type.clone(),
-            referer: None,
-            user_agent: None,
+            referer: task.referer.clone(),
+            user_agent: task.user_agent.clone(),
             connections: if is_resumable {
                 task.config.initial_connections
             } else {
@@ -318,10 +350,14 @@ impl AdaptiveEngine {
                             0.0
                         };
 
+                        let effective_rate_bytes = (controller.rolling_throughput_bps() / 8).max(instant_rate);
                         let eta = if let Some(tot) = total_size {
                             let rem = tot.saturating_sub(total_downloaded);
-                            let rate = controller.rolling_throughput_bps() / 8;
-                            rem.checked_div(rate)
+                            if effective_rate_bytes > 0 {
+                                rem.checked_div(effective_rate_bytes)
+                            } else {
+                                None
+                            }
                         } else {
                             None
                         };
@@ -332,7 +368,11 @@ impl AdaptiveEngine {
                             downloaded_bytes: total_downloaded,
                             progress_pct: progress,
                             instant_throughput_bps: instant_rate * 8,
-                            rolling_throughput_bps: controller.rolling_throughput_bps(),
+                            rolling_throughput_bps: if controller.rolling_throughput_bps() > 0 {
+                                controller.rolling_throughput_bps()
+                            } else {
+                                instant_rate * 8
+                            },
                             active_connections: scheduler.active_count(),
                             max_allowed_connections: task.config.max_connections,
                             mode: controller.mode(),

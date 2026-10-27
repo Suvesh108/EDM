@@ -257,6 +257,12 @@ fn execute_download(
             .unwrap_or_else(|_| std::env::temp_dir())
     });
 
+    let resolved_path = edm_core::sanitizer::Sanitizer::resolve_duplicate(&save_path, &clean_name);
+    let final_clean_name = resolved_path
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or(clean_name);
+
     let mut config = AdaptiveConfig::default();
     if let Some(conns) = max_connections {
         config.max_connections = conns;
@@ -272,7 +278,7 @@ fn execute_download(
 
     state.tasks.lock().unwrap().insert(id_str.clone(), handle);
 
-    let ext = clean_name
+    let ext = final_clean_name
         .split('.')
         .next_back()
         .unwrap_or("")
@@ -298,7 +304,7 @@ fn execute_download(
         id,
         url: url.clone(),
         final_url: None,
-        filename: clean_name.clone(),
+        filename: final_clean_name.clone(),
         save_dir: save_path.to_string_lossy().to_string(),
         category: category.into(),
         state: DownloadState::Downloading,
@@ -317,7 +323,7 @@ fn execute_download(
 
     let ws_mgr = state.ws_manager.clone();
     let ws_id = id_str.clone();
-    let ws_filename = clean_name.clone();
+    let ws_filename = final_clean_name.clone();
     let ws_savedir = save_path.clone();
     let ws_total = effective_size;
     state.rt_handle.spawn(async move {
@@ -335,7 +341,7 @@ fn execute_download(
     let task = AdaptiveDownloadTask {
         id,
         url,
-        filename: clean_name,
+        filename: final_clean_name,
         save_dir: save_path,
         config,
         limiter: None,
@@ -362,8 +368,18 @@ fn execute_download(
             let _ = store_cb.update_download_progress(id, telem.downloaded_bytes);
             let ws_mgr = ws_mgr_tick.clone();
             let id_c = ws_id_tick.clone();
+            let speed_bytes =
+                (telem.rolling_throughput_bps / 8).max(telem.instant_throughput_bps / 8);
             tokio::spawn(async move {
-                ws_mgr.update_task_progress(&id_c, telem.downloaded_bytes, telem.total_bytes, telem.rolling_throughput_bps, "downloading").await;
+                ws_mgr
+                    .update_task_progress(
+                        &id_c,
+                        telem.downloaded_bytes,
+                        telem.total_bytes,
+                        speed_bytes,
+                        "downloading",
+                    )
+                    .await;
             });
         });
         let client = Client::builder()
@@ -373,26 +389,47 @@ fn execute_download(
             .build()
             .unwrap_or_default();
         let result = edm_core::PackExecutor::execute(task, engine, client, Some(cb)).await;
-        let final_state = match result {
-            Ok(_) => DownloadState::Completed,
-            Err(e) if e.to_string().contains("cancelled") => DownloadState::Paused,
-            Err(_) => DownloadState::Failed,
+        let (final_state, error_msg) = match result {
+            Ok(_) => (DownloadState::Completed, None),
+            Err(ref e) if e.contains("cancelled") => (DownloadState::Paused, None),
+            Err(ref e) if e.contains("403") => {
+                (DownloadState::Failed, Some("HTTP 403 Forbidden"))
+            }
+            Err(ref e) if e.contains("429") => {
+                (DownloadState::Failed, Some("HTTP 429 Rate Limited"))
+            }
+            Err(ref e) if e.contains("stalled") => {
+                (DownloadState::Failed, Some("Connection Stalled"))
+            }
+            Err(ref e) => (DownloadState::Failed, Some(e.as_str())),
         };
-        let _ = store_clone.update_download_state(id, final_state, None);
+        let _ = store_clone.update_download_state(id, final_state, error_msg);
 
         let final_status_str = match &final_state {
-            DownloadState::Completed => "completed",
-            DownloadState::Paused => "paused",
-            _ => "failed",
+            DownloadState::Completed => "completed".to_string(),
+            DownloadState::Paused => "paused".to_string(),
+            _ => format!("failed: {}", error_msg.unwrap_or("error")),
         };
         let ws_mgr_fin = ws_mgr_cb.clone();
         let ws_id_fin = ws_id_cb.clone();
         let (final_done, final_total) = match store_clone.list_all_downloads() {
-            Ok(records) => records.into_iter().find(|d| d.id == id).map(|d| (d.size_done, d.size_total)).unwrap_or((0, effective_size)),
+            Ok(records) => records
+                .into_iter()
+                .find(|d| d.id == id)
+                .map(|d| (d.size_done, d.size_total))
+                .unwrap_or((0, effective_size)),
             Err(_) => (0, effective_size),
         };
         tokio::spawn(async move {
-            ws_mgr_fin.update_task_progress(&ws_id_fin, final_done, final_total, 0, final_status_str).await;
+            ws_mgr_fin
+                .update_task_progress(
+                    &ws_id_fin,
+                    final_done,
+                    final_total,
+                    0,
+                    &final_status_str,
+                )
+                .await;
         });
     });
 

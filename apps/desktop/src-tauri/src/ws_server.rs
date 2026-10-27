@@ -312,12 +312,90 @@ pub async fn start_ws_server_on(addr: &str, manager: Arc<WsManager>) -> Result<S
         while let Ok((stream, peer_addr)) = listener.accept().await {
             let mgr = srv_mgr.clone();
             tokio::spawn(async move {
-                handle_ws_connection(stream, peer_addr, mgr).await;
+                let mut peek_buf = [0u8; 1024];
+                let peek_len = stream.peek(&mut peek_buf).await.unwrap_or(0);
+                let peek_str = String::from_utf8_lossy(&peek_buf[..peek_len]);
+
+                if peek_str.starts_with("GET /token") || peek_str.starts_with("OPTIONS /token") {
+                    handle_http_token_request(stream, peer_addr, &peek_str, mgr).await;
+                } else {
+                    handle_ws_connection(stream, peer_addr, mgr).await;
+                }
             });
         }
     });
 
     Ok(local_addr)
+}
+
+async fn handle_http_token_request(
+    mut stream: TcpStream,
+    peer_addr: SocketAddr,
+    request_str: &str,
+    manager: Arc<WsManager>,
+) {
+    use tokio::io::AsyncWriteExt;
+
+    let mut origin: Option<String> = None;
+    for line in request_str.lines() {
+        if line.to_ascii_lowercase().starts_with("origin:") {
+            origin = Some(line[7..].trim().trim_end_matches('/').to_string());
+            break;
+        }
+    }
+
+    // Security origin validation:
+    // 1. If Origin header is present:
+    //    Allow chrome-extension://, moz-extension://, and local loopback (127.0.0.1 / localhost).
+    //    Reject external web pages (http:// or https:// from non-loopback hosts).
+    // 2. If Origin header is absent:
+    //    Allow (direct background worker or local IPC callers).
+    let is_forbidden = if let Some(ref o) = origin {
+        let lower = o.to_ascii_lowercase();
+        if lower.starts_with("http://") || lower.starts_with("https://") {
+            !lower.starts_with("http://127.0.0.1") && !lower.starts_with("http://localhost")
+        } else {
+            !lower.starts_with("chrome-extension://") && !lower.starts_with("moz-extension://")
+        }
+    } else {
+        false
+    };
+
+    let ac_origin = origin.as_deref().unwrap_or("*");
+
+    if request_str.starts_with("OPTIONS") {
+        let resp = format!(
+            "HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: {}\r\nAccess-Control-Allow-Methods: GET, OPTIONS\r\nAccess-Control-Allow-Headers: *\r\nAccess-Control-Max-Age: 86400\r\nConnection: close\r\n\r\n",
+            if !is_forbidden { ac_origin } else { "null" }
+        );
+        let _ = stream.write_all(resp.as_bytes()).await;
+        return;
+    }
+
+    if is_forbidden {
+        warn!(
+            "Forbidden origin '{}' on HTTP /token request from {}",
+            origin.unwrap_or_default(),
+            peer_addr
+        );
+        let resp = "HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nForbidden Origin";
+        let _ = stream.write_all(resp.as_bytes()).await;
+        return;
+    }
+
+    let body = serde_json::json!({
+        "token": manager.get_token(),
+        "extension_id": manager.allowed_extension_id
+    })
+    .to_string();
+
+    let resp = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        ac_origin,
+        body
+    );
+    let _ = stream.write_all(resp.as_bytes()).await;
 }
 
 async fn handle_ws_connection(stream: TcpStream, peer_addr: SocketAddr, manager: Arc<WsManager>) {

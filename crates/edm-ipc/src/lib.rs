@@ -92,11 +92,15 @@ pub enum ExtensionMessage {
     RemoveDownloadHistory {
         id: Uuid,
     },
+    GetToken,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AppReply {
+    Token {
+        token: String,
+    },
     Accepted {
         id: Uuid,
     },

@@ -205,6 +205,20 @@ impl AdaptiveWorker {
 
             let status = resp.status();
 
+            // Handle HTTP 403 Forbidden immediately
+            if status == reqwest::StatusCode::FORBIDDEN {
+                let err_msg = "HTTP 403 Forbidden (Access Denied or Session Expired)".to_string();
+                warn!("Worker {} encountered 403: {}", self.idx, err_msg);
+                self.set_status(WorkerStatus::Failed);
+                let _ = event_tx
+                    .send(AdaptiveWorkerEvent::Failed {
+                        idx: self.idx,
+                        reason: err_msg,
+                    })
+                    .await;
+                return;
+            }
+
             // Handle HTTP 429 Too Many Requests
             if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
                 let retry_after = resp
@@ -221,10 +235,22 @@ impl AdaptiveWorker {
                     })
                     .await;
 
-                let wait_duration = retry_after.unwrap_or_else(|| Duration::from_secs(3));
-                tokio::time::sleep(wait_duration).await;
                 retries += 1;
                 self.retry_count.store(retries, Ordering::Relaxed);
+                if retries >= max_retries {
+                    let err_msg = "HTTP 429 Too Many Requests (Rate Limited by Host)".to_string();
+                    self.set_status(WorkerStatus::Failed);
+                    let _ = event_tx
+                        .send(AdaptiveWorkerEvent::Failed {
+                            idx: self.idx,
+                            reason: err_msg,
+                        })
+                        .await;
+                    return;
+                }
+
+                let wait_duration = retry_after.unwrap_or_else(|| Duration::from_secs(3));
+                tokio::time::sleep(wait_duration).await;
                 continue;
             }
 
@@ -232,6 +258,17 @@ impl AdaptiveWorker {
                 warn!("Worker {} received HTTP status {}", self.idx, status);
                 retries += 1;
                 self.retry_count.store(retries, Ordering::Relaxed);
+                if retries >= max_retries {
+                    let err_msg = format!("HTTP Error Status {}", status);
+                    self.set_status(WorkerStatus::Failed);
+                    let _ = event_tx
+                        .send(AdaptiveWorkerEvent::Failed {
+                            idx: self.idx,
+                            reason: err_msg,
+                        })
+                        .await;
+                    return;
+                }
                 tokio::time::sleep(Duration::from_millis(500 * (1 << retries.min(4)))).await;
                 continue;
             }

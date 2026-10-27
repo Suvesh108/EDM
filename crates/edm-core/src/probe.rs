@@ -24,6 +24,10 @@ pub struct ProbeResult {
     pub resumable: bool,
     pub etag: Option<String>,
     pub last_modified: Option<String>,
+    #[serde(default)]
+    pub status_code: u16,
+    #[serde(default)]
+    pub response_headers: std::collections::HashMap<String, String>,
 }
 
 pub struct Probe;
@@ -80,6 +84,13 @@ impl Probe {
         let status = resp.status();
         let final_url = resp.url().to_string();
         let headers = resp.headers();
+
+        let mut header_map = std::collections::HashMap::new();
+        for (k, v) in headers {
+            if let Ok(v_str) = v.to_str() {
+                header_map.insert(k.as_str().to_string(), v_str.to_string());
+            }
+        }
 
         let etag = headers
             .get(reqwest::header::ETAG)
@@ -170,6 +181,8 @@ impl Probe {
             resumable,
             etag,
             last_modified,
+            status_code: status.as_u16(),
+            response_headers: header_map,
         })
     }
 

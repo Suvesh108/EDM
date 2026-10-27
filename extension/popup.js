@@ -13,7 +13,8 @@ function formatSpeed(bytesPerSec) {
   return formatBytes(bytesPerSec) + "/s";
 }
 function formatEta(remainingBytes, speedBps) {
-  if (speedBps <= 0 || remainingBytes <= 0) return "Calculating...";
+  if (remainingBytes <= 0) return "Finishing...";
+  if (speedBps <= 0) return "Connecting...";
   const secs = Math.ceil(remainingBytes / speedBps);
   if (secs < 60) return `${secs}s remaining`;
   const mins = Math.floor(secs / 60);
@@ -44,10 +45,10 @@ class PopupController {
     __publicField(this, "newUrlInput", "");
     __publicField(this, "newFileNameInput", "");
     __publicField(this, "downloads", []);
-    __publicField(this, "resources", []);
-    __publicField(this, "images", []);
     __publicField(this, "connectionState", "connecting");
     __publicField(this, "latencyMs", 0);
+    __publicField(this, "token", "");
+    __publicField(this, "interceptionEnabled", true);
     __publicField(this, "auditLogs", ["Popup initialized"]);
     __publicField(this, "pollInterval", null);
     __publicField(this, "refreshRateMs", 500);
@@ -58,7 +59,6 @@ class PopupController {
     this.bindHeaderNav();
     this.connectPort();
     await this.loadSettings();
-    await this.sniffPageContent();
     this.render();
   }
   connectPort() {
@@ -109,12 +109,29 @@ class PopupController {
     }
   }
   async loadSettings() {
-    const data = await chrome.storage.local.get(["edm_refresh_rate", "edm_theme"]);
+    const data = await chrome.storage.local.get([
+      "edm_refresh_rate",
+      "edm_theme",
+      "edm_ws_token",
+      "edm_interception_enabled"
+    ]);
     if (data.edm_refresh_rate) {
       this.refreshRateMs = parseInt(data.edm_refresh_rate, 10);
     }
     if (data.edm_theme) {
       document.documentElement.setAttribute("data-theme", data.edm_theme);
+    }
+    this.interceptionEnabled = data.edm_interception_enabled !== false;
+    if (data.edm_ws_token && data.edm_ws_token.length >= 32 && !data.edm_ws_token.startsWith("ed0000000000")) {
+      this.token = data.edm_ws_token;
+    } else {
+      chrome.runtime.sendMessage({ action: "auto_detect_token" }, (resp) => {
+        if (resp && resp.ok && resp.token) {
+          this.token = resp.token;
+          const input = document.getElementById("popupWsTokenInput");
+          if (input) input.value = resp.token;
+        }
+      });
     }
   }
   bindHeaderNav() {
@@ -136,9 +153,12 @@ class PopupController {
     const text = document.getElementById("connectionText");
     if (!pill || !dot || !text) return;
     pill.style.cursor = "pointer";
-    pill.title = "Click to configure WebSocket connection / token";
+    pill.title = "Click to configure connection & settings";
     pill.onclick = () => {
-      chrome.runtime.openOptionsPage();
+      this.activeTab = "settings";
+      document.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("active"));
+      document.querySelector('[data-tab="settings"]')?.classList.add("active");
+      this.render();
     };
     dot.className = "status-dot";
     switch (this.connectionState) {
@@ -160,53 +180,15 @@ class PopupController {
         break;
     }
   }
-  async refreshDownloads() {
-  }
-  async sniffPageContent() {
-    try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!tab?.id) return;
-      chrome.tabs.sendMessage(tab.id, { action: "get_page_resources" }, (res) => {
-        if (chrome.runtime.lastError || !res) return;
-        this.resources = res.resources || [];
-        const badge = document.getElementById("resourcesBadge");
-        if (badge) badge.innerText = String(this.resources.length);
-        if (this.activeTab === "resources") this.render();
-      });
-      chrome.tabs.sendMessage(tab.id, { action: "get_page_images" }, (res) => {
-        if (chrome.runtime.lastError || !res) return;
-        this.images = res.images || [];
-        const badge = document.getElementById("imagesBadge");
-        if (badge) badge.innerText = String(this.images.length);
-        if (this.activeTab === "images") this.render();
-      });
-    } catch {
-    }
-  }
   render() {
     const app = document.getElementById("app");
     if (!app) return;
-    switch (this.activeTab) {
-      case "tasks":
-        app.innerHTML = this.renderTasksTab();
-        this.attachTasksEvents();
-        break;
-      case "resources":
-        app.innerHTML = this.renderResourcesTab();
-        this.attachResourcesEvents();
-        break;
-      case "images":
-        app.innerHTML = this.renderImagesTab();
-        this.attachImagesEvents();
-        break;
-      case "advanced":
-        app.innerHTML = this.renderAdvancedTab();
-        this.attachAdvancedEvents();
-        break;
-      case "settings":
-        app.innerHTML = this.renderSettingsTab();
-        this.attachSettingsEvents();
-        break;
+    if (this.activeTab === "tasks") {
+      app.innerHTML = this.renderTasksTab();
+      this.attachTasksEvents();
+    } else {
+      app.innerHTML = this.renderSettingsTab();
+      this.attachSettingsEvents();
     }
   }
   // ─────────────────────────────────────────────────────────────
@@ -492,239 +474,70 @@ class PopupController {
     });
   }
   // ─────────────────────────────────────────────────────────────
-  // 2. RESOURCES TAB (Active Page Media Sniffer)
-  // ─────────────────────────────────────────────────────────────
-  renderResourcesTab() {
-    if (this.resources.length === 0) {
-      return `
-        <div class="empty-state">
-          <div class="empty-icon">\u{1F50D}</div>
-          <div style="font-weight: 600;">No downloadable media detected</div>
-          <div style="font-size: 11px; max-width: 280px;">EDM sniffs videos, HLS streams, audio and file links on the current tab.</div>
-          <button id="rescanResourcesBtn" class="btn-3d btn-primary" style="margin-top: 8px;">Rescan Page</button>
-        </div>
-      `;
-    }
-    return `
-      <div style="padding: 10px 12px; background: var(--bg-header); border-bottom: 1px solid var(--border-subtle); display:flex; justify-content:space-between; align-items:center;">
-        <span style="font-size: 11px; font-weight: 600;">Detected Media Resources (${this.resources.length})</span>
-        <button id="rescanResourcesBtn" class="btn-3d">\u21BB Rescan</button>
-      </div>
-      <div class="resource-list">
-        ${this.resources.map(
-      (res, idx) => `
-          <div class="resource-card">
-            <div style="min-width: 0; flex: 1;">
-              <div style="display: flex; align-items: center; gap: 6px;">
-                <span class="pro-badge" style="background:#181818; border-color:var(--border-strong); color:var(--text-primary); font-size:9px;">${escapeHtml(res.format)}</span>
-                <span class="file-name" style="font-size:11px;" title="${escapeHtml(res.url)}">${escapeHtml(res.title)}</span>
-              </div>
-              <div class="file-meta" style="margin-top:2px;">${escapeHtml(res.url)}</div>
-            </div>
-            <button class="btn-3d btn-primary act-download-res" data-idx="${idx}" style="shrink:0;">Download</button>
-          </div>
-        `
-    ).join("")}
-      </div>
-    `;
-  }
-  attachResourcesEvents() {
-    const rescanBtn = document.getElementById("rescanResourcesBtn");
-    if (rescanBtn) {
-      rescanBtn.addEventListener("click", () => {
-        this.sniffPageContent();
-        this.render();
-      });
-    }
-    document.querySelectorAll(".act-download-res").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        const idx = parseInt(btn.getAttribute("data-idx") || "0", 10);
-        const res = this.resources[idx];
-        if (res) {
-          await this.sendHost({
-            type: "add_download",
-            url: res.url,
-            filename: `${res.title}.${res.format.toLowerCase()}`,
-            source: "resource_sniffer"
-          });
-          this.activeTab = "tasks";
-          document.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("active"));
-          document.querySelector('[data-tab="tasks"]')?.classList.add("active");
-          await this.refreshDownloads();
-          this.render();
-        }
-      });
-    });
-  }
-  // ─────────────────────────────────────────────────────────────
-  // 3. IMAGES TAB
-  // ─────────────────────────────────────────────────────────────
-  renderImagesTab() {
-    if (this.images.length === 0) {
-      return `
-        <div class="empty-state">
-          <div class="empty-icon">\u{1F5BC}</div>
-          <div style="font-weight: 600;">No images found on page</div>
-          <div style="font-size: 11px;">Navigate to a web page with images to sniff and extract them.</div>
-          <button id="rescanImagesBtn" class="btn-3d btn-primary" style="margin-top: 8px;">Rescan Page</button>
-        </div>
-      `;
-    }
-    return `
-      <div style="padding: 10px 12px; background: var(--bg-header); border-bottom: 1px solid var(--border-subtle); display:flex; justify-content:space-between; align-items:center;">
-        <span style="font-size: 11px; font-weight: 600;">Page Images (${this.images.length})</span>
-        <button id="downloadAllImagesBtn" class="btn-3d btn-primary">Download All (${this.images.length})</button>
-      </div>
-      <div class="images-grid">
-        ${this.images.map(
-      (img, idx) => `
-          <div class="image-tile">
-            <img src="${sanitizeUrl(img.url)}" alt="${escapeHtml(img.alt)}" loading="lazy">
-            <div class="image-tile-overlay">
-              <span style="font-size:9.5px; font-weight:600; color:#fff; text-shadow:0 1px 2px #000;">${img.width}\xD7${img.height}</span>
-              <button class="btn-3d btn-primary act-download-img" data-idx="${idx}" style="margin-top:4px; font-size:10px; padding:2px 6px;">Grab</button>
-            </div>
-          </div>
-        `
-    ).join("")}
-      </div>
-    `;
-  }
-  attachImagesEvents() {
-    const rescanBtn = document.getElementById("rescanImagesBtn");
-    if (rescanBtn) {
-      rescanBtn.addEventListener("click", () => {
-        this.sniffPageContent();
-        this.render();
-      });
-    }
-    const downloadAllBtn = document.getElementById("downloadAllImagesBtn");
-    if (downloadAllBtn) {
-      downloadAllBtn.addEventListener("click", async () => {
-        for (const img of this.images) {
-          await this.sendHost({
-            type: "add_download",
-            url: img.url,
-            filename: img.alt.replace(/[\\/:*?"<>|]/g, "_") + ".jpg",
-            source: "image_sniffer"
-          });
-        }
-        this.activeTab = "tasks";
-        document.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("active"));
-        document.querySelector('[data-tab="tasks"]')?.classList.add("active");
-        await this.refreshDownloads();
-        this.render();
-      });
-    }
-    document.querySelectorAll(".act-download-img").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        const idx = parseInt(btn.getAttribute("data-idx") || "0", 10);
-        const img = this.images[idx];
-        if (img) {
-          await this.sendHost({
-            type: "add_download",
-            url: img.url,
-            filename: img.alt.replace(/[\\/:*?"<>|]/g, "_") + ".jpg",
-            source: "image_sniffer"
-          });
-          this.activeTab = "tasks";
-          document.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("active"));
-          document.querySelector('[data-tab="tasks"]')?.classList.add("active");
-          await this.refreshDownloads();
-          this.render();
-        }
-      });
-    });
-  }
-  // ─────────────────────────────────────────────────────────────
-  // 4. ADVANCED TAB
-  // ─────────────────────────────────────────────────────────────
-  renderAdvancedTab() {
-    return `
-      <div class="advanced-pane">
-        <div class="settings-group">
-          <div class="settings-group-title">Native Messaging Host Diagnostics</div>
-          <div class="setting-row">
-            <div>
-              <div class="setting-label">Host Channel Status</div>
-              <div class="setting-desc">Chromium stdio length-prefixed IPC pipe</div>
-            </div>
-            <span class="pro-badge" style="background:#10B98120; border-color:#10B98150; color:#34D399;">${this.connectionState.toUpperCase()}</span>
-          </div>
-          <div class="setting-row">
-            <div>
-              <div class="setting-label">IPC Round-Trip Latency</div>
-              <div class="setting-desc">Measured ping response time</div>
-            </div>
-            <span style="font-family:monospace; font-weight:600; color:#38BDF8;">${this.latencyMs} ms</span>
-          </div>
-          <div class="setting-row">
-            <div>
-              <div class="setting-label">Host Identifier</div>
-              <div class="setting-desc">Registered Native Messaging Host manifest</div>
-            </div>
-            <span style="font-family:monospace; font-size:10.5px;">com.edm.nmh</span>
-          </div>
-          <div class="setting-row">
-            <div>
-              <div class="setting-label">Fallback HTTP Bridge</div>
-              <div class="setting-desc">Local loopback interface for zero-friction dev</div>
-            </div>
-            <span style="font-family:monospace; font-size:10.5px; color:#34D399;">http://127.0.0.1:8998</span>
-          </div>
-        </div>
-
-        <div class="settings-group">
-          <div class="settings-group-title">Engine Session Telemetry</div>
-          <div class="setting-row">
-            <div>
-              <div class="setting-label">Protocol Version</div>
-              <div class="setting-desc">EDM Desktop v0.0.1 compatibility</div>
-            </div>
-            <span style="font-family:monospace; font-weight:600;">Protocol v1</span>
-          </div>
-          <div class="setting-row">
-            <div>
-              <div class="setting-label">Total Managed Downloads</div>
-              <div class="setting-desc">SQLite persistent database record count</div>
-            </div>
-            <span style="font-family:monospace; font-weight:600;">${this.downloads.length} Items</span>
-          </div>
-          <button id="sendPingBtn" class="btn-3d btn-primary" style="margin-top: 4px;">\u26A1 Send IPC Ping Benchmark</button>
-        </div>
-      </div>
-    `;
-  }
-  attachAdvancedEvents() {
-    const pingBtn = document.getElementById("sendPingBtn");
-    if (pingBtn) {
-      pingBtn.addEventListener("click", async () => {
-        const t0 = performance.now();
-        await this.sendHost({ type: "ping" });
-        this.latencyMs = Math.round(performance.now() - t0);
-        this.render();
-      });
-    }
-  }
-  // ─────────────────────────────────────────────────────────────
-  // 5. SETTINGS TAB
+  // 2. UNIFIED SETTINGS TAB
   // ─────────────────────────────────────────────────────────────
   renderSettingsTab() {
     return `
-      <div class="settings-pane">
+      <div class="settings-pane" style="padding: 12px; display: flex; flex-direction: column; gap: 12px; overflow-y: auto; height: 100%;">
+        <!-- WebSocket Authentication Token Card (matches user design) -->
+        <div class="settings-group" style="padding: 14px; background: #070e1b; border: 1px solid #1a273e; border-radius: 10px;">
+          <div class="settings-group-title" style="font-size: 13.5px; font-weight: 700; color: #FFFFFF; margin-bottom: 6px;">WebSocket Authentication Token</div>
+          <div class="setting-desc" style="font-size: 11px; color: #8fa0be; line-height: 1.5; margin-bottom: 12px;">
+            Copy this token from the EDM Desktop app: Settings &rarr; Network &amp; Browser Integration &rarr; Extension WebSocket Authentication Token.
+          </div>
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <input type="text" id="popupWsTokenInput" value="${escapeHtml(this.token || "")}" placeholder="Paste 64-character token here" style="flex: 1; height: 38px; background: #040914; border: 1px solid #1a2a44; border-radius: 8px; color: #FFFFFF; padding: 0 12px; font-family: monospace; font-size: 11.5px; outline: none;" spellcheck="false" autocomplete="off" />
+            <button id="popupBtnAutoDetectToken" class="btn-3d" style="height: 38px; padding: 0 10px; font-size: 11px; white-space: nowrap;" title="Auto-detect token from EDM Desktop app">Auto-Detect</button>
+            <button id="popupBtnSaveToken" class="btn-3d btn-primary" style="height: 38px; padding: 0 16px; font-size: 12px; font-weight: 600; white-space: nowrap; background: #2563EB;">Save</button>
+          </div>
+          <div id="popupTokenFeedback" style="font-size: 11px; margin-top: 8px; min-height: 16px;"></div>
+        </div>
+
+        <!-- Extension Updates & Hot Reload Card -->
+        <div class="settings-group" style="padding: 14px; background: #070e1b; border: 1px solid #1a273e; border-radius: 10px;">
+          <div class="settings-group-title" style="font-size: 13.5px; font-weight: 700; color: #FFFFFF; margin-bottom: 6px;">Extension Updates &amp; Hot Reload</div>
+          <div class="setting-desc" style="font-size: 11px; color: #8fa0be; line-height: 1.5; margin-bottom: 12px;">
+            Directly check for newer extension builds or hot reload the extension worker after updating source files.
+          </div>
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <button id="popupBtnCheckUpdate" class="btn-3d" style="height: 34px; padding: 0 12px; font-size: 11px;">Check for Updates</button>
+            <button id="popupBtnReloadExt" class="btn-3d btn-primary" style="height: 34px; padding: 0 12px; font-size: 11px; background: #2563EB;">Reload Extension</button>
+          </div>
+          <div id="popupUpdateFeedback" style="font-size: 11px; margin-top: 8px; min-height: 16px;"></div>
+        </div>
+
+        <!-- Download Interception Toggle -->
+        <div class="settings-group" style="padding: 14px; background: #070e1b; border: 1px solid #1a273e; border-radius: 10px;">
+          <div class="settings-group-title" style="font-size: 13.5px; font-weight: 700; color: #FFFFFF; margin-bottom: 6px;">Download Interception</div>
+          <div class="setting-row" style="display: flex; justify-content: space-between; align-items: center;">
+            <div>
+              <div class="setting-label" style="font-size: 12px; font-weight: 600;">Automatic Interception</div>
+              <div class="setting-desc" style="font-size: 11px; color: #8fa0be;">Route browser downloads to EDM accelerator</div>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="popupInterceptionToggle" ${this.interceptionEnabled ? "checked" : ""}>
+              <span class="slider"></span>
+            </label>
+          </div>
+          <div style="font-size: 10.5px; color: #718096; margin-top: 8px; line-height: 1.4;">
+            Tip: Hold <kbd style="background:#1e293b; padding:1px 4px; border-radius:3px; font-size:10px;">Shift</kbd> or <kbd style="background:#1e293b; padding:1px 4px; border-radius:3px; font-size:10px;">Alt</kbd> while clicking a link to bypass EDM and download via browser.
+          </div>
+        </div>
+
+        <!-- Desktop Connection & Bridge -->
         <div class="settings-group">
-          <div class="settings-group-title">Desktop Connection & Bridge</div>
+          <div class="settings-group-title">Desktop Connection &amp; Bridge</div>
           <div class="setting-row">
             <div>
-              <div class="setting-label">Desktop Connection</div>
-              <div class="setting-desc">Connected to EDM core engine</div>
+              <div class="setting-label">Connection Status</div>
+              <div class="setting-desc">Live WebSocket link on 127.0.0.1:14370</div>
             </div>
             <button id="testConnBtn" class="btn-3d">Test Connection</button>
           </div>
           <div class="setting-row">
             <div>
               <div class="setting-label">Auto-Reconnect</div>
-              <div class="setting-desc">Automatically retry host connection</div>
+              <div class="setting-desc">Automatically retry connection on drop</div>
             </div>
             <label class="switch">
               <input type="checkbox" id="autoReconnectToggle" checked>
@@ -733,18 +546,19 @@ class PopupController {
           </div>
         </div>
 
+        <!-- Interface & Appearance -->
         <div class="settings-group">
-          <div class="settings-group-title">Interface & Appearance</div>
+          <div class="settings-group-title">Interface &amp; Appearance</div>
           <div class="setting-row">
             <div>
               <div class="setting-label">Telemetry Refresh Rate</div>
               <div class="setting-desc">Live progress update frequency</div>
             </div>
             <select id="rateSelect">
-              <option value="250">250 ms (Real-time)</option>
-              <option value="500" selected>500 ms (Standard)</option>
-              <option value="1000">1000 ms (Relaxed)</option>
-              <option value="2000">2000 ms (Battery Saver)</option>
+              <option value="250" ${this.refreshRateMs === 250 ? "selected" : ""}>250 ms (Real-time)</option>
+              <option value="500" ${this.refreshRateMs === 500 ? "selected" : ""}>500 ms (Standard)</option>
+              <option value="1000" ${this.refreshRateMs === 1e3 ? "selected" : ""}>1000 ms (Relaxed)</option>
+              <option value="2000" ${this.refreshRateMs === 2e3 ? "selected" : ""}>2000 ms (Battery Saver)</option>
             </select>
           </div>
           <div class="setting-row">
@@ -759,6 +573,7 @@ class PopupController {
           </div>
         </div>
 
+        <!-- Browser Notifications -->
         <div class="settings-group">
           <div class="settings-group-title">Browser Notifications</div>
           <div class="setting-row">
@@ -782,26 +597,172 @@ class PopupController {
             </label>
           </div>
         </div>
+
+        <!-- Host Diagnostics -->
+        <div class="settings-group">
+          <div class="settings-group-title">Diagnostics &amp; Host Telemetry</div>
+          <div class="setting-row">
+            <div>
+              <div class="setting-label">Host Channel Status</div>
+              <div class="setting-desc">Chromium Native Messaging pipe</div>
+            </div>
+            <span class="pro-badge" style="background:#10B98120; border-color:#10B98150; color:#34D399;">${this.connectionState.toUpperCase()}</span>
+          </div>
+          <div class="setting-row">
+            <div>
+              <div class="setting-label">IPC Round-Trip Latency</div>
+              <div class="setting-desc">Measured ping response time</div>
+            </div>
+            <span style="font-family:monospace; font-weight:600; color:#38BDF8;">${this.latencyMs} ms</span>
+          </div>
+          <div class="setting-row">
+            <div>
+              <div class="setting-label">Host Identifier</div>
+              <div class="setting-desc">Native Messaging Host ID</div>
+            </div>
+            <span style="font-family:monospace; font-size:10.5px;">com.edm.nmh</span>
+          </div>
+          <div class="setting-row">
+            <div>
+              <div class="setting-label">Local WebSocket Bridge</div>
+              <div class="setting-desc">Direct high-speed telemetry link</div>
+            </div>
+            <span style="font-family:monospace; font-size:10.5px; color:#34D399;">ws://127.0.0.1:14370</span>
+          </div>
+        </div>
       </div>
     `;
   }
   attachSettingsEvents() {
+    const tokenInput = document.getElementById("popupWsTokenInput");
+    const btnSave = document.getElementById("popupBtnSaveToken");
+    const btnAutoDetect = document.getElementById("popupBtnAutoDetectToken");
+    const tokenFeedback = document.getElementById("popupTokenFeedback");
+    const btnCheckUpdate = document.getElementById("popupBtnCheckUpdate");
+    const btnReloadExt = document.getElementById("popupBtnReloadExt");
+    const updateFeedback = document.getElementById("popupUpdateFeedback");
+    const toggleInterception = document.getElementById("popupInterceptionToggle");
+    if (toggleInterception) {
+      toggleInterception.addEventListener("change", async () => {
+        this.interceptionEnabled = toggleInterception.checked;
+        await chrome.storage.local.set({ edm_interception_enabled: this.interceptionEnabled });
+      });
+    }
+    if (btnSave && tokenInput) {
+      btnSave.addEventListener("click", () => {
+        const token = tokenInput.value.trim();
+        if (token.length < 32) {
+          if (tokenFeedback) {
+            tokenFeedback.style.color = "#EF4444";
+            tokenFeedback.textContent = "Token must be at least 32 characters long.";
+          }
+          return;
+        }
+        chrome.runtime.sendMessage({ action: "update_token", token }, (resp) => {
+          if (resp && resp.ok) {
+            this.token = token;
+            if (tokenFeedback) {
+              tokenFeedback.style.color = "#10B981";
+              tokenFeedback.textContent = "Token saved! Reconnecting...";
+              setTimeout(() => {
+                if (tokenFeedback) tokenFeedback.textContent = "";
+              }, 2500);
+            }
+          } else if (tokenFeedback) {
+            tokenFeedback.style.color = "#EF4444";
+            tokenFeedback.textContent = "Failed to update token.";
+          }
+        });
+      });
+    }
+    if (btnAutoDetect && tokenInput) {
+      btnAutoDetect.addEventListener("click", () => {
+        if (tokenFeedback) {
+          tokenFeedback.style.color = "#8FA0BE";
+          tokenFeedback.textContent = "Auto-detecting token from EDM Desktop app...";
+        }
+        btnAutoDetect.disabled = true;
+        chrome.runtime.sendMessage({ action: "auto_detect_token" }, (resp) => {
+          btnAutoDetect.disabled = false;
+          if (resp && resp.ok && resp.token) {
+            this.token = resp.token;
+            tokenInput.value = resp.token;
+            if (tokenFeedback) {
+              tokenFeedback.style.color = "#10B981";
+              tokenFeedback.textContent = "Token auto-detected and synchronized successfully!";
+              setTimeout(() => {
+                if (tokenFeedback) tokenFeedback.textContent = "";
+              }, 3e3);
+            }
+          } else if (tokenFeedback) {
+            tokenFeedback.style.color = "#EF4444";
+            tokenFeedback.textContent = resp?.error || "Could not auto-detect token. Ensure EDM Desktop is running.";
+          }
+        });
+      });
+    }
+    if (btnCheckUpdate) {
+      btnCheckUpdate.addEventListener("click", () => {
+        if (updateFeedback) {
+          updateFeedback.style.color = "#8FA0BE";
+          updateFeedback.textContent = "Checking for extension updates...";
+        }
+        btnCheckUpdate.disabled = true;
+        chrome.runtime.sendMessage({ action: "check_update" }, (resp) => {
+          btnCheckUpdate.disabled = false;
+          if (resp && resp.ok) {
+            if (resp.status === "update_available") {
+              if (updateFeedback) {
+                updateFeedback.style.color = "#10B981";
+                updateFeedback.textContent = `Update available (v${resp.version})! Click Reload Extension to apply.`;
+              }
+            } else if (resp.status === "throttled") {
+              if (updateFeedback) {
+                updateFeedback.style.color = "#8FA0BE";
+                updateFeedback.textContent = "Update checks are throttled by Chrome. Try again shortly.";
+              }
+            } else if (updateFeedback) {
+              updateFeedback.style.color = "#10B981";
+              updateFeedback.textContent = "Extension is up to date (v0.0.1).";
+            }
+          } else if (updateFeedback) {
+            updateFeedback.style.color = "#EF4444";
+            updateFeedback.textContent = resp?.error || "Update check failed.";
+          }
+        });
+      });
+    }
+    if (btnReloadExt) {
+      btnReloadExt.addEventListener("click", () => {
+        if (updateFeedback) {
+          updateFeedback.style.color = "#10B981";
+          updateFeedback.textContent = "Reloading extension runtime...";
+        }
+        chrome.runtime.sendMessage({ action: "reload_extension" });
+        setTimeout(() => {
+          window.location.reload();
+        }, 300);
+      });
+    }
     const testBtn = document.getElementById("testConnBtn");
     if (testBtn) {
-      testBtn.addEventListener("click", async () => {
+      testBtn.addEventListener("click", () => {
         testBtn.innerText = "Pinging...";
-        const resp = await this.sendHost({ type: "ping" });
-        if (resp && resp.type === "pong") {
-          testBtn.innerText = `Connected (${this.latencyMs}ms)`;
-          testBtn.style.color = "#34D399";
-        } else {
-          testBtn.innerText = "Failed";
-          testBtn.style.color = "#F87171";
-        }
-        setTimeout(() => {
-          testBtn.innerText = "Test Connection";
-          testBtn.style.color = "";
-        }, 2e3);
+        const token = this.token || tokenInput?.value.trim();
+        chrome.runtime.sendMessage({ action: "test_token", token }, (resp) => {
+          if (resp && resp.ok) {
+            testBtn.innerText = `Connected (${resp.latency}ms)`;
+            testBtn.style.color = "#34D399";
+            this.latencyMs = resp.latency;
+          } else {
+            testBtn.innerText = "Failed";
+            testBtn.style.color = "#F87171";
+          }
+          setTimeout(() => {
+            testBtn.innerText = "Test Connection";
+            testBtn.style.color = "";
+          }, 2e3);
+        });
       });
     }
     const rateSelect = document.getElementById("rateSelect");

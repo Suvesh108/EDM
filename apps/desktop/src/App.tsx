@@ -255,7 +255,13 @@ export default function App() {
             sizeTotal: total,
             sizeDone: done,
             speed: itemState === "downloading" ? formatSpeed(speedVal) : "0 B/s",
-            eta: itemState === "completed" ? "Finished" : (etaSec > 0 ? formatEta(etaSec) : "Calculating..."),
+            eta: itemState === "completed"
+              ? "Finished"
+              : itemState === "failed"
+              ? "Download Failed"
+              : itemState === "paused"
+              ? "Paused"
+              : (etaSec > 0 ? formatEta(etaSec) : (speedVal > 0 ? "Estimating..." : "Connecting...")),
             connections: b.connections || existing?.connections || 8,
             state: itemState,
             progress: itemState === "completed" ? 100 : pct,
