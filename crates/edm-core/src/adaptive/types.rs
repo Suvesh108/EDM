@@ -42,15 +42,15 @@ pub struct AdaptiveConfig {
 impl Default for AdaptiveConfig {
     fn default() -> Self {
         Self {
-            initial_connections: 2,
+            initial_connections: 8,
             min_connections: 1,
             max_connections: 16,
             max_connections_per_host: 8,
             min_chunk_size: 1024 * 1024, // 1 MiB
-            sample_interval: Duration::from_millis(500),
+            sample_interval: Duration::from_millis(250),
             cooldown_duration: Duration::from_secs(3),
             throughput_gain_threshold: 0.08,
-            throughput_drop_threshold: -0.05,
+            throughput_drop_threshold: -0.15, // -15% hysteresis against transient jitter
             stall_timeout: Duration::from_secs(8),
             max_worker_retries: 5,
         }

@@ -23,6 +23,134 @@ pub enum BencodeValue {
 pub struct BitTorrentPack;
 
 impl BitTorrentPack {
+    /// Download a torrent or magnet URI in-process using librqbit
+    pub async fn download_in_process(
+        task: crate::adaptive::AdaptiveDownloadTask,
+        telemetry_cb: Option<crate::adaptive::TelemetryCallback>,
+    ) -> Result<std::path::PathBuf, String> {
+        use crate::adaptive::{AccelerationMode, AdaptiveTelemetry, WorkerStatus, WorkerTelemetry};
+        use chrono::Utc;
+        use librqbit::{AddTorrent, AddTorrentOptions, Session, SessionOptions};
+        use std::sync::atomic::Ordering;
+        use std::time::Duration;
+
+        let session_opts = SessionOptions {
+            ..Default::default()
+        };
+
+        let session = Session::new_with_opts(task.save_dir.clone(), session_opts)
+            .await
+            .map_err(|e| format!("Failed to create BitTorrent session: {}", e))?;
+
+        let add_torrent = if task.url.starts_with("magnet:")
+            || task.url.starts_with("http://")
+            || task.url.starts_with("https://")
+        {
+            AddTorrent::from_url(&task.url)
+        } else {
+            let path = std::path::PathBuf::from(&task.url);
+            if path.exists() {
+                let data = tokio::fs::read(&path)
+                    .await
+                    .map_err(|e| format!("Failed to read .torrent file: {}", e))?;
+                AddTorrent::from_bytes(data)
+            } else {
+                AddTorrent::from_url(&task.url)
+            }
+        };
+
+        let add_opts = AddTorrentOptions {
+            paused: false,
+            ..Default::default()
+        };
+
+        let handle_res = session
+            .add_torrent(add_torrent, Some(add_opts))
+            .await
+            .map_err(|e| format!("Failed to add torrent: {}", e))?;
+
+        let handle = handle_res
+            .into_handle()
+            .ok_or_else(|| "Torrent already exists or could not create handle".to_string())?;
+
+        let mut ticker = tokio::time::interval(Duration::from_millis(500));
+        let mut target_file_path = task.save_dir.join(&task.filename);
+
+        loop {
+            ticker.tick().await;
+
+            if task.cancelled.load(Ordering::Relaxed) {
+                let _ = session.stop().await;
+                return Err("BitTorrent download cancelled by user".to_string());
+            }
+
+            let stats = handle.stats();
+            let total_bytes = if stats.total_bytes > 0 {
+                Some(stats.total_bytes)
+            } else {
+                None
+            };
+            let progress_pct = if stats.total_bytes > 0 {
+                (stats.progress_bytes as f64 / stats.total_bytes as f64) * 100.0
+            } else {
+                0.0
+            };
+
+            let (live_conns, dl_speed) = if let Some(ref live) = stats.live {
+                (
+                    live.snapshot.peer_stats.live,
+                    live.download_speed.as_bytes(),
+                )
+            } else {
+                (1, 0)
+            };
+
+            if let Some(name) = handle.name() {
+                target_file_path = task.save_dir.join(name);
+            }
+
+            if let Some(ref cb) = telemetry_cb {
+                cb(AdaptiveTelemetry {
+                    download_id: task.id.to_string(),
+                    total_bytes,
+                    downloaded_bytes: stats.progress_bytes,
+                    progress_pct,
+                    instant_throughput_bps: dl_speed * 8,
+                    rolling_throughput_bps: dl_speed * 8,
+                    active_connections: live_conns.max(1),
+                    max_allowed_connections: 64,
+                    mode: AccelerationMode::Stable,
+                    eta_seconds: if dl_speed > 0 && stats.total_bytes > stats.progress_bytes {
+                        Some((stats.total_bytes - stats.progress_bytes) / dl_speed)
+                    } else {
+                        None
+                    },
+                    decision_reason: format!("BitTorrent Swarm ({} peers)", live_conns),
+                    workers: vec![WorkerTelemetry {
+                        idx: 0,
+                        start: 0,
+                        end: stats.total_bytes,
+                        pos: stats.progress_bytes,
+                        bytes_downloaded: stats.progress_bytes,
+                        speed_bps: dl_speed * 8,
+                        status: if stats.finished {
+                            WorkerStatus::Completed
+                        } else {
+                            WorkerStatus::Downloading
+                        },
+                        retry_count: 0,
+                    }],
+                    updated_at: Utc::now(),
+                });
+            }
+
+            if stats.finished || progress_pct >= 100.0 {
+                break;
+            }
+        }
+
+        Ok(target_file_path)
+    }
     /// Parse a magnet URI into info hash, display name, and tracker list
     pub fn parse_magnet(uri: &str) -> Result<MagnetInfo, String> {
         let trimmed = uri.trim();

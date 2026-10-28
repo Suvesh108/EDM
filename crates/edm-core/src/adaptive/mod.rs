@@ -1,5 +1,6 @@
 pub mod controller;
 pub mod engine;
+pub mod pipeline_writer;
 pub mod scheduler;
 pub mod types;
 pub mod worker;

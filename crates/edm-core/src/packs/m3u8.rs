@@ -6,15 +6,18 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HlsSegment {
     pub index: usize,
+    pub sequence_number: u64,
     pub duration_secs: f64,
     pub url: String,
     pub key_url: Option<String>,
+    pub iv: Option<[u8; 16]>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HlsMediaPlaylist {
     pub target_duration: u32,
     pub media_sequence: u64,
+    pub init_segment_url: Option<String>,
     pub segments: Vec<HlsSegment>,
     pub total_duration_secs: f64,
     pub is_endlist: bool,
@@ -108,6 +111,8 @@ impl M3u8Pack {
         let mut segments = Vec::new();
         let mut total_duration = 0.0;
         let mut current_key = None;
+        let mut current_iv = None;
+        let mut init_segment_url = None;
 
         let lines: Vec<&str> = content.lines().map(|l| l.trim()).collect();
         let mut current_segment_duration = 0.0;
@@ -121,11 +126,29 @@ impl M3u8Pack {
                 if let Some(val) = line.strip_prefix("#EXT-X-MEDIA-SEQUENCE:") {
                     media_sequence = val.parse::<u64>().unwrap_or(0);
                 }
-            } else if line.starts_with("#EXT-X-KEY:") {
-                // Extract URI="key.bin"
+            } else if line.starts_with("#EXT-X-MAP:") {
+                // Fragmented MP4 init segment: #EXT-X-MAP:URI="init.mp4"
                 if let Some(uri_part) = line.split("URI=\"").nth(1) {
-                    if let Some(key_path) = uri_part.split('"').next() {
-                        current_key = Some(Self::resolve_url(base_url, key_path));
+                    if let Some(init_path) = uri_part.split('"').next() {
+                        init_segment_url = Some(Self::resolve_url(base_url, init_path));
+                    }
+                }
+            } else if line.starts_with("#EXT-X-KEY:") {
+                // Extract METHOD=AES-128, URI="key.bin", IV=0x...
+                if line.contains("METHOD=NONE") {
+                    current_key = None;
+                    current_iv = None;
+                } else {
+                    if let Some(uri_part) = line.split("URI=\"").nth(1) {
+                        if let Some(key_path) = uri_part.split('"').next() {
+                            current_key = Some(Self::resolve_url(base_url, key_path));
+                        }
+                    }
+                    if let Some(iv_part) = line.split("IV=").nth(1) {
+                        let iv_val = iv_part.split([',', ' ', '\r', '\n']).next().unwrap_or("");
+                        current_iv = super::remux::parse_hex_iv(iv_val);
+                    } else {
+                        current_iv = None;
                     }
                 }
             } else if line.starts_with("#EXTINF:") {
@@ -140,12 +163,15 @@ impl M3u8Pack {
             } else if !line.starts_with('#') && !line.is_empty() {
                 let full_url = Self::resolve_url(base_url, line);
                 let idx = segments.len();
+                let seq = media_sequence + idx as u64;
                 total_duration += current_segment_duration;
                 segments.push(HlsSegment {
                     index: idx,
+                    sequence_number: seq,
                     duration_secs: current_segment_duration,
                     url: full_url,
                     key_url: current_key.clone(),
+                    iv: current_iv.or_else(|| Some(super::remux::sequence_to_iv(seq))),
                 });
                 current_segment_duration = 0.0;
             }
@@ -154,6 +180,7 @@ impl M3u8Pack {
         Ok(HlsMediaPlaylist {
             target_duration,
             media_sequence,
+            init_segment_url,
             segments,
             total_duration_secs: total_duration,
             is_endlist,

@@ -11,9 +11,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use tauri::{command, Manager, State};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{command, Manager, State};
 use uuid::Uuid;
 
 mod ws_server;
@@ -92,7 +92,10 @@ fn register_native_messaging_host() {
     let current_dir = current_exe.parent().unwrap_or(&app_dir);
     let nmh_path = current_dir.join("edm-nmh.exe");
     if !nmh_path.exists() {
-        tracing::warn!("edm-nmh.exe not found next to current executable at {}", nmh_path.display());
+        tracing::warn!(
+            "edm-nmh.exe not found next to current executable at {}",
+            nmh_path.display()
+        );
     }
 
     let manifest_path = app_dir.join("com.edm.nmh.json");
@@ -799,7 +802,9 @@ fn spawn_extension_bridge(state: AppState, rt_handle: tokio::runtime::Handle) {
                      AxumState(state): AxumState<AppState>,
                      Json(msg): Json<ExtensionMessage>| async move {
                         // Guard 1: Strict Host enforcement (127.0.0.1:8998 or localhost:8998)
-                        let host_val = headers.get(axum::http::header::HOST).and_then(|h| h.to_str().ok());
+                        let host_val = headers
+                            .get(axum::http::header::HOST)
+                            .and_then(|h| h.to_str().ok());
                         if !ws_server::is_valid_loopback_host(host_val, 8998) {
                             return Err((
                                 StatusCode::FORBIDDEN,
@@ -812,7 +817,7 @@ fn spawn_extension_bridge(state: AppState, rt_handle: tokio::runtime::Handle) {
                             .get(axum::http::header::AUTHORIZATION)
                             .and_then(|a| a.to_str().ok())
                             .or_else(|| headers.get("x-edm-token").and_then(|a| a.to_str().ok()));
-                        
+
                         let token_valid = if let Some(auth) = auth_header {
                             let clean_token = auth.strip_prefix("Bearer ").unwrap_or(auth).trim();
                             state.ws_manager.verify_token_constant_time(clean_token)
@@ -830,7 +835,8 @@ fn spawn_extension_bridge(state: AppState, rt_handle: tokio::runtime::Handle) {
                         // Guard 3: Origin check (only browser extensions or desktop local UI)
                         if let Some(origin) = headers.get(axum::http::header::ORIGIN) {
                             if let Ok(o) = origin.to_str() {
-                                let is_chrome = o.starts_with("chrome-extension://") && o.contains(ws_server::EXTENSION_ID);
+                                let is_chrome = o.starts_with("chrome-extension://")
+                                    && o.contains(ws_server::EXTENSION_ID);
                                 let is_firefox = o.starts_with("moz-extension://");
                                 let is_local = o.starts_with("http://localhost:")
                                     || o.starts_with("http://127.0.0.1:")
@@ -1211,7 +1217,9 @@ fn trigger_graceful_quit(app_handle: tauri::AppHandle, state: AppState) {
     if let Ok(records) = state.store.list_all_downloads() {
         for r in records {
             if r.state == DownloadState::Downloading {
-                let _ = state.store.update_download_state(r.id, DownloadState::Paused, None);
+                let _ = state
+                    .store
+                    .update_download_state(r.id, DownloadState::Paused, None);
             }
         }
     }
@@ -1463,20 +1471,31 @@ fn main() {
     });
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.unminimize();
-                let _ = window.show();
-                let _ = window.set_focus();
-                // If saved window position was moved off-screen, center it
-                if let Ok(pos) = window.outer_position() {
-                    if pos.x < -2000 || pos.y < -2000 || pos.x > 10000 || pos.y > 10000 {
-                        let _ = window.center();
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            // Autostart launches when an instance is already running exit silently
+            let is_autostart = argv.iter().any(|arg| arg == "--autostart");
+            if !is_autostart {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.unminimize();
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                    // If saved window position was moved off-screen, center it
+                    if let Ok(pos) = window.outer_position() {
+                        if pos.x < -2000 || pos.y < -2000 || pos.x > 10000 || pos.y > 10000 {
+                            let _ = window.center();
+                        }
                     }
                 }
             }
         }))
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec!["--autostart"]),
+        ))
         .setup(|app| {
+            let args: Vec<String> = std::env::args().collect();
+            let is_autostart_boot = args.iter().any(|arg| arg == "--autostart");
+
             if let Some(window) = app.get_webview_window("main") {
                 if let Ok(icon) =
                     tauri::image::Image::from_bytes(include_bytes!("../icons/128x128.png"))
@@ -1484,13 +1503,25 @@ fn main() {
                     let _ = window.set_icon(icon);
                 }
                 let _ = window.center();
-                tracing::info!("Main desktop window successfully loaded: {:?}", window.url());
+
+                if is_autostart_boot {
+                    tracing::info!(
+                        "EDM started with --autostart flag; staying hidden in system tray"
+                    );
+                    let _ = window.hide();
+                } else {
+                    tracing::info!(
+                        "Main desktop window successfully loaded: {:?}",
+                        window.url()
+                    );
+                }
             }
 
             // Phase 3: Tray Icon Setup
             let open_i = MenuItem::with_id(app, "open", "Open EDM", true, None::<&str>)?;
             let pause_all_i = MenuItem::with_id(app, "pause_all", "Pause all", true, None::<&str>)?;
-            let resume_all_i = MenuItem::with_id(app, "resume_all", "Resume all", true, None::<&str>)?;
+            let resume_all_i =
+                MenuItem::with_id(app, "resume_all", "Resume all", true, None::<&str>)?;
             let settings_i = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
             let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
 
@@ -1500,69 +1531,68 @@ fn main() {
             )?;
 
             let tray_icon_bytes = include_bytes!("../icons/icon.ico");
-            let icon_img = tauri::image::Image::from_bytes(tray_icon_bytes)
-                .map_err(|e| tauri::Error::Anyhow(anyhow::anyhow!("Failed to parse icon.ico: {}", e)))?;
+            let icon_img = tauri::image::Image::from_bytes(tray_icon_bytes).map_err(|e| {
+                tauri::Error::Anyhow(anyhow::anyhow!("Failed to parse icon.ico: {}", e))
+            })?;
 
             let tray = TrayIconBuilder::new()
                 .icon(icon_img)
                 .tooltip("EDM — Edge Download Manager")
                 .menu(&tray_menu)
                 .show_menu_on_left_click(false)
-                .on_menu_event(move |app, event| {
-                    match event.id.as_ref() {
-                        "open" => {
-                            if let Some(w) = app.get_webview_window("main") {
-                                let _ = w.unminimize();
-                                let _ = w.show();
-                                let _ = w.set_focus();
-                            }
+                .on_menu_event(move |app, event| match event.id.as_ref() {
+                    "open" => {
+                        if let Some(w) = app.get_webview_window("main") {
+                            let _ = w.unminimize();
+                            let _ = w.show();
+                            let _ = w.set_focus();
                         }
-                        "pause_all" => {
-                            let state = app.state::<AppState>();
-                            let tasks = state.tasks.lock().unwrap();
-                            for handle in tasks.values() {
-                                handle.cancelled.store(true, Ordering::SeqCst);
-                            }
+                    }
+                    "pause_all" => {
+                        let state = app.state::<AppState>();
+                        let tasks = state.tasks.lock().unwrap();
+                        for handle in tasks.values() {
+                            handle.cancelled.store(true, Ordering::SeqCst);
                         }
-                        "resume_all" => {
-                            let state = app.state::<AppState>();
-                            if let Ok(records) = state.store.list_all_downloads() {
-                                for r in records {
-                                    if r.state == DownloadState::Paused {
-                                        let _ = execute_download(
-                                            &state,
-                                            r.id,
-                                            r.url,
-                                            Some(r.filename),
-                                            Some(PathBuf::from(r.save_dir)),
-                                            Some(r.connections),
-                                            r.size_total,
-                                            None,
-                                            r.referer,
-                                            r.user_agent,
-                                        );
-                                        let _ = state.store.update_download_state(
-                                            r.id,
-                                            DownloadState::Downloading,
-                                            None,
-                                        );
-                                    }
+                    }
+                    "resume_all" => {
+                        let state = app.state::<AppState>();
+                        if let Ok(records) = state.store.list_all_downloads() {
+                            for r in records {
+                                if r.state == DownloadState::Paused {
+                                    let _ = execute_download(
+                                        &state,
+                                        r.id,
+                                        r.url,
+                                        Some(r.filename),
+                                        Some(PathBuf::from(r.save_dir)),
+                                        Some(r.connections),
+                                        r.size_total,
+                                        None,
+                                        r.referer,
+                                        r.user_agent,
+                                    );
+                                    let _ = state.store.update_download_state(
+                                        r.id,
+                                        DownloadState::Downloading,
+                                        None,
+                                    );
                                 }
                             }
                         }
-                        "settings" => {
-                            if let Some(w) = app.get_webview_window("main") {
-                                let _ = w.unminimize();
-                                let _ = w.show();
-                                let _ = w.set_focus();
-                            }
-                        }
-                        "quit" => {
-                            let state = app.state::<AppState>();
-                            trigger_graceful_quit(app.clone(), state.inner().clone());
-                        }
-                        _ => {}
                     }
+                    "settings" => {
+                        if let Some(w) = app.get_webview_window("main") {
+                            let _ = w.unminimize();
+                            let _ = w.show();
+                            let _ = w.set_focus();
+                        }
+                    }
+                    "quit" => {
+                        let state = app.state::<AppState>();
+                        trigger_graceful_quit(app.clone(), state.inner().clone());
+                    }
+                    _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
                     if let TrayIconEvent::Click {

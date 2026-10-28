@@ -399,13 +399,7 @@ fn test_single_stream_rolling_throughput_speed_calculation() {
     assert_eq!(controller.rolling_throughput_bps(), 0);
 
     // Feed a sample of 250,000 bytes over 500ms = 500,000 B/s = 4,000,000 bps
-    let decision = controller.evaluate_sample(
-        250_000,
-        Duration::from_millis(500),
-        0,
-        false,
-        None,
-    );
+    let decision = controller.evaluate_sample(250_000, Duration::from_millis(500), 0, false, None);
 
     match decision {
         AdaptiveDecision::FallbackSingleStream { reason } => {
@@ -417,4 +411,3 @@ fn test_single_stream_rolling_throughput_speed_calculation() {
     // Verify throughput is updated and non-zero
     assert_eq!(controller.rolling_throughput_bps(), 4_000_000);
 }
-

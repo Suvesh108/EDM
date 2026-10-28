@@ -1,10 +1,9 @@
 //! yt-dlp Video & Audio Extractor Feature Pack (Native Rust Implementation)
 //! Features: YouTube and supported-site video/audio extraction, format listing, stream metadata
 
+use super::process::configure_hidden_command;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::process::Stdio;
-use tokio::process::Command;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MediaFormat {
@@ -69,16 +68,15 @@ impl YtDlpPack {
         let bin =
             Self::locate_binary().ok_or_else(|| "yt-dlp binary not found on system".to_string())?;
 
-        let output = Command::new(bin)
-            .arg("--dump-json")
-            .arg("--no-playlist")
-            .arg("--skip-download")
-            .arg(url)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
-            .await
-            .map_err(|e| format!("Failed to execute yt-dlp: {}", e))?;
+        let output = configure_hidden_command(
+            bin,
+            ["--dump-json", "--no-playlist", "--skip-download", url],
+        )
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .await
+        .map_err(|e| format!("Failed to execute yt-dlp: {}", e))?;
 
         if !output.status.success() {
             let err_text = String::from_utf8_lossy(&output.stderr);

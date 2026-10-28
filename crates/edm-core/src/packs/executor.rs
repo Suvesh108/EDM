@@ -3,11 +3,9 @@
 
 use super::bittorrent::BitTorrentPack;
 use super::ed2k::Ed2kPack;
-use super::ffmpeg::FfmpegPack;
 use super::ftp::FtpPack;
 use super::huggingface::HuggingFacePack;
 use super::m3u8::M3u8Pack;
-use super::ytdlp::YtDlpPack;
 use super::{FeaturePackId, FeaturePackManager};
 use crate::adaptive::{
     AccelerationMode, AdaptiveDownloadTask, AdaptiveEngine, AdaptiveTelemetry, TelemetryCallback,
@@ -18,8 +16,7 @@ use reqwest::Client;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
-use tokio::process::Command;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 pub struct PackExecutor;
 
@@ -40,7 +37,9 @@ impl PackExecutor {
                 Self::execute_huggingface(task, engine, client, telemetry_cb).await
             }
             FeaturePackId::M3u8Pack => Self::execute_m3u8(task, client, telemetry_cb).await,
-            FeaturePackId::YtDlpPack => Self::execute_ytdlp(task, telemetry_cb).await,
+            FeaturePackId::YtDlpPack => {
+                Self::execute_ytdlp(task, engine, client, telemetry_cb).await
+            }
             FeaturePackId::FtpPack => Self::execute_ftp(task, telemetry_cb).await,
             FeaturePackId::BitTorrentPack => Self::execute_bittorrent(task, telemetry_cb).await,
             FeaturePackId::Ed2kPack => Self::execute_ed2k(task, telemetry_cb).await,
@@ -126,35 +125,124 @@ impl PackExecutor {
         }
 
         let target_file = task.save_dir.join(&task.filename);
-        let temp_ts_file = target_file.with_extension("ts");
-        let mut file = tokio::fs::File::create(&temp_ts_file)
+        let temp_dir = task.save_dir.join(format!(".tmp_{}", task.id));
+        tokio::fs::create_dir_all(&temp_dir)
             .await
-            .map_err(|e| format!("Failed to create stream file: {}", e))?;
+            .map_err(|e| format!("Failed to create segment temp dir: {}", e))?;
+
+        let mut segment_files = Vec::new();
+        let mut key_cache: std::collections::HashMap<String, [u8; 16]> =
+            std::collections::HashMap::new();
+
+        // 1. Download initialization segment if present (#EXT-X-MAP)
+        if let Some(ref init_url) = playlist.init_segment_url {
+            let mut req = client.get(init_url);
+            if let Some(ref ua) = task.user_agent {
+                req = req.header("User-Agent", ua);
+            }
+            if let Some(ref cookies) = task.cookies {
+                req = req.header("Cookie", cookies);
+            }
+            if let Some(ref referer) = task.referer {
+                req = req.header("Referer", referer);
+            }
+
+            let init_resp = req
+                .send()
+                .await
+                .map_err(|e| format!("Init segment download failed: {}", e))?;
+            let init_bytes = init_resp
+                .bytes()
+                .await
+                .map_err(|e| format!("Init segment read error: {}", e))?;
+            let init_path = temp_dir.join("init.mp4");
+            tokio::fs::write(&init_path, init_bytes)
+                .await
+                .map_err(|e| e.to_string())?;
+            segment_files.push(init_path);
+        }
 
         let mut total_downloaded: u64 = 0;
         let start_time = Utc::now();
 
         for (i, seg) in playlist.segments.iter().enumerate() {
             if task.cancelled.load(Ordering::Relaxed) {
+                let _ = tokio::fs::remove_dir_all(&temp_dir).await;
                 return Err("Download cancelled by user".to_string());
             }
 
-            let seg_resp = client
-                .get(&seg.url)
+            let mut req = client.get(&seg.url);
+            if let Some(ref ua) = task.user_agent {
+                req = req.header("User-Agent", ua);
+            }
+            if let Some(ref cookies) = task.cookies {
+                req = req.header("Cookie", cookies);
+            }
+            if let Some(ref referer) = task.referer {
+                req = req.header("Referer", referer);
+            }
+
+            let seg_resp = req
                 .send()
                 .await
                 .map_err(|e| format!("Segment #{} failed: {}", i + 1, e))?;
 
-            let bytes = seg_resp
+            let raw_bytes = seg_resp
                 .bytes()
                 .await
                 .map_err(|e| format!("Segment #{} read error: {}", i + 1, e))?;
 
-            file.write_all(&bytes)
+            // AES-128 Decryption if encrypted
+            let final_bytes = if let Some(ref key_url) = seg.key_url {
+                let key_bytes = if let Some(cached) = key_cache.get(key_url) {
+                    *cached
+                } else {
+                    let mut k_req = client.get(key_url);
+                    if let Some(ref ua) = task.user_agent {
+                        k_req = k_req.header("User-Agent", ua);
+                    }
+                    if let Some(ref cookies) = task.cookies {
+                        k_req = k_req.header("Cookie", cookies);
+                    }
+                    if let Some(ref referer) = task.referer {
+                        k_req = k_req.header("Referer", referer);
+                    }
+                    let k_resp = k_req
+                        .send()
+                        .await
+                        .map_err(|e| format!("Failed to fetch HLS key from {}: {}", key_url, e))?;
+                    let k_data = k_resp
+                        .bytes()
+                        .await
+                        .map_err(|e| format!("Failed to read HLS key: {}", e))?;
+                    if k_data.len() != 16 {
+                        return Err(format!(
+                            "Invalid AES-128 key length {} from {}",
+                            k_data.len(),
+                            key_url
+                        ));
+                    }
+                    let mut arr = [0u8; 16];
+                    arr.copy_from_slice(&k_data);
+                    key_cache.insert(key_url.clone(), arr);
+                    arr
+                };
+
+                let iv = seg
+                    .iv
+                    .unwrap_or_else(|| super::remux::sequence_to_iv(seg.sequence_number));
+                super::remux::decrypt_aes128_segment(&raw_bytes, &key_bytes, &iv)?
+            } else {
+                raw_bytes.to_vec()
+            };
+
+            let seg_file_path = temp_dir.join(format!("seg_{:05}.chunk", i));
+            tokio::fs::write(&seg_file_path, &final_bytes)
                 .await
                 .map_err(|e| format!("Write error on segment #{}: {}", i + 1, e))?;
 
-            total_downloaded += bytes.len() as u64;
+            segment_files.push(seg_file_path);
+            total_downloaded += final_bytes.len() as u64;
 
             if let Some(ref cb) = telemetry_cb {
                 let elapsed = (Utc::now() - start_time).num_seconds().max(1) as u64;
@@ -188,97 +276,54 @@ impl PackExecutor {
             }
         }
 
-        file.flush().await.map_err(|e| e.to_string())?;
-        drop(file);
-
-        let final_path = if FfmpegPack::locate_binary().is_some() {
-            let final_mp4 = target_file.with_extension("mp4");
-            if FfmpegPack::transmux_to_mp4(&temp_ts_file, &final_mp4)
-                .await
-                .is_ok()
-            {
-                let _ = tokio::fs::remove_file(&temp_ts_file).await;
-                final_mp4
-            } else {
-                temp_ts_file
-            }
+        let target_ext = target_file
+            .extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("mp4");
+        let final_path = if target_ext == "ts" {
+            super::remux::NativeRemuxer::remux_segments(&segment_files, &target_file).await?
         } else {
-            temp_ts_file
+            let final_mp4 = target_file.with_extension("mp4");
+            super::remux::NativeRemuxer::remux_segments(&segment_files, &final_mp4).await?
         };
 
+        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
         Ok(final_path)
     }
 
-    /// yt-dlp Pack: Stream video directly with real-time output parsing
+    /// Media Extraction Pipeline: Native In-Process Extractors (YouTube, Vimeo)
+    /// Streams directly with the high-performance Adaptive HTTP Engine
     async fn execute_ytdlp(
         task: AdaptiveDownloadTask,
+        engine: Arc<AdaptiveEngine>,
+        client: Client,
         telemetry_cb: Option<TelemetryCallback>,
     ) -> Result<PathBuf, String> {
-        let bin =
-            YtDlpPack::locate_binary().ok_or_else(|| "yt-dlp binary not installed".to_string())?;
-        let output_template = task.save_dir.join(format!("{}.%(ext)s", task.id));
+        use super::extractors::{SiteExtractor, VimeoExtractor, YouTubeExtractor};
 
-        let mut child = Command::new(bin)
-            .arg("--no-playlist")
-            .arg("--newline")
-            .arg("-o")
-            .arg(&output_template)
-            .arg(&task.url)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .map_err(|e| format!("Failed to spawn yt-dlp: {}", e))?;
+        let yt = YouTubeExtractor;
+        let vimeo = VimeoExtractor;
 
-        if let Some(stdout) = child.stdout.take() {
-            let mut reader = tokio::io::BufReader::new(stdout);
-            let mut line = String::new();
-
-            while reader.read_line(&mut line).await.unwrap_or(0) > 0 {
-                if task.cancelled.load(Ordering::Relaxed) {
-                    let _ = child.kill().await;
-                    return Err("Download cancelled by user".to_string());
-                }
-
-                if line.contains("[download]") && line.contains('%') {
-                    if let Some(pct_str) = line
-                        .split('%')
-                        .next()
-                        .and_then(|s| s.split_whitespace().last())
-                    {
-                        if let Ok(pct) = pct_str.parse::<f64>() {
-                            if let Some(ref cb) = telemetry_cb {
-                                cb(AdaptiveTelemetry {
-                                    download_id: task.id.to_string(),
-                                    total_bytes: None,
-                                    downloaded_bytes: (pct * 1024.0 * 1024.0) as u64,
-                                    progress_pct: pct,
-                                    instant_throughput_bps: 2_500_000,
-                                    rolling_throughput_bps: 2_500_000,
-                                    active_connections: 2,
-                                    max_allowed_connections: 4,
-                                    mode: AccelerationMode::Stable,
-                                    eta_seconds: None,
-                                    decision_reason: "yt-dlp Stream Extraction".into(),
-                                    workers: vec![],
-                                    updated_at: Utc::now(),
-                                });
-                            }
-                        }
-                    }
-                }
-                line.clear();
-            }
-        }
-
-        let status = child.wait().await.map_err(|e| e.to_string())?;
-        if status.success() {
-            Ok(output_template)
+        let extracted = if yt.can_extract(&task.url) {
+            yt.extract(&task.url, &client).await?
+        } else if vimeo.can_extract(&task.url) {
+            vimeo.extract(&task.url, &client).await?
         } else {
-            Err(format!(
-                "yt-dlp process exited with error code: {:?}",
-                status.code()
-            ))
+            return Err("Site not supported by EDM yet".to_string());
+        };
+
+        let stream_url = extracted
+            .best_stream_url
+            .ok_or_else(|| "No streamable format found".to_string())?;
+
+        let mut actual_task = task;
+        actual_task.url = stream_url;
+        if actual_task.filename.is_empty() || actual_task.filename == "download" {
+            let sanitized_title = crate::sanitizer::Sanitizer::sanitize_filename(&extracted.title);
+            actual_task.filename = format!("{}.mp4", sanitized_title);
         }
+
+        engine.download(actual_task, telemetry_cb).await
     }
 
     /// FTP Pack: Async TCP wire connection & file streaming
@@ -392,46 +437,12 @@ impl PackExecutor {
         Ok(target_file)
     }
 
-    /// BitTorrent Pack: Magnet URI resolver & wire stream
+    /// BitTorrent Pack: In-process Torrent and Magnet Swarm Engine via librqbit
     async fn execute_bittorrent(
         task: AdaptiveDownloadTask,
         telemetry_cb: Option<TelemetryCallback>,
     ) -> Result<PathBuf, String> {
-        let magnet = BitTorrentPack::parse_magnet(&task.url)?;
-        let target_file = task.save_dir.join(&task.filename);
-        let mut file = tokio::fs::File::create(&target_file)
-            .await
-            .map_err(|e| format!("Failed to create torrent target file: {}", e))?;
-
-        let metadata = format!(
-            "EDM BitTorrent Task\nHash: {}\nTrackers: {}\n",
-            magnet.info_hash_hex,
-            magnet.trackers.join(", ")
-        );
-        file.write_all(metadata.as_bytes())
-            .await
-            .map_err(|e| e.to_string())?;
-        file.flush().await.map_err(|e| e.to_string())?;
-
-        if let Some(ref cb) = telemetry_cb {
-            cb(AdaptiveTelemetry {
-                download_id: task.id.to_string(),
-                total_bytes: Some(1024),
-                downloaded_bytes: 1024,
-                progress_pct: 100.0,
-                instant_throughput_bps: 1024,
-                rolling_throughput_bps: 1024,
-                active_connections: 1,
-                max_allowed_connections: 16,
-                mode: AccelerationMode::Stable,
-                eta_seconds: Some(0),
-                decision_reason: "BitTorrent Metadata Resolved".into(),
-                workers: vec![],
-                updated_at: Utc::now(),
-            });
-        }
-
-        Ok(target_file)
+        BitTorrentPack::download_in_process(task, telemetry_cb).await
     }
 
     /// eD2k Pack: eD2k link resolver & chunk hash allocation

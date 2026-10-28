@@ -49,13 +49,11 @@ export const SpeedChartInteractive: React.FC<SpeedChartInteractiveProps> = ({
         : dlHistory.slice(-totalPoints);
 
     const paddedUl: number[] =
-      ulHistory.length >= dlHistory.length
-        ? ulHistory.slice(-totalPoints)
-        : paddedDl.map((dlVal, idx) => {
-            const baseAck = Math.floor(dlVal * 0.045);
-            const jitter = Math.floor(Math.sin(idx * 0.5) * 12_000);
-            return Math.max(12_000, baseAck + jitter);
-          });
+      ulHistory.length >= dlHistory.length && ulHistory.some((v) => v > 0)
+        ? (ulHistory.length < totalPoints
+            ? [...Array(totalPoints - ulHistory.length).fill(0), ...ulHistory]
+            : ulHistory.slice(-totalPoints))
+        : Array(totalPoints).fill(0);
 
     return paddedDl.map((dl, idx) => {
       // Progression of time taken: 0s, 10s, 20s... 60s
@@ -77,7 +75,7 @@ export const SpeedChartInteractive: React.FC<SpeedChartInteractiveProps> = ({
     : 0;
 
   const peakDl = Math.max(peakSpeedBps, ...chartData.map((d) => d.download));
-  const peakUl = Math.max(...chartData.map((d) => d.upload), 125_000);
+  const peakUl = Math.max(...chartData.map((d) => d.upload), 0);
   const yDomainMax = Math.max(peakDl * 1.15, 1_048_576);
 
   return (

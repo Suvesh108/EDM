@@ -1,10 +1,9 @@
 //! FFmpeg Media Toolchain Feature Pack (Native Rust Implementation)
 //! Features: Media processing support for compatible workflows, stream copy transmuxing, audio track demuxing
 
+use super::process::configure_hidden_command;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
-use tokio::process::Command;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FfmpegCapability {
@@ -65,10 +64,9 @@ impl FfmpegPack {
         }
 
         let bin = binary_path.clone().unwrap();
-        let output = Command::new(&bin)
-            .arg("-version")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+        let output = configure_hidden_command(&bin, ["-version"])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
             .output()
             .await;
 
@@ -97,20 +95,27 @@ impl FfmpegPack {
         let bin =
             Self::locate_binary().ok_or_else(|| "FFmpeg binary not found on system".to_string())?;
 
-        let status = Command::new(bin)
-            .arg("-y")
-            .arg("-i")
-            .arg(input_path)
-            .arg("-c")
-            .arg("copy")
-            .arg("-bsf:a")
-            .arg("aac_adtstoasc")
-            .arg(output_path)
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .status()
+        let mut child = super::process::spawn_hidden(
+            bin,
+            [
+                "-y",
+                "-i",
+                input_path.to_str().unwrap_or(""),
+                "-c",
+                "copy",
+                "-bsf:a",
+                "aac_adtstoasc",
+                output_path.to_str().unwrap_or(""),
+            ],
+            false,
+            true,
+        )
+        .map_err(|e| format!("Failed to spawn hidden FFmpeg process: {}", e))?;
+
+        let status = child
+            .wait()
             .await
-            .map_err(|e| format!("Failed to spawn FFmpeg process: {}", e))?;
+            .map_err(|e| format!("FFmpeg process wait error: {}", e))?;
 
         if status.success() {
             Ok(())
@@ -127,19 +132,26 @@ impl FfmpegPack {
         let bin =
             Self::locate_binary().ok_or_else(|| "FFmpeg binary not found on system".to_string())?;
 
-        let status = Command::new(bin)
-            .arg("-y")
-            .arg("-i")
-            .arg(input_path)
-            .arg("-vn")
-            .arg("-c:a")
-            .arg("copy")
-            .arg(output_path)
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .status()
+        let mut child = super::process::spawn_hidden(
+            bin,
+            [
+                "-y",
+                "-i",
+                input_path.to_str().unwrap_or(""),
+                "-vn",
+                "-c:a",
+                "copy",
+                output_path.to_str().unwrap_or(""),
+            ],
+            false,
+            true,
+        )
+        .map_err(|e| format!("Failed to spawn hidden FFmpeg process: {}", e))?;
+
+        let status = child
+            .wait()
             .await
-            .map_err(|e| format!("Failed to spawn FFmpeg process: {}", e))?;
+            .map_err(|e| format!("FFmpeg audio process wait error: {}", e))?;
 
         if status.success() {
             Ok(())

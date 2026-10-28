@@ -4,12 +4,16 @@
 pub mod bittorrent;
 pub mod ed2k;
 pub mod executor;
+pub mod extractors;
 pub mod ffmpeg;
 pub mod ftp;
 pub mod github;
 pub mod http;
 pub mod huggingface;
 pub mod m3u8;
+pub mod process;
+pub mod remux;
+pub mod traits;
 pub mod ytdlp;
 
 pub use bittorrent::{BencodeValue, BitTorrentPack, MagnetInfo};
@@ -21,6 +25,8 @@ pub use github::{GithubAsset, GithubPack, GithubRelease};
 pub use http::{HttpPack, HttpProbeInfo};
 pub use huggingface::{GitLfsPointer, HfModelTarget, HuggingFacePack};
 pub use m3u8::{HlsMediaPlaylist, HlsSegment, HlsVariantStream, M3u8Pack};
+pub use process::{configure_hidden_command, spawn_hidden};
+pub use traits::{FeaturePack, PackProbeResult, PackTask};
 pub use ytdlp::{MediaFormat, MediaMetadata, YtDlpPack};
 
 use serde::{Deserialize, Serialize};
@@ -97,81 +103,81 @@ impl FeaturePackManager {
             },
             FeaturePackStatus {
                 id: "bittorrent_pack".to_string(),
-                name: "BitTorrent & Magnet Pack".to_string(),
-                version: "0.9.4 (Native Rust)".to_string(),
+                name: "BitTorrent Swarm Pack".to_string(),
+                version: "9.0.1 (Built-in librqbit)".to_string(),
                 active: true,
                 installed: true,
-                description: "Magnet links, torrents, peers, trackers and seeding".to_string(),
+                description: "Native peer wire, DHT, and magnet swarm engine".to_string(),
                 capabilities: vec![
-                    "Magnet Link Resolver".into(),
-                    "Bencode Decoder".into(),
-                    "Peer Handshake Wire".into(),
-                    "Trackers Parser".into(),
+                    "Magnet Link & .torrent Resolver".into(),
+                    "DHT (Kademlia) & PEX Swarm".into(),
+                    "uTP & TCP Peer Wire".into(),
+                    "Sequential & Selective Fetch".into(),
                 ],
             },
             FeaturePackStatus {
                 id: "ftp_pack".to_string(),
                 name: "FTP / FTPS Protocol Pack".to_string(),
-                version: "1.0.0 (Native Rust)".to_string(),
+                version: "1.0.0 (Built-in Rust)".to_string(),
                 active: true,
                 installed: true,
                 description: "FTP file downloads".to_string(),
                 capabilities: vec![
-                    "PASV & Active Modes".into(),
-                    "Implicit/Explicit FTPS".into(),
-                    "REST Resumption".into(),
+                    "PASV Mode Socket Transfer".into(),
+                    "Anonymous & Authenticated".into(),
+                    "Stream Resumption".into(),
                 ],
             },
             FeaturePackStatus {
                 id: "ed2k_pack".to_string(),
-                name: "eDonkey2000 (eD2k) Pack".to_string(),
-                version: "0.5.2 (Native Rust)".to_string(),
+                name: "eDonkey2000 (eD2k) Pack (Experimental)".to_string(),
+                version: "0.1.0 (Experimental)".to_string(),
                 active: true,
                 installed: true,
-                description: "eD2k/P2P downloads and peer discovery".to_string(),
+                description: "eD2k link parsing and chunk hash verification (Experimental)"
+                    .to_string(),
                 capabilities: vec![
-                    "RFC 1320 MD4 Chunk Hashset".into(),
-                    "Kad DHT Resolver".into(),
-                    "AICH Part Verification".into(),
+                    "eD2k Link Parsing".into(),
+                    "RFC 1320 MD4 Chunk Verification".into(),
                 ],
             },
             FeaturePackStatus {
                 id: "m3u8_pack".to_string(),
                 name: "M3U8 / HLS Stream Pack".to_string(),
-                version: "1.2.0 (Native Rust)".to_string(),
+                version: "2.0.0 (Built-in Rust)".to_string(),
                 active: true,
                 installed: true,
-                description: "HLS playlist and video-stream downloads".to_string(),
+                description: "In-process HLS segment fetching and native MP4 remuxing".to_string(),
                 capabilities: vec![
-                    "Concurrent TS Segment Fetcher".into(),
-                    "AES-128 Key Mapping".into(),
-                    "Master Multi-Bitrate Selector".into(),
+                    "Concurrent TS & fMP4 Fetcher".into(),
+                    "In-Process AES-128 Decryption".into(),
+                    "Zero-FFmpeg Native Remuxing".into(),
                 ],
             },
             FeaturePackStatus {
                 id: "ffmpeg_pack".to_string(),
-                name: "FFmpeg Media Toolchain Pack".to_string(),
-                version: "9.0.2 (Local Engine)".to_string(),
+                name: "Native Media Remux Pack".to_string(),
+                version: "1.0.0 (Built-in Rust)".to_string(),
                 active: true,
-                installed: FfmpegPack::locate_binary().is_some(),
-                description: "Media processing support for compatible workflows".to_string(),
+                installed: true,
+                description: "In-process container synthesis and stream concatenation".to_string(),
                 capabilities: vec![
-                    "Stream Copy Transmuxing".into(),
-                    "Audio Track Demuxing".into(),
-                    "Hardware Acceleration".into(),
+                    "In-Process Stream Remuxing".into(),
+                    "Container Stitching (MP4/MKV)".into(),
                 ],
             },
             FeaturePackStatus {
                 id: "yt_dlp_pack".to_string(),
-                name: "yt-dlp Video & Audio Extractor Pack".to_string(),
-                version: "2026.10.21 (Local Engine)".to_string(),
+                name: "Media Site Extractor Pack".to_string(),
+                version: "1.0.0 (Built-in Rust)".to_string(),
                 active: true,
-                installed: YtDlpPack::locate_binary().is_some(),
-                description: "YouTube and supported-site video/audio extraction".to_string(),
+                installed: true,
+                description: "In-process video & audio extraction for YouTube and Vimeo"
+                    .to_string(),
                 capabilities: vec![
-                    "1,000+ Site Extractors".into(),
-                    "4K/8K HDR Stream Resolution".into(),
-                    "Subtitles & Thumbnails".into(),
+                    "YouTube InnerTube In-Process".into(),
+                    "Vimeo Config In-Process".into(),
+                    "Adaptive Multi-Stream Merge".into(),
                 ],
             },
             FeaturePackStatus {
@@ -414,6 +420,26 @@ mod tests {
             "https://example.com/hls/segment0.ts"
         );
         assert!(playlist.is_endlist);
+    }
+
+    #[test]
+    fn test_native_hls_aes128_decryption() {
+        use aes::cipher::{block_padding::Pkcs7, BlockModeEncrypt, KeyIvInit};
+        type Aes128CbcEnc = cbc::Encryptor<aes::Aes128>;
+
+        let key: [u8; 16] = [0x11; 16];
+        let iv: [u8; 16] = [0x22; 16];
+        let plaintext = b"EDM Native AES-128 Decrypted Video Transport Stream Segment Chunk Data!";
+
+        let mut buf = [0u8; 96];
+        buf[..plaintext.len()].copy_from_slice(plaintext);
+        let encryptor = Aes128CbcEnc::new(&key.into(), &iv.into());
+        let ciphertext = encryptor
+            .encrypt_padded::<Pkcs7>(&mut buf, plaintext.len())
+            .unwrap();
+
+        let decrypted = remux::decrypt_aes128_segment(ciphertext, &key, &iv).unwrap();
+        assert_eq!(decrypted, plaintext);
     }
 
     #[test]

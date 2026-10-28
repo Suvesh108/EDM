@@ -1,13 +1,13 @@
 use edm_store::Store;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
-use subtle::ConstantTimeEq;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+use subtle::ConstantTimeEq;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, mpsc, RwLock};
 use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, Response};
@@ -252,11 +252,7 @@ pub fn get_or_create_token() -> String {
         }
     }
 
-    let raw_token = format!(
-        "{}{}",
-        Uuid::new_v4().simple(),
-        Uuid::new_v4().simple()
-    );
+    let raw_token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
     let _ = std::fs::write(&token_file, &raw_token);
     raw_token
 }
@@ -280,7 +276,10 @@ pub async fn start_ws_server(manager: Arc<WsManager>) {
     let addr = WS_BIND_ADDR;
     let listener = match TcpListener::bind(addr).await {
         Ok(l) => {
-            info!("EDM WebSocket & HTTP Token Server listening on ws://{}", addr);
+            info!(
+                "EDM WebSocket & HTTP Token Server listening on ws://{}",
+                addr
+            );
             l
         }
         Err(e) => {
@@ -315,7 +314,10 @@ pub async fn start_ws_server(manager: Arc<WsManager>) {
         while let Ok((stream, peer_addr)) = listener.accept().await {
             let active = ACTIVE_CONNECTIONS.load(Ordering::Relaxed);
             if active >= MAX_CONCURRENT_CONNECTIONS {
-                warn!("Rejecting connection from {}: max concurrent connections reached ({})", peer_addr, active);
+                warn!(
+                    "Rejecting connection from {}: max concurrent connections reached ({})",
+                    peer_addr, active
+                );
                 drop(stream);
                 continue;
             }
@@ -416,7 +418,10 @@ async fn handle_http_token_request(
     // Guard 1: DNS rebinding defense on Host header
     let port = stream.local_addr().map(|a| a.port()).unwrap_or(WS_PORT);
     if !is_valid_loopback_host(host.as_deref(), port) {
-        warn!("Invalid Host header on /token from {}: {:?}", peer_addr, host);
+        warn!(
+            "Invalid Host header on /token from {}: {:?}",
+            peer_addr, host
+        );
         let resp = "HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nInvalid Host Header";
         let _ = stream.write_all(resp.as_bytes()).await;
         return;
@@ -459,8 +464,7 @@ async fn handle_http_token_request(
     if is_forbidden {
         warn!(
             "Forbidden origin '{:?}' on HTTP /token request from {}",
-            origin,
-            peer_addr
+            origin, peer_addr
         );
         let resp = "HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nForbidden Origin";
         let _ = stream.write_all(resp.as_bytes()).await;
@@ -758,7 +762,9 @@ pub fn secure_open_folder(save_dir: &std::path::Path, filename: &str) -> Result<
         let arg = format!("/select,\"{}\"", target.display());
         cmd.raw_arg(&arg);
         cmd.creation_flags(CREATE_NO_WINDOW);
-        let _ = cmd.spawn().map_err(|e| format!("Failed to highlight file: {}", e))?;
+        let _ = cmd
+            .spawn()
+            .map_err(|e| format!("Failed to highlight file: {}", e))?;
         Ok(())
     }
 
@@ -887,36 +893,63 @@ mod tests {
         // 1. Untrusted External Web Origin -> 403
         let mut stream = TcpStream::connect(addr).await.unwrap();
         stream
-            .write_all(format!("GET /token HTTP/1.1\r\nHost: {}\r\nOrigin: https://attacker.com\r\n\r\n", addr).as_bytes())
+            .write_all(
+                format!(
+                    "GET /token HTTP/1.1\r\nHost: {}\r\nOrigin: https://attacker.com\r\n\r\n",
+                    addr
+                )
+                .as_bytes(),
+            )
             .await
             .unwrap();
         let mut resp = [0u8; 512];
         let n = stream.read(&mut resp).await.unwrap();
         let resp_str = String::from_utf8_lossy(&resp[..n]);
-        assert!(resp_str.contains("403 Forbidden"), "External web origin must be 403");
+        assert!(
+            resp_str.contains("403 Forbidden"),
+            "External web origin must be 403"
+        );
 
         // 2. Loopback HTTP Origin -> 403 (Token endpoint requires extension origin only)
         let mut stream = TcpStream::connect(addr).await.unwrap();
         stream
-            .write_all(format!("GET /token HTTP/1.1\r\nHost: {}\r\nOrigin: http://127.0.0.1:3000\r\n\r\n", addr).as_bytes())
+            .write_all(
+                format!(
+                    "GET /token HTTP/1.1\r\nHost: {}\r\nOrigin: http://127.0.0.1:3000\r\n\r\n",
+                    addr
+                )
+                .as_bytes(),
+            )
             .await
             .unwrap();
         let mut resp = [0u8; 512];
         let n = stream.read(&mut resp).await.unwrap();
         let resp_str = String::from_utf8_lossy(&resp[..n]);
-        assert!(resp_str.contains("403 Forbidden"), "Loopback origin must be rejected on /token");
+        assert!(
+            resp_str.contains("403 Forbidden"),
+            "Loopback origin must be rejected on /token"
+        );
 
         // 3. Valid Chrome Extension Origin -> 200 OK
         let mut stream = TcpStream::connect(addr).await.unwrap();
         let valid_origin = format!("chrome-extension://{}", EXTENSION_ID);
         stream
-            .write_all(format!("GET /token HTTP/1.1\r\nHost: {}\r\nOrigin: {}\r\n\r\n", addr, valid_origin).as_bytes())
+            .write_all(
+                format!(
+                    "GET /token HTTP/1.1\r\nHost: {}\r\nOrigin: {}\r\n\r\n",
+                    addr, valid_origin
+                )
+                .as_bytes(),
+            )
             .await
             .unwrap();
         let mut resp = [0u8; 1024];
         let n = stream.read(&mut resp).await.unwrap();
         let resp_str = String::from_utf8_lossy(&resp[..n]);
-        assert!(resp_str.contains("200 OK"), "Valid extension origin must succeed");
+        assert!(
+            resp_str.contains("200 OK"),
+            "Valid extension origin must succeed"
+        );
         assert!(resp_str.contains(token));
 
         // 4. Missing Origin (direct loopback / extension service worker fetch) -> 200 OK
@@ -928,7 +961,10 @@ mod tests {
         let mut resp = [0u8; 1024];
         let n = stream.read(&mut resp).await.unwrap();
         let resp_str = String::from_utf8_lossy(&resp[..n]);
-        assert!(resp_str.contains("200 OK"), "Direct loopback without origin must succeed");
+        assert!(
+            resp_str.contains("200 OK"),
+            "Direct loopback without origin must succeed"
+        );
         assert!(resp_str.contains(token));
     }
 
@@ -966,7 +1002,10 @@ mod tests {
         let next_msg = ws_stream.next().await;
         match next_msg {
             None | Some(Ok(Message::Close(_))) | Some(Err(_)) => {}
-            other => panic!("Expected connection close on oversized message, got {:?}", other),
+            other => panic!(
+                "Expected connection close on oversized message, got {:?}",
+                other
+            ),
         }
     }
 

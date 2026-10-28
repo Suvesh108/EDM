@@ -204,6 +204,7 @@ impl WorkScheduler {
     }
 
     pub fn get_telemetry_snapshot(&self) -> Vec<WorkerTelemetry> {
+        let now_ms = chrono::Utc::now().timestamp_millis() as u64;
         self.workers
             .iter()
             .map(|w| {
@@ -211,13 +212,25 @@ impl WorkScheduler {
                 let end = w.end.load(Ordering::Relaxed);
                 let pos = w.pos.load(Ordering::Relaxed);
                 let bytes = w.bytes_downloaded.load(Ordering::Relaxed);
+
+                // Compute real instantaneous worker speed
+                let last_b = w.last_snapshot_bytes.swap(bytes, Ordering::Relaxed);
+                let last_t = w.last_snapshot_ms.swap(now_ms, Ordering::Relaxed);
+                let delta_b = bytes.saturating_sub(last_b);
+                let delta_t = now_ms.saturating_sub(last_t);
+
+                let speed_bps = (delta_b * 1000 * 8)
+                    .checked_div(delta_t)
+                    .unwrap_or_else(|| w.speed_bps.load(Ordering::Relaxed));
+                w.speed_bps.store(speed_bps, Ordering::Relaxed);
+
                 WorkerTelemetry {
                     idx: w.idx,
                     start,
                     end,
                     pos,
                     bytes_downloaded: bytes,
-                    speed_bps: 0,
+                    speed_bps,
                     status: w.get_status(),
                     retry_count: w.retry_count.load(Ordering::Relaxed),
                 }

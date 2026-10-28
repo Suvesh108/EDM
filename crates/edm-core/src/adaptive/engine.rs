@@ -42,8 +42,9 @@ pub struct AdaptiveEngine {
 impl AdaptiveEngine {
     pub fn new(store: Store) -> Self {
         let client = Client::builder()
-            .pool_max_idle_per_host(32)
-            .tcp_keepalive(Some(Duration::from_secs(15)))
+            .http1_only()
+            .pool_max_idle_per_host(64)
+            .tcp_keepalive(Some(Duration::from_secs(30)))
             .redirect(reqwest::redirect::Policy::limited(15))
             .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36 Edg/135.0.0.0")
             .build()
