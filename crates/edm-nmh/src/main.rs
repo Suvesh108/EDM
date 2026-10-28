@@ -90,7 +90,7 @@ fn handle_message(msg: ExtensionMessage, store: &Arc<Mutex<Store>>) -> AppReply 
 
             AppReply::Status {
                 status: "connected".into(),
-                version: "0.0.1".into(),
+                version: env!("CARGO_PKG_VERSION").into(),
                 protocol: PROTOCOL_VERSION,
                 active_downloads: active,
                 queued_tasks: queued,

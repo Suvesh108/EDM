@@ -406,3 +406,111 @@ export async function tauriGetExtensionToken(): Promise<string> {
   }
   return "ed00000000000000000000000000000000000000000000000000000000000000";
 }
+
+export interface UpdateCheckResult {
+  current_version: string;
+  latest_version: string;
+  update_available: boolean;
+  release_name: string;
+  release_notes: string;
+  published_at: string;
+  download_url: string | null;
+  asset_name: string | null;
+  asset_size: number;
+  html_url: string;
+}
+
+export interface OtaProgress {
+  downloaded_bytes: number;
+  total_bytes: number;
+  percent: number;
+  status: "downloading" | "ready" | string;
+}
+
+export async function tauriGetAppVersion(): Promise<string> {
+  if (isTauri()) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return await invoke<string>("get_app_version");
+    } catch (err) {
+      console.warn("Tauri get_app_version failed:", err);
+    }
+  }
+  return "0.0.3";
+}
+
+function isSemverNewer(latest: string, current: string): boolean {
+  const pLatest = latest.split(".").map((n) => parseInt(n, 10));
+  const pCurrent = current.split(".").map((n) => parseInt(n, 10));
+  for (let i = 0; i < 3; i++) {
+    const l = pLatest[i] || 0;
+    const c = pCurrent[i] || 0;
+    if (l > c) return true;
+    if (l < c) return false;
+  }
+  return false;
+}
+
+export async function tauriCheckForUpdates(): Promise<UpdateCheckResult> {
+  if (isTauri()) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return await invoke<UpdateCheckResult>("check_for_updates");
+    } catch (err) {
+      console.warn("Tauri check_for_updates failed, using fallback:", err);
+    }
+  }
+
+  // Web fallback: query GitHub releases API directly
+  try {
+    const res = await fetch("https://api.github.com/repos/Suvesh108/EDM/releases/latest");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const release = await res.json();
+    const rawTag = (release.tag_name || "").replace(/^v/i, "").trim();
+    const currentVersion = "0.0.3";
+    const setupAsset =
+      (release.assets || []).find((a: any) =>
+        a.name.endsWith(".exe") && a.name.toLowerCase().includes("setup")
+      ) || (release.assets || []).find((a: any) => a.name.endsWith(".exe"));
+
+    return {
+      current_version: currentVersion,
+      latest_version: rawTag || currentVersion,
+      update_available: isSemverNewer(rawTag, currentVersion),
+      release_name: release.name || release.tag_name || `v${rawTag}`,
+      release_notes: release.body || "",
+      published_at: release.published_at || "",
+      download_url: setupAsset?.browser_download_url || null,
+      asset_name: setupAsset?.name || null,
+      asset_size: setupAsset?.size || 0,
+      html_url: release.html_url || "https://github.com/Suvesh108/EDM/releases",
+    };
+  } catch (err) {
+    throw new Error(`Failed to check updates: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+export async function tauriInstallUpdate(downloadUrl: string): Promise<void> {
+  if (isTauri()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("install_update", { downloadUrl });
+  } else {
+    window.open(downloadUrl, "_blank");
+  }
+}
+
+export async function tauriListenOtaProgress(
+  callback: (progress: OtaProgress) => void
+): Promise<() => void> {
+  if (isTauri()) {
+    try {
+      const { listen } = await import("@tauri-apps/api/event");
+      return await listen<OtaProgress>("ota-progress", (event) => {
+        callback(event.payload);
+      });
+    } catch (err) {
+      console.warn("Tauri listen ota-progress failed:", err);
+    }
+  }
+  return () => {};
+}

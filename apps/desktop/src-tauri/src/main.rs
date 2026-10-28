@@ -16,22 +16,23 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{command, Manager, State};
 use uuid::Uuid;
 
+mod updater;
 mod ws_server;
 
 #[derive(Clone)]
-struct ActiveTaskHandle {
-    cancelled: Arc<AtomicBool>,
-    telemetry: Arc<Mutex<Option<AdaptiveTelemetry>>>,
+pub(crate) struct ActiveTaskHandle {
+    pub(crate) cancelled: Arc<AtomicBool>,
+    pub(crate) telemetry: Arc<Mutex<Option<AdaptiveTelemetry>>>,
 }
 
 #[derive(Clone)]
-struct AppState {
-    store: Store,
-    engine: Arc<AdaptiveEngine>,
-    tasks: Arc<Mutex<HashMap<String, ActiveTaskHandle>>>,
-    rt_handle: tokio::runtime::Handle,
-    ws_manager: Arc<ws_server::WsManager>,
-    tray_handle: Arc<Mutex<Option<tauri::tray::TrayIcon>>>,
+pub(crate) struct AppState {
+    pub(crate) store: Store,
+    pub(crate) engine: Arc<AdaptiveEngine>,
+    pub(crate) tasks: Arc<Mutex<HashMap<String, ActiveTaskHandle>>>,
+    pub(crate) rt_handle: tokio::runtime::Handle,
+    pub(crate) ws_manager: Arc<ws_server::WsManager>,
+    pub(crate) tray_handle: Arc<Mutex<Option<tauri::tray::TrayIcon>>>,
 }
 
 fn init_logging() {
@@ -520,7 +521,7 @@ async fn handle_extension_message(msg: ExtensionMessage, state: &AppState) -> Ap
 
             AppReply::Status {
                 status: "connected".into(),
-                version: "0.0.1".into(),
+                version: env!("CARGO_PKG_VERSION").into(),
                 protocol: PROTOCOL_VERSION,
                 active_downloads: active,
                 queued_tasks: queued,
@@ -1197,7 +1198,7 @@ fn app_close(window: tauri::WebviewWindow, state: State<'_, AppState>) {
     }
 }
 
-fn trigger_graceful_quit(app_handle: tauri::AppHandle, state: AppState) {
+pub(crate) fn trigger_graceful_quit(app_handle: tauri::AppHandle, state: AppState) {
     // 5-second watchdog timer to force exit if cleanup hangs
     std::thread::spawn(|| {
         std::thread::sleep(std::time::Duration::from_secs(5));
@@ -1678,7 +1679,10 @@ fn main() {
             app_minimize,
             app_toggle_maximize,
             app_close,
-            app_start_dragging
+            app_start_dragging,
+            updater::get_app_version,
+            updater::check_for_updates,
+            updater::install_update
         ])
         .run(tauri::generate_context!())
         .expect("error while running EDM desktop application");

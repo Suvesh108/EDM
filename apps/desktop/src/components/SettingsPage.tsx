@@ -47,6 +47,12 @@ import {
   tauriWindowClose,
   tauriStartDragging,
   tauriGetExtensionToken,
+  tauriGetAppVersion,
+  tauriCheckForUpdates,
+  tauriInstallUpdate,
+  tauriListenOtaProgress,
+  UpdateCheckResult,
+  OtaProgress,
 } from "../services/tauriBridge";
 import { EdmSettings, defaultSettings, saveSettings } from "../types/settings";
 import { FEATURE_PACKS } from "../types/featurePacks";
@@ -117,17 +123,42 @@ export default function SettingsPage({
   const [customCatExt, setCustomCatExt] = useState("");
   const [isLimiterOpen, setIsLimiterOpen] = useState(false);
   const [showTranslatorNotice, setShowTranslatorNotice] = useState(false);
-  const [updateStatus, setUpdateStatus] = useState<"idle" | "checking" | "up-to-date">("idle");
-  const [lastCheckedTime, setLastCheckedTime] = useState<string>("Today, 7:42 PM");
+  const [appVersion, setAppVersion] = useState<string>("0.0.3");
+  const [updateStatus, setUpdateStatus] = useState<
+    "idle" | "checking" | "up-to-date" | "update-available" | "downloading" | "ready" | "error"
+  >("idle");
+  const [updateInfo, setUpdateInfo] = useState<UpdateCheckResult | null>(null);
+  const [otaProgress, setOtaProgress] = useState<OtaProgress | null>(null);
+  const [updateError, setUpdateError] = useState<string | null>(null);
+  const [lastCheckedTime, setLastCheckedTime] = useState<string>("Not checked yet");
   const [wsToken, setWsToken] = useState<string>("");
   const [copiedToken, setCopiedToken] = useState<boolean>(false);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const isProgrammaticScrollRef = useRef(false);
 
   useEffect(() => {
+    tauriGetAppVersion().then((v) => {
+      if (v) setAppVersion(v);
+    });
     tauriGetExtensionToken().then((t) => {
       if (t) setWsToken(t);
     });
+
+    let unlistenFn: (() => void) | undefined;
+    tauriListenOtaProgress((prog) => {
+      setOtaProgress(prog);
+      if (prog.status === "downloading") {
+        setUpdateStatus("downloading");
+      } else if (prog.status === "ready") {
+        setUpdateStatus("ready");
+      }
+    }).then((unlisten) => {
+      unlistenFn = unlisten;
+    });
+
+    return () => {
+      if (unlistenFn) unlistenFn();
+    };
   }, []);
 
   const handleCopyToken = () => {
@@ -301,13 +332,42 @@ export default function SettingsPage({
     reader.readAsText(file);
   };
 
-  const handleCheckUpdate = () => {
+  const handleCheckUpdate = async () => {
     setUpdateStatus("checking");
-    setTimeout(() => {
-      setUpdateStatus("up-to-date");
+    setUpdateError(null);
+    try {
+      const res = await tauriCheckForUpdates();
+      setUpdateInfo(res);
       const now = new Date();
-      setLastCheckedTime(`Today, ${now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`);
-    }, 1200);
+      setLastCheckedTime(
+        `Today, ${now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
+      );
+      if (res.update_available) {
+        setUpdateStatus("update-available");
+      } else {
+        setUpdateStatus("up-to-date");
+      }
+    } catch (err: any) {
+      setUpdateError(err?.message || String(err));
+      setUpdateStatus("error");
+    }
+  };
+
+  const handleInstallUpdate = async () => {
+    if (!updateInfo?.download_url) return;
+    setUpdateStatus("downloading");
+    setOtaProgress({
+      downloaded_bytes: 0,
+      total_bytes: updateInfo.asset_size || 0,
+      percent: 0,
+      status: "downloading",
+    });
+    try {
+      await tauriInstallUpdate(updateInfo.download_url);
+    } catch (err: any) {
+      setUpdateError(err?.message || String(err));
+      setUpdateStatus("error");
+    }
   };
 
   const handleAddCategory = () => {
@@ -1305,7 +1365,7 @@ export default function SettingsPage({
                   </label>
                   <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono font-medium bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                    Native Messaging Host v0.0.1 Connected
+                    Native Messaging Host v{appVersion} Connected
                   </div>
                 </div>
 
@@ -1729,7 +1789,7 @@ export default function SettingsPage({
                     <div className="flex items-center gap-2">
                       <span className="font-bold text-sm text-[var(--text-primary)]">Edge Download Manager</span>
                       <span className="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-[var(--accent-badge-bg)] text-[var(--accent-badge-text)] border border-[var(--accent-badge-border)]">
-                        PRO v0.0.1
+                        PRO v{appVersion}
                       </span>
                     </div>
                     <p className="text-[11px] text-[var(--text-muted)] mt-0.5 font-mono">
@@ -1748,13 +1808,21 @@ export default function SettingsPage({
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div>
                     <label className="text-xs font-semibold text-[var(--text-primary)] block">
-                      Software Updates
+                      Software Updates & OTA Pipeline
                     </label>
                     <span className="text-[11px] text-[var(--text-muted)]">
                       {updateStatus === "checking"
                         ? "Checking upstream GitHub releases and signature manifests..."
                         : updateStatus === "up-to-date"
-                        ? "EDM is up to date. You are running the latest production build."
+                        ? `EDM is up to date (v${appVersion}). You are running the latest production build.`
+                        : updateStatus === "update-available"
+                        ? `A newer release (v${updateInfo?.latest_version}) is available for download!`
+                        : updateStatus === "downloading"
+                        ? `Downloading update package... ${otaProgress ? `${otaProgress.percent.toFixed(0)}% (${formatBytes(otaProgress.downloaded_bytes)} / ${formatBytes(otaProgress.total_bytes)})` : ""}`
+                        : updateStatus === "ready"
+                        ? "Download complete. Launching installer and restarting EDM..."
+                        : updateStatus === "error"
+                        ? `Update check failed: ${updateError || "Network error"}`
                         : `Current channel: Stable. Last checked: ${lastCheckedTime}`}
                     </span>
                   </div>
@@ -1767,21 +1835,118 @@ export default function SettingsPage({
                       </span>
                     )}
 
+                    {updateStatus === "update-available" && (
+                      <button
+                        onClick={handleInstallUpdate}
+                        className="btn-3d h-8 px-3 rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-md hover:brightness-110"
+                        title="Download and install update automatically"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        <span>Update Now (OTA)</span>
+                      </button>
+                    )}
+
+                    {updateStatus === "error" && (
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-red-500/15 text-red-300 border border-red-500/30">
+                        <AlertTriangle className="w-3.5 h-3.5 text-red-400" />
+                        Check Failed
+                      </span>
+                    )}
+
                     <button
                       onClick={handleCheckUpdate}
-                      disabled={updateStatus === "checking"}
+                      disabled={updateStatus === "checking" || updateStatus === "downloading"}
                       className="btn-3d h-8 px-3 rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-                      title="Check for newer EDM versions"
+                      title="Check for newer EDM versions on GitHub"
                     >
                       <RefreshCw
                         className={`w-3.5 h-3.5 text-[var(--accent)] ${
                           updateStatus === "checking" ? "animate-spin" : ""
                         }`}
                       />
-                      <span>{updateStatus === "checking" ? "Checking..." : "Check for Updates"}</span>
+                      <span>
+                        {updateStatus === "checking"
+                          ? "Checking..."
+                          : updateStatus === "downloading"
+                          ? "Downloading..."
+                          : "Check for Updates"}
+                      </span>
                     </button>
                   </div>
                 </div>
+
+                {/* OTA Download Progress Bar */}
+                {(updateStatus === "downloading" || updateStatus === "ready") && (
+                  <div className="p-3 rounded-lg bg-[var(--bg-card)] border border-[var(--border-subtle)] space-y-2">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-semibold text-[var(--text-primary)]">
+                        {updateStatus === "ready" ? "Installer Ready" : "Downloading Over-the-Air Update"}
+                      </span>
+                      <span className="font-mono text-[var(--accent)] font-bold">
+                        {otaProgress ? `${otaProgress.percent.toFixed(0)}%` : "0%"}
+                      </span>
+                    </div>
+                    <div className="w-full h-2 rounded-full bg-[var(--bg-input)] overflow-hidden border border-[var(--border-subtle)]">
+                      <div
+                        className="h-full bg-gradient-to-r from-[var(--accent)] to-emerald-400 transition-all duration-150"
+                        style={{ width: `${otaProgress ? otaProgress.percent : 0}%` }}
+                      />
+                    </div>
+                    <div className="flex items-center justify-between text-[11px] text-[var(--text-muted)] font-mono">
+                      <span>
+                        {otaProgress
+                          ? `${formatBytes(otaProgress.downloaded_bytes)} of ${formatBytes(otaProgress.total_bytes)}`
+                          : "Connecting..."}
+                      </span>
+                      <span>Target: {updateInfo?.asset_name || "EDM Setup"}</span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Update Available Detail Card */}
+                {updateStatus === "update-available" && updateInfo && (
+                  <div className="p-3.5 rounded-lg bg-[var(--bg-card)] border border-emerald-500/30 space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Sparkles className="w-4 h-4 text-emerald-400" />
+                        <span className="text-xs font-bold text-[var(--text-primary)]">
+                          {updateInfo.release_name}
+                        </span>
+                        <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-500/20 text-emerald-300">
+                          v{updateInfo.latest_version}
+                        </span>
+                      </div>
+                      <a
+                        href={updateInfo.html_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-[11px] text-[var(--accent)] hover:underline inline-flex items-center gap-1 font-medium"
+                      >
+                        <span>Release Notes</span>
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
+                    </div>
+                    {updateInfo.asset_name && (
+                      <div className="text-[11px] text-[var(--text-muted)] font-mono flex items-center gap-2">
+                        <span>Package: {updateInfo.asset_name}</span>
+                        <span>•</span>
+                        <span>Size: {formatBytes(updateInfo.asset_size)}</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Optional Reinstall Current Version link for testing OTA */}
+                {updateStatus === "up-to-date" && updateInfo?.download_url && (
+                  <div className="text-right">
+                    <button
+                      onClick={handleInstallUpdate}
+                      className="text-[11px] text-[var(--text-muted)] hover:text-[var(--accent)] underline cursor-pointer"
+                    >
+                      Reinstall / Repair v{appVersion} via OTA
+                    </button>
+                  </div>
+                )}
 
                 <div className="pt-2 border-t border-[var(--border-subtle)] flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                   <label className="flex items-center gap-3 cursor-pointer group">

@@ -935,7 +935,7 @@ class PopupController {
               }
             } else if (updateFeedback) {
               updateFeedback.style.color = "#10B981";
-              updateFeedback.textContent = "Extension is up to date (v0.0.1).";
+              updateFeedback.textContent = "Extension is up to date (v0.0.3).";
             }
           } else if (updateFeedback) {
             updateFeedback.style.color = "#EF4444";

@@ -554,7 +554,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           sendResponse({
             ok: true,
             status, // "throttled" | "no_update" | "update_available"
-            version: details?.version || "0.0.1",
+            version: details?.version || "0.0.3",
           });
         }
       });
