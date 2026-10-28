@@ -21,15 +21,19 @@
 
 ## ⚡ Features
 
-- 🚀 **Multi-Connection Turbo Engine**: Dedicated HTTP/1.1 TCP sockets with dynamic work-stealing, sub-range probing, and adaptive segment balancing to maximize your bandwidth.
-- 📦 **Built-in Feature Packs**:
-  - **YouTube & Media**: Integrated `yt-dlp` stream extractor for direct video and audio downloads.
-  - **BitTorrent**: Native magnet URI resolution and `.torrent` bencode parser with chunked peer streaming.
-  - **HLS / M3U8**: Stream parser and segment downloader with automatic sequence ordering.
-  - **FFmpeg Engine**: Media transmuxing and segment concatenation pipeline.
+- 🚀 **Multi-Connection Turbo Engine**: Dedicated HTTP/1.1 TCP sockets with dynamic work-stealing, sub-range probing, pipelined disk writer, and adaptive segment balancing to maximize your bandwidth.
+- 📦 **In-Process Built-in Feature Packs (No External Programs)**:
+  - **YouTube & Video**: Pure Rust in-process YouTube & Vimeo stream extractors with direct format resolution (zero yt-dlp binary dependency).
+  - **BitTorrent**: Native in-process BitTorrent engine via `librqbit` (DHT, PEX, magnet URI resolution, chunked peer streaming, and seed tracking).
+  - **HLS / M3U8 & Native Remuxing**: Stream parser, multi-segment downloader, pure Rust AES-128-CBC PKCS7 decryption, and native transmuxing into MP4/MKV without external FFmpeg.
   - **GitHub Pack**: Direct GitHub Release artifact routing and raw repository archive downloads.
   - **HuggingFace Pack**: Model shard stream routing with parallel checkpoint acquisition.
   - **FTP & ED2K**: FTP/FTPS active/passive retrieval and eDonkey2000 MD4 link hashing.
+  - **Process Isolation**: Remaining external tool launches run with Windows Job Objects (`KILL_ON_JOB_CLOSE`) and `CREATE_NO_WINDOW` (zero console window popups).
+- 🔄 **In-App Over-the-Air (OTA) Updates**:
+  - Live GitHub Releases API checking against semantic versioning.
+  - One-click background OTA download with real-time byte progress bar.
+  - Automatic detached installer launch and graceful application restart.
 - 🧩 **Seamless Browser Extension (MV3)**:
   - Intercepts browser downloads seamlessly with `onDeterminingFilename`, forwarding cookies, referrer, and user-agent.
   - **Auto Token Discovery**: Automatically detects and connects to the desktop app token with zero manual copy-pasting.
@@ -40,12 +44,16 @@
   - Strict loopback `Host` header enforcement defending against DNS rebinding.
   - Origin verification strictly pinned to the verified extension ID.
   - Single-instance enforcement via `tauri-plugin-single-instance`.
+- ⚙️ **Windows Autostart & System Tray**:
+  - Optional Windows autostart on boot with silent `--autostart` tray launch.
+  - Full system tray controls (Open, Pause All, Resume All, Settings, Quit).
 - 🛡️ **Defensive Security & Safety**:
   - Client sends only task IDs; the app resolves filesystem paths internally.
   - Direct execution protection: Potentially hazardous executables (`.exe`, `.bat`, `.cmd`, `.ps1`, `.scr`, `.vbs`) are never executed directly; EDM reveals them safely in Windows Explorer.
-- 💾 **Crash-Safe Persistence**:
-  - Positioned sparse disk allocation flushed before SQLite Write-Ahead Logging (WAL) state checkpoints.
-  - Resume any interrupted or paused download with byte-level precision.
+- 💾 **Crash-Safe Persistence & Real Telemetry**:
+  - Dedicated background writer thread with batched positional writes and periodic flush.
+  - Monotonic atomic delta counters for genuine throughput without synthetic spikes or jitter.
+  - Resume any interrupted or paused download with byte-level precision using SQLite WAL checkpoints.
 - 🎨 **Linear/Stripe-Grade Interface**:
   - Frameless Windows desktop app with customized titlebar, subtle lighting, and system tray integration.
   - Fluid spring motion and tactile feedback.
@@ -55,12 +63,12 @@
 
 ## 📥 Quick Download
 
-Get the latest binaries from the [**Releases Page**](https://github.com/Suvesh108/EDM/releases/tag/v0.0.1):
+Get the latest binaries from the [**Releases Page**](https://github.com/Suvesh108/EDM/releases/latest):
 
 | File | Description |
 | :--- | :--- |
-| **[`EDM-v0.0.1-setup.exe`](https://github.com/Suvesh108/EDM/releases/download/v0.0.1/EDM-v0.0.1-setup.exe)** | Official Standalone Windows Installer setup program (64-bit). |
-| **[`edm-extension.tar.gz`](https://github.com/Suvesh108/EDM/releases/download/v0.0.1/edm-extension.tar.gz)** | Chromium browser extension for Chrome, Edge, Brave, and Opera. |
+| **[`EDM_0.0.3_x64-setup.exe`](https://github.com/Suvesh108/EDM/releases/download/v0.0.3/EDM_0.0.3_x64-setup.exe)** | Official Standalone Windows Installer setup program (64-bit, v0.0.3). |
+| **[`edm-extension.tar.gz`](https://github.com/Suvesh108/EDM/releases/download/v0.0.3/edm-extension.tar.gz)** | Chromium browser extension for Chrome, Edge, Brave, and Opera. |
 
 ---
 
@@ -123,7 +131,7 @@ This script automatically:
 2. Builds and packages the browser extension.
 3. Compiles `edm-nmh`.
 4. Copies and bundles `WebView2Loader.dll`.
-5. Compiles and packages the NSIS installer into `target/release/bundle/nsis/EDM_0.0.1_x64-setup.exe`.
+5. Compiles and packages the NSIS installer into `target/release/bundle/nsis/EDM_0.0.3_x64-setup.exe`.
 6. Verifies that all assets are offline-bundled and free of any dev URLs.
 
 ---
