@@ -90,30 +90,6 @@ The extension will automatically connect to EDM on startup. If auto-connection i
 
 ---
 
-## 🛠️ Architecture & Workspace Layout
-
-```
-EDM/
-├── apps/
-│   └── desktop/               # Tauri 2 frontend & desktop host
-│       ├── src/               # React 19 UI, Tailwind CSS, motion design
-│       └── src-tauri/         # Rust Tauri backend, system tray & local WebSocket server
-├── crates/
-│   ├── edm-core/              # Core download engine, adaptive work-stealing, feature packs
-│   ├── edm-store/             # SQLite WAL persistence for task metadata
-│   ├── edm-ipc/               # Shared type schemas and state transition logic
-│   ├── edm-nmh/               # Native Messaging Host (optional standard I/O bridge)
-│   ├── edm-cli/               # CLI download and diagnostic utility
-│   └── edm-testsrv/           # Local chaos HTTP/Range test server
-├── extension/                 # Manifest V3 browser extension
-│   ├── src/                   # TypeScript background worker, popup, options, content script
-│   └── dist/                  # Built unpacked extension artifacts
-└── scripts/
-    └── build-release.ps1      # Unified production release build script
-```
-
----
-
 ## 🏗️ Building from Source
 
 ### Prerequisites
