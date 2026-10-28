@@ -90,11 +90,7 @@ export interface DownloadItem {
   peakSpeedBps?: number;
 }
 
-export const INITIAL_NETPULSE_PROFILE = [
-  7_200_000, 7_350_000, 7_100_000, 6_800_000, 5_400_000, 3_100_000, 2_400_000, 2_350_000,
-  2_450_000, 2_700_000, 3_400_000, 4_200_000, 4_850_000, 4_900_000, 4_500_000, 3_300_000,
-  2_600_000, 2_300_000, 2_200_000, 2_400_000, 3_200_000, 5_400_000, 6_900_000, 7_150_000,
-];
+export const INITIAL_NETPULSE_PROFILE: number[] = [];
 
 export const generateSpeedSvgPath = (history: number[] = [], peakBps: number = 0) => {
   const VIEW_WIDTH = 100;
@@ -279,7 +275,7 @@ export default function App() {
           const currentBps = itemState === "downloading" ? speedVal : 0;
           const history = existing?.speedHistory
             ? [...existing.speedHistory.slice(-59), currentBps]
-            : (currentBps > 0 ? [...INITIAL_NETPULSE_PROFILE.slice(-20), currentBps] : [currentBps]);
+            : [currentBps];
 
           return {
             id: b.id,
@@ -479,8 +475,8 @@ export default function App() {
       domain: hostname,
       dateAdded: "Just now",
       workers: initialWorkers,
-      speedHistory: INITIAL_NETPULSE_PROFILE,
-      peakSpeedBps: 7_600_000,
+      speedHistory: [0],
+      peakSpeedBps: 0,
     };
     setDownloads([newItem, ...downloads]);
     setSelectedDownload(newItem);
@@ -491,7 +487,7 @@ export default function App() {
     setProbeResult(null);
   };
 
-  // Active Telemetry and Real Progress Tick
+  // Active Telemetry and Real Progress Tick (250 ms Monotonic Clock Sampling)
   useEffect(() => {
     const activeTasks = downloads.filter((d) => d.state === "downloading");
     if (activeTasks.length === 0) return;
@@ -500,17 +496,35 @@ export default function App() {
       const updates = await Promise.all(
         activeTasks.map(async (task) => {
           const telem = await tauriGetTelemetry(task.id);
-          let currentSpeedBps = 0;
           let newWorkers: WorkerInfo[] = [];
 
           if (telem) {
             const sizeDone = telem.downloaded_bytes;
             const sizeTotal = telem.total_bytes || task.sizeTotal;
-            const progress = sizeTotal > 0 ? Math.min(100, Math.round((sizeDone / sizeTotal) * 100)) : 0;
-            currentSpeedBps = Math.floor((telem.instant_throughput_bps || telem.rolling_throughput_bps) / 8);
-            const speed = formatSpeed(currentSpeedBps);
-            const eta = telem.eta_seconds ? formatEta(telem.eta_seconds) : "Calculating...";
+            const progress = sizeTotal > 0 ? Math.min(100, Math.floor((sizeDone / sizeTotal) * 100)) : 0;
+            
+            // One source of truth for speed: 3-second moving average (12 samples @ 250ms)
+            const instantSpeed = Math.floor((telem.instant_throughput_bps || telem.rolling_throughput_bps) / 8);
+            const prevSamples = (task as any)._speedSamples || [];
+            const newSamples = [...prevSamples.slice(-11), instantSpeed];
+            (task as any)._speedSamples = newSamples;
+            const smoothedSpeedBps = Math.round(newSamples.reduce((a: number, b: number) => a + b, 0) / newSamples.length);
+
+            const speed = formatSpeed(smoothedSpeedBps);
             const isFinished = progress >= 100;
+            const elapsed = ((task as any).elapsedSeconds || 0) + 0.25;
+            (task as any).elapsedSeconds = elapsed;
+
+            const remainingBytes = Math.max(0, sizeTotal - sizeDone);
+            const eta = isFinished
+              ? "Finished"
+              : elapsed < 3
+              ? "Calculating..."
+              : smoothedSpeedBps > 0
+              ? formatEta(Math.ceil(remainingBytes / smoothedSpeedBps))
+              : telem.eta_seconds
+              ? formatEta(telem.eta_seconds)
+              : "—";
 
             if (telem.workers && telem.workers.length > 0) {
               newWorkers = telem.workers.map((w) => ({
@@ -531,7 +545,7 @@ export default function App() {
                     : w.status,
               }));
             } else {
-              const numConns = telem.active_connections || task.connections || 8;
+              const numConns = telem.active_connections || task.connections || 1;
               const chunkBytes = Math.floor(sizeTotal / numConns);
               newWorkers = Array.from({ length: numConns }).map((_, idx) => {
                 const start = idx * chunkBytes;
@@ -543,7 +557,7 @@ export default function App() {
                   start,
                   end,
                   pos: start + workerBytes,
-                  speed: formatSpeed(Math.floor(currentSpeedBps / numConns)),
+                  speed: formatSpeed(Math.floor(smoothedSpeedBps / numConns)),
                   status: isFinished
                     ? "Chunk verified • Complete"
                     : "Receiving chunk (HTTP 206)...",
@@ -551,9 +565,9 @@ export default function App() {
               });
             }
 
-            const actualBps = isFinished ? 0 : currentSpeedBps;
+            const actualBps = isFinished ? 0 : smoothedSpeedBps;
             const history = [...(task.speedHistory || []).slice(-59), actualBps];
-            const peak = Math.max(task.peakSpeedBps || 0, ...history);
+            const peak = Math.max(task.peakSpeedBps || 0, actualBps);
 
             return {
               id: task.id,
@@ -561,86 +575,20 @@ export default function App() {
               sizeTotal,
               progress,
               speed: isFinished ? "0 B/s" : speed,
-              eta: isFinished ? "Finished" : eta,
+              eta,
               connections: telem.active_connections,
               state: isFinished ? ("completed" as const) : ("downloading" as const),
               workers: newWorkers,
               speedHistory: history,
               peakSpeedBps: peak,
+              elapsedSeconds: elapsed,
             };
           } else {
-            // Web preview / Browser simulation mode with realistic NetPulse network dynamics
-            const numConns = task.connections || 8;
-            const history = task.speedHistory && task.speedHistory.length > 0 ? task.speedHistory : INITIAL_NETPULSE_PROFILE;
-            const lastSpeed = history[history.length - 1];
-            
-            // Generate natural momentum with smooth drifts, steady plateaus, and gentle recovery (NetPulse dynamics)
-            const tickCount = (task as any)._tickCount !== undefined ? (task as any)._tickCount + 1 : history.length;
-            (task as any)._tickCount = tickCount;
-            const phase = (tickCount % 60) / 60;
-            let targetThroughput = 7_200_000;
-            if (phase < 0.25) {
-              targetThroughput = 7_400_000 + Math.sin(phase * Math.PI * 4) * 300_000;
-            } else if (phase < 0.45) {
-              targetThroughput = 2_800_000 + Math.sin(phase * Math.PI * 4) * 200_000;
-            } else if (phase < 0.70) {
-              targetThroughput = 4_900_000 + Math.sin(phase * Math.PI * 3) * 250_000;
-            } else if (phase < 0.85) {
-              targetThroughput = 2_200_000 + Math.cos(phase * Math.PI * 2) * 150_000;
-            } else {
-              targetThroughput = 7_600_000 + Math.sin(phase * Math.PI * 2) * 200_000;
-            }
-
-            // Exponential smoothing for organic spline transitions
-            currentSpeedBps = Math.floor(lastSpeed * 0.72 + targetThroughput * 0.28);
-            const chunk = Math.floor(currentSpeedBps / 2);
-            const sizeDone = Math.min(task.sizeTotal, task.sizeDone + chunk);
-            const progress = task.sizeTotal > 0 ? Math.min(100, Math.round((sizeDone / task.sizeTotal) * 100)) : 0;
-            const isFinished = progress >= 100;
-            const remainingBytes = Math.max(0, task.sizeTotal - sizeDone);
-            const remainingSecs = Math.ceil(remainingBytes / Math.max(1, currentSpeedBps));
-
-            const chunkBytes = Math.floor(task.sizeTotal / numConns);
-            newWorkers = Array.from({ length: numConns }).map((_, idx) => {
-              const start = idx * chunkBytes;
-              const end = idx === numConns - 1 ? task.sizeTotal : (idx + 1) * chunkBytes;
-              const rangeSize = end - start;
-              // Parallel download simulation: all active chunks download from their own offsets simultaneously
-              const jitter = 1 + (Math.sin(idx * 2.3 + Date.now() / 2500) * 0.08);
-              const workerDonePct = Math.min(100, Math.max(0, progress * jitter));
-              const workerBytes = Math.min(rangeSize, Math.floor((rangeSize * workerDonePct) / 100));
-              const pos = start + workerBytes;
-              const isWorkerDone = workerBytes >= rangeSize || isFinished;
-              const perWorkerBps = isWorkerDone ? 0 : Math.floor((currentSpeedBps / numConns) * jitter);
-
-              return {
-                idx: idx + 1,
-                start,
-                end,
-                pos: isWorkerDone ? end : pos,
-                speed: isWorkerDone ? "0 B/s" : formatSpeed(perWorkerBps),
-                status: isWorkerDone
-                  ? "Chunk verified • Complete"
-                  : "Receiving chunk (HTTP 206)...",
-              };
-            });
-
-            const actualBps = isFinished ? 0 : currentSpeedBps;
-            const newHistory = [...history.slice(-59), actualBps];
-            const peak = Math.max(task.peakSpeedBps || 0, ...newHistory);
-
+            const elapsed = ((task as any).elapsedSeconds || 0) + 0.25;
+            (task as any).elapsedSeconds = elapsed;
             return {
               id: task.id,
-              sizeDone,
-              sizeTotal: task.sizeTotal,
-              progress,
-              speed: isFinished ? "0 B/s" : formatSpeed(currentSpeedBps),
-              eta: isFinished ? "Finished" : formatEta(remainingSecs),
-              connections: numConns,
-              state: isFinished ? ("completed" as const) : ("downloading" as const),
-              workers: newWorkers,
-              speedHistory: newHistory,
-              peakSpeedBps: peak,
+              elapsedSeconds: elapsed,
             };
           }
         })
@@ -658,7 +606,7 @@ export default function App() {
         const match = updates.find((u) => u.id === prev.id);
         return match ? { ...prev, ...match } : prev;
       });
-    }, 500);
+    }, 250);
 
     return () => clearInterval(interval);
   }, [downloads]);
@@ -1886,6 +1834,7 @@ export default function App() {
                       peakSpeedBps={activeSelectedDownload.peakSpeedBps}
                       isDownloading={activeSelectedDownload.state === "downloading"}
                       eta={activeSelectedDownload.eta}
+                      elapsedSeconds={Math.floor((activeSelectedDownload as any).elapsedSeconds || 0)}
                     />
 
                     {/* Multi-Connection Worker Thread Telemetry Table */}

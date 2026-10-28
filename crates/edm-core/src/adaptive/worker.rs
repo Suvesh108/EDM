@@ -52,6 +52,7 @@ pub struct AdaptiveWorker {
     pub last_snapshot_ms: Arc<AtomicU64>,
     pub etag: Option<String>,
     pub cancelled: Arc<AtomicBool>,
+    pub is_reconnecting: Arc<AtomicBool>,
     pub cookies: Option<String>,
     pub referer: Option<String>,
     pub user_agent: Option<String>,
@@ -86,6 +87,7 @@ impl AdaptiveWorker {
             last_snapshot_ms: Arc::new(AtomicU64::new(now)),
             etag,
             cancelled: Arc::new(AtomicBool::new(false)),
+            is_reconnecting: Arc::new(AtomicBool::new(false)),
             cookies,
             referer,
             user_agent,
@@ -129,7 +131,9 @@ impl AdaptiveWorker {
     }
 
     pub fn is_stalled(&self, timeout_secs: u64) -> bool {
-        if self.get_status() == WorkerStatus::Completed || self.get_status() == WorkerStatus::Failed
+        if self.get_status() == WorkerStatus::Completed
+            || self.get_status() == WorkerStatus::Failed
+            || self.is_reconnecting.load(Ordering::Relaxed)
         {
             return false;
         }
@@ -211,10 +215,14 @@ impl AdaptiveWorker {
 
             let status = resp.status();
 
-            // Handle HTTP 403 Forbidden immediately
-            if status == reqwest::StatusCode::FORBIDDEN {
-                let err_msg = "HTTP 403 Forbidden (Access Denied or Session Expired)".to_string();
-                warn!("Worker {} encountered 403: {}", self.idx, err_msg);
+            // Handle HTTP 403 Forbidden or 410 Gone (Signed URLs expired)
+            if status == reqwest::StatusCode::FORBIDDEN || status == reqwest::StatusCode::GONE {
+                let err_msg = "Download link expired (HTTP 403/410). Please refresh URL to resume."
+                    .to_string();
+                warn!(
+                    "Worker {} encountered HTTP {}: {}",
+                    self.idx, status, err_msg
+                );
                 self.set_status(WorkerStatus::Failed);
                 let _ = event_tx
                     .send(AdaptiveWorkerEvent::Failed {
@@ -294,6 +302,7 @@ impl AdaptiveWorker {
             }
 
             self.set_status(WorkerStatus::Downloading);
+            self.is_reconnecting.store(false, Ordering::Relaxed);
             let mut stream = resp.bytes_stream();
             let mut read_failed = false;
 

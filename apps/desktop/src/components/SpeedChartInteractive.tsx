@@ -26,6 +26,7 @@ interface SpeedChartInteractiveProps {
   isDownloading?: boolean;
   eta?: string;
   progress?: number;
+  elapsedSeconds?: number;
 }
 
 export const SpeedChartInteractive: React.FC<SpeedChartInteractiveProps> = ({
@@ -35,6 +36,7 @@ export const SpeedChartInteractive: React.FC<SpeedChartInteractiveProps> = ({
   peakSpeedBps = 0,
   isDownloading = true,
   eta,
+  elapsedSeconds = 0,
 }) => {
   // Generate dual-series data points (Download + Upload)
   const chartData: NetworkDataPoint[] = useMemo(() => {
@@ -252,13 +254,24 @@ export const SpeedChartInteractive: React.FC<SpeedChartInteractiveProps> = ({
           </div>
         </div>
 
-        {/* Total Time / Duration Telemetry */}
-        <div className="flex items-center gap-1.5 text-[var(--text-secondary)] text-[11px]">
-          <Clock className="w-3.5 h-3.5 text-sky-400" />
-          <span>Total Time:</span>
-          <span className="font-mono font-semibold text-sky-400 tabular-nums">
-            {eta && eta !== "Calculating..." && eta !== "Connecting..." ? eta : "60s"}
-          </span>
+        {/* Elapsed and Time left Telemetry */}
+        <div className="flex items-center gap-3 text-[var(--text-secondary)] text-[11px]">
+          <div className="flex items-center gap-1.5">
+            <span className="text-[var(--text-muted)]">Elapsed:</span>
+            <span className="font-mono font-medium text-[var(--text-primary)] tabular-nums min-w-[36px] inline-block text-right">
+              {elapsedSeconds > 0 ? `${Math.floor(elapsedSeconds / 60)}m ${elapsedSeconds % 60}s` : "0s"}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            <Clock className="w-3.5 h-3.5 text-sky-400" />
+            <span className="text-[var(--text-muted)]">Time left:</span>
+            <span className="font-mono font-semibold text-sky-400 tabular-nums min-w-[70px] inline-block text-right">
+              {elapsedSeconds >= 3 && eta && eta !== "Calculating..." && eta !== "Connecting..."
+                ? eta
+                : "—"}
+            </span>
+          </div>
         </div>
       </div>
     </div>

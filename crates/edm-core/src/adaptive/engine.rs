@@ -228,9 +228,8 @@ impl AdaptiveEngine {
                             total_downloaded += bytes_read;
                             sample_bytes += bytes_read;
 
-                            // Checkpoint to SQLite every 2 seconds
+                            // Checkpoint to SQLite every 2 seconds without blocking worker I/O on fsync
                             if last_checkpoint.elapsed() >= Duration::from_secs(2) {
-                                let _ = writer.flush();
                                 let seg_records: Vec<SegmentRecord> = scheduler
                                     .workers
                                     .iter()

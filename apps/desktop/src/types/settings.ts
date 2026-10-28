@@ -127,7 +127,7 @@ export const defaultSettings: EdmSettings = {
     temporaryDirectory: "C:\\Users\\Suvesh\\AppData\\Local\\Temp\\edm_chunks",
     maxActiveDownloads: 3,
     globalSpeedLimitBytesPerSecond: null,
-    maxConnectionsPerFile: 8,
+    maxConnectionsPerFile: 6,
     totalConnectionsLimit: 32,
     segmentedDownloads: "automatic",
     maxSegments: 8,

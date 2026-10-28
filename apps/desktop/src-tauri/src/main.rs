@@ -555,7 +555,7 @@ async fn handle_extension_message(msg: ExtensionMessage, state: &AppState) -> Ap
                     if let Some(h) = tasks.get(&r.id.to_string()) {
                         if let Ok(lock) = h.telemetry.lock() {
                             if let Some(ref telem) = *lock {
-                                current_speed = telem.rolling_throughput_bps;
+                                current_speed = telem.rolling_throughput_bps / 8;
                                 current_done = telem.downloaded_bytes;
                                 if telem.total_bytes.is_some() {
                                     current_total = telem.total_bytes;
@@ -913,14 +913,58 @@ async fn probe_url(url: String) -> Result<serde_json::Value, String> {
         }));
     }
 
-    // 3. Video Stream Probe (yt-dlp)
+    // 3. Video Stream Probe (Native Extractor or yt-dlp)
     if pack_target.pack_id == edm_core::FeaturePackId::YtDlpPack {
+        use edm_core::packs::extractors::{SiteExtractor, VimeoExtractor, YouTubeExtractor};
+        let yt = YouTubeExtractor;
+        let vimeo = VimeoExtractor;
+        let probe_client = Client::builder()
+            .redirect(reqwest::redirect::Policy::limited(15))
+            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36")
+            .build()
+            .unwrap_or_default();
+
+        if yt.can_extract(&url) {
+            if let Ok(meta) = yt.extract(&url, &probe_client).await {
+                let best_size = meta.formats.iter().filter_map(|f| f.filesize).max();
+                let sanitized = edm_core::sanitizer::Sanitizer::sanitize_filename(&meta.title);
+                let final_stream_url = meta.best_stream_url.unwrap_or_else(|| url.clone());
+                return Ok(serde_json::json!({
+                    "url": url,
+                    "final_url": final_stream_url,
+                    "filename": Some(format!("{}.mp4", sanitized)),
+                    "content_type": Some("video/mp4"),
+                    "size_total": best_size,
+                    "resumable": true,
+                    "etag": null,
+                    "last_modified": null
+                }));
+            }
+        } else if vimeo.can_extract(&url) {
+            if let Ok(meta) = vimeo.extract(&url, &probe_client).await {
+                let best_size = meta.formats.iter().filter_map(|f| f.filesize).max();
+                let sanitized = edm_core::sanitizer::Sanitizer::sanitize_filename(&meta.title);
+                let final_stream_url = meta.best_stream_url.unwrap_or_else(|| url.clone());
+                return Ok(serde_json::json!({
+                    "url": url,
+                    "final_url": final_stream_url,
+                    "filename": Some(format!("{}.mp4", sanitized)),
+                    "content_type": Some("video/mp4"),
+                    "size_total": best_size,
+                    "resumable": true,
+                    "etag": null,
+                    "last_modified": null
+                }));
+            }
+        }
+
         if let Ok(info) = edm_core::packs::YtDlpPack::extract_info(&url).await {
             let best_size = info.formats.iter().filter_map(|f| f.filesize).max();
             let sanitized = edm_core::sanitizer::Sanitizer::sanitize_filename(&info.title);
+            let final_stream_url = info.best_video_url.unwrap_or(info.webpage_url);
             return Ok(serde_json::json!({
                 "url": url,
-                "final_url": info.webpage_url,
+                "final_url": final_stream_url,
                 "filename": Some(format!("{}.mp4", sanitized)),
                 "content_type": Some("video/mp4"),
                 "size_total": best_size,
@@ -982,14 +1026,51 @@ async fn list_downloads(
 }
 
 #[command]
-fn resume_download(state: State<'_, AppState>, id: String) -> Result<serde_json::Value, String> {
+async fn resume_download(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<serde_json::Value, String> {
     if let Ok(uuid) = Uuid::parse_str(&id) {
         let records = state.store.list_all_downloads().unwrap_or_default();
         if let Some(r) = records.into_iter().find(|d| d.id == uuid) {
+            let mut download_url = r.url.clone();
+            let pack_target = edm_core::FeaturePackManager::classify_target(&download_url);
+            if pack_target.pack_id == edm_core::FeaturePackId::YtDlpPack {
+                use edm_core::packs::extractors::{
+                    SiteExtractor, VimeoExtractor, YouTubeExtractor,
+                };
+                let yt = YouTubeExtractor;
+                let vimeo = VimeoExtractor;
+                let client = Client::builder()
+                    .redirect(reqwest::redirect::Policy::limited(15))
+                    .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36")
+                    .build()
+                    .unwrap_or_default();
+                if yt.can_extract(&download_url) {
+                    if let Ok(meta) = yt.extract(&download_url, &client).await {
+                        if let Some(stream_url) = meta.best_stream_url {
+                            download_url = stream_url;
+                        }
+                    }
+                } else if vimeo.can_extract(&download_url) {
+                    if let Ok(meta) = vimeo.extract(&download_url, &client).await {
+                        if let Some(stream_url) = meta.best_stream_url {
+                            download_url = stream_url;
+                        }
+                    }
+                } else if let Ok(info) =
+                    edm_core::packs::YtDlpPack::extract_info(&download_url).await
+                {
+                    if let Some(stream_url) = info.best_video_url {
+                        download_url = stream_url;
+                    }
+                }
+            }
+
             let _ = execute_download(
                 &state,
                 uuid,
-                r.url,
+                download_url,
                 Some(r.filename),
                 Some(PathBuf::from(r.save_dir)),
                 Some(r.connections),

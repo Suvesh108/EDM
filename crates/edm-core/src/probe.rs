@@ -172,6 +172,43 @@ impl Probe {
             }
         }
 
+        if !resumable && !tested_range_directly && status.is_success() {
+            // Verify if server supports ranges via a lightweight Range: bytes=0-0 probe
+            let mut range_test = client
+                .get(&final_url)
+                .header(ACCEPT_ENCODING, "identity")
+                .header(RANGE, "bytes=0-0");
+            if let Some(c) = cookies {
+                range_test = range_test.header(reqwest::header::COOKIE, c);
+            }
+            if let Some(r) = referer {
+                range_test = range_test.header(reqwest::header::REFERER, r);
+            }
+            if let Some(u) = user_agent {
+                range_test = range_test.header(reqwest::header::USER_AGENT, u);
+            }
+
+            if let Ok(rt_resp) = range_test.send().await {
+                if rt_resp.status() == reqwest::StatusCode::PARTIAL_CONTENT {
+                    resumable = true;
+                    if size_total.is_none() {
+                        if let Some(content_range) = rt_resp
+                            .headers()
+                            .get(reqwest::header::CONTENT_RANGE)
+                            .and_then(|v| v.to_str().ok())
+                        {
+                            if let Some(slash_idx) = content_range.rfind('/') {
+                                let total_str = &content_range[slash_idx + 1..];
+                                if let Ok(total) = total_str.parse::<u64>() {
+                                    size_total = Some(total);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         Ok(ProbeResult {
             url: url.to_string(),
             final_url,

@@ -148,10 +148,28 @@ impl WorkScheduler {
     ) {
         for w in &self.workers {
             if w.is_stalled(self.stall_timeout.as_secs()) {
+                if w.is_reconnecting.swap(true, Ordering::SeqCst) {
+                    continue;
+                }
+                w.mark_activity();
+                let current_retries = w.retry_count.fetch_add(1, Ordering::Relaxed);
+                if current_retries >= self.max_retries {
+                    w.set_status(WorkerStatus::Failed);
+                    let _ = event_tx.try_send(AdaptiveWorkerEvent::Failed {
+                        idx: w.idx,
+                        reason: format!(
+                            "Worker {} stalled after {} retry attempts",
+                            w.idx, current_retries
+                        ),
+                    });
+                    continue;
+                }
                 info!(
-                    "Stall detected on Worker {} at pos {}. Initiating reconnect.",
+                    "Stall detected on Worker {} at pos {}. Initiating reconnect (attempt {}/{}).",
                     w.idx,
-                    w.pos.load(Ordering::Relaxed)
+                    w.pos.load(Ordering::Relaxed),
+                    current_retries + 1,
+                    self.max_retries
                 );
                 w.set_status(WorkerStatus::Stalled);
                 let w_clone = w.clone();
