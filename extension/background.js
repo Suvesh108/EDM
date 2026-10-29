@@ -5,6 +5,10 @@ let reconnectTimer = null;
 let pingInterval = null;
 let bypassNextDownload = false;
 let latestTasks = [];
+let currentEpoch = "";
+let currentRev = 0;
+let currentTheme = "dark";
+let currentPalette = "blue";
 const pendingAcks = /* @__PURE__ */ new Map();
 const popupPorts = /* @__PURE__ */ new Set();
 async function autoDetectAndSetToken() {
@@ -67,7 +71,11 @@ function notifyPopupPorts() {
   const msg = {
     type: "snapshot",
     tasks: latestTasks,
-    connectionStatus
+    connectionStatus,
+    epoch: currentEpoch,
+    rev: currentRev,
+    theme: currentTheme,
+    palette: currentPalette
   };
   for (const port of popupPorts) {
     try {
@@ -120,8 +128,39 @@ async function connectWebSocket() {
           break;
         }
         case "snapshot": {
-          if (Array.isArray(data.tasks)) {
-            latestTasks = data.tasks;
+          const epoch = data.epoch || "";
+          const rev = typeof data.rev === "number" ? data.rev : 0;
+          if (epoch !== currentEpoch) {
+            currentEpoch = epoch;
+            currentRev = rev;
+            if (Array.isArray(data.tasks)) latestTasks = data.tasks;
+          } else if (rev >= currentRev) {
+            currentRev = rev;
+            if (Array.isArray(data.tasks)) latestTasks = data.tasks;
+          }
+          if (data.theme) {
+            currentTheme = data.theme;
+            chrome.storage.local.set({ edm_theme: data.theme });
+          }
+          if (data.palette) {
+            currentPalette = data.palette;
+            chrome.storage.local.set({ edm_palette: data.palette });
+          }
+          notifyPopupPorts();
+          break;
+        }
+        case "task_removed": {
+          if (data.id) {
+            if (data.epoch && data.epoch === currentEpoch && typeof data.rev === "number" && data.rev < currentRev) {
+              break;
+            }
+            if (data.epoch && data.epoch !== currentEpoch) {
+              currentEpoch = data.epoch;
+            }
+            if (typeof data.rev === "number") {
+              currentRev = data.rev;
+            }
+            latestTasks = latestTasks.filter((t) => t.id !== data.id);
             notifyPopupPorts();
           }
           break;
@@ -193,14 +232,31 @@ async function sendWsCreateTask(payload, timeoutMs = 3e3) {
     socket.send(JSON.stringify(payload));
   });
 }
-function sendWsTaskAction(id, action) {
-  if (socket && socket.readyState === WebSocket.OPEN) {
-    socket.send(JSON.stringify({
-      type: "task_action",
-      id,
-      action
-    }));
+async function sendWsTaskAction(id, action, delete_file, req_id) {
+  const rId = req_id || crypto.randomUUID();
+  if (action === "remove") {
+    latestTasks = latestTasks.filter((t) => t.id !== id);
+    notifyPopupPorts();
   }
+  return new Promise((resolve) => {
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      return resolve({ ok: false, error: "WebSocket not connected to EDM Desktop" });
+    }
+    const timer = setTimeout(() => {
+      pendingAcks.delete(rId);
+      resolve({ ok: false, error: "Action timeout waiting for EDM Desktop" });
+    }, 3e3);
+    pendingAcks.set(rId, { resolve, timer });
+    socket.send(
+      JSON.stringify({
+        type: "task_action",
+        req_id: rId,
+        id,
+        action,
+        delete_file: !!delete_file
+      })
+    );
+  });
 }
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name === "popup") {
@@ -208,11 +264,20 @@ chrome.runtime.onConnect.addListener((port) => {
     port.postMessage({
       type: "snapshot",
       tasks: latestTasks,
-      connectionStatus
+      connectionStatus,
+      epoch: currentEpoch,
+      rev: currentRev,
+      theme: currentTheme,
+      palette: currentPalette
     });
     port.onMessage.addListener((msg) => {
       if (msg.type === "task_action" && msg.id && msg.action) {
-        sendWsTaskAction(msg.id, msg.action);
+        sendWsTaskAction(msg.id, msg.action, msg.delete_file, msg.req_id).then((ack) => {
+          try {
+            port.postMessage({ type: "ack", ...ack, req_id: msg.req_id || "" });
+          } catch {
+          }
+        });
       } else if (msg.type === "create_task") {
         const req_id = msg.req_id || crypto.randomUUID();
         sendWsCreateTask({ ...msg, req_id }).then((ack) => {
@@ -470,7 +535,16 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
 });
-chrome.runtime.onInstalled.addListener(() => {
+chrome.runtime.onInstalled.addListener((details) => {
+  if (details.reason === "update" || details.reason === "install") {
+    chrome.storage.local.remove([
+      "edm_tasks",
+      "edm_history",
+      "edm_tasks_cache",
+      "downloads",
+      "history"
+    ]);
+  }
   chrome.contextMenus.create({
     id: "edm_download_link",
     title: "Download with EDM",

@@ -33,6 +33,7 @@ pub(crate) struct AppState {
     pub(crate) rt_handle: tokio::runtime::Handle,
     pub(crate) ws_manager: Arc<ws_server::WsManager>,
     pub(crate) tray_handle: Arc<Mutex<Option<tauri::tray::TrayIcon>>>,
+    pub(crate) app_handle: Arc<Mutex<Option<tauri::AppHandle>>>,
 }
 
 fn init_logging() {
@@ -1104,15 +1105,69 @@ fn cancel_download(state: State<'_, AppState>, id: String) -> Result<serde_json:
     Ok(serde_json::json!({ "status": "cancelled", "id": id }))
 }
 
+pub(crate) async fn remove_download_task(
+    state: &AppState,
+    id_str: &str,
+    delete_file: bool,
+) -> Result<(), String> {
+    // 1. Cancel in-memory active task
+    {
+        let tasks = state.tasks.lock().unwrap();
+        if let Some(t) = tasks.get(id_str) {
+            t.cancelled.store(true, Ordering::SeqCst);
+        }
+    }
+
+    // 2. Lookup record in store for file paths if delete_file requested
+    let id_uuid = Uuid::parse_str(id_str).map_err(|e| format!("Invalid UUID: {}", e))?;
+    let maybe_record = state
+        .store
+        .list_all_downloads()
+        .ok()
+        .and_then(|records| records.into_iter().find(|d| d.id == id_uuid));
+
+    // 3. Delete from persistent SQLite database
+    let _ = state.store.delete_download(id_uuid);
+
+    // 4. Remove from ws_manager live memory and broadcast task_removed immediately
+    state.ws_manager.broadcast_task_removed(id_str).await;
+
+    // 5. If delete_file, send target file and .edmpart to Recycle Bin
+    if delete_file {
+        if let Some(r) = maybe_record {
+            let base_dir = PathBuf::from(r.save_dir);
+            let target_file = base_dir.join(&r.filename);
+            let part_file = base_dir.join(format!("{}.edmpart", r.filename));
+            if target_file.exists() {
+                let _ = ws_server::send_to_recycle_bin(&target_file);
+            }
+            if part_file.exists() {
+                let _ = ws_server::send_to_recycle_bin(&part_file);
+            }
+        }
+    }
+
+    // 6. Notify desktop frontend window
+    if let Ok(guard) = state.app_handle.lock() {
+        if let Some(ref handle) = *guard {
+            use tauri::Emitter;
+            let _ = handle.emit(
+                "downloads-changed",
+                serde_json::json!({ "id": id_str, "action": "removed" }),
+            );
+        }
+    }
+
+    Ok(())
+}
+
 #[command]
-fn delete_download(state: State<'_, AppState>, id: String) -> Result<serde_json::Value, String> {
-    let tasks = state.tasks.lock().unwrap();
-    if let Some(task) = tasks.get(&id) {
-        task.cancelled.store(true, Ordering::Relaxed);
-    }
-    if let Ok(uuid) = Uuid::parse_str(&id) {
-        let _ = state.store.delete_download(uuid);
-    }
+async fn delete_download(
+    state: State<'_, AppState>,
+    id: String,
+    delete_file: Option<bool>,
+) -> Result<serde_json::Value, String> {
+    remove_download_task(&state, &id, delete_file.unwrap_or(false)).await?;
     Ok(serde_json::json!({ "status": "deleted", "id": id }))
 }
 
@@ -1207,7 +1262,7 @@ fn get_settings(state: State<'_, AppState>) -> Result<Option<serde_json::Value>,
 }
 
 #[command]
-fn save_settings(
+async fn save_settings(
     state: State<'_, AppState>,
     settings: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
@@ -1216,6 +1271,23 @@ fn save_settings(
         .store
         .set_setting("app_settings", &json_str)
         .map_err(|e| e.to_string())?;
+
+    let theme = settings
+        .get("general")
+        .and_then(|g| g.get("theme"))
+        .and_then(|v| v.as_str())
+        .or_else(|| settings.get("theme").and_then(|v| v.as_str()))
+        .map(String::from);
+    let palette = settings
+        .get("general")
+        .and_then(|g| g.get("palette"))
+        .and_then(|v| v.as_str())
+        .or_else(|| settings.get("palette").and_then(|v| v.as_str()))
+        .map(String::from);
+
+    state.ws_manager.update_theme_palette(theme, palette).await;
+    state.ws_manager.broadcast_snapshot().await;
+
     Ok(serde_json::json!({ "status": "saved" }))
 }
 
@@ -1358,6 +1430,7 @@ fn main() {
         rt_handle: rt_handle.clone(),
         ws_manager: ws_manager.clone(),
         tray_handle: Arc::new(Mutex::new(None)),
+        app_handle: Arc::new(Mutex::new(None)),
     };
 
     spawn_extension_bridge(app_state.clone(), rt_handle.clone());
@@ -1490,21 +1563,8 @@ fn main() {
                     }
                 }
                 "remove" => {
-                    if let Ok(id_uuid) = Uuid::parse_str(&cmd.id) {
-                        {
-                            let tasks = action_state.tasks.lock().unwrap();
-                            if let Some(t) = tasks.get(&cmd.id) {
-                                t.cancelled.store(true, Ordering::Relaxed);
-                            }
-                        }
-                        let _ = action_state.store.delete_download(id_uuid);
-                        let live_tasks = action_state.ws_manager.get_live_tasks();
-                        let mut live = live_tasks.write().await;
-                        live.remove(&cmd.id);
-                        Ok(())
-                    } else {
-                        Err("Invalid task id".into())
-                    }
+                    let delete_file = cmd.delete_file;
+                    remove_download_task(&action_state, &cmd.id, delete_file).await
                 }
                 "open_file" => {
                     let live_tasks = action_state.ws_manager.get_live_tasks();
@@ -1695,6 +1755,27 @@ fn main() {
 
             let app_state_ref = app.state::<AppState>();
             *app_state_ref.tray_handle.lock().unwrap() = Some(tray.clone());
+            *app_state_ref.app_handle.lock().unwrap() = Some(app.handle().clone());
+
+            // Initialize theme and palette in ws_manager from store
+            if let Ok(Some(settings_str)) = app_state_ref.store.get_setting("app_settings") {
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&settings_str) {
+                    let theme = val
+                        .get("general")
+                        .and_then(|g| g.get("theme"))
+                        .and_then(|v| v.as_str())
+                        .map(String::from);
+                    let palette = val
+                        .get("general")
+                        .and_then(|g| g.get("palette"))
+                        .and_then(|v| v.as_str())
+                        .map(String::from);
+                    let ws_mgr = app_state_ref.ws_manager.clone();
+                    app_state_ref.rt_handle.spawn(async move {
+                        ws_mgr.update_theme_palette(theme, palette).await;
+                    });
+                }
+            }
 
             // Tray tooltip ticker (at most once per second)
             let tray_app_state = app_state_ref.inner().clone();

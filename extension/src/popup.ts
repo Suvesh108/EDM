@@ -17,6 +17,26 @@ interface DownloadItem {
   error_msg?: string | null;
 }
 
+const SVG_ICONS = {
+  play: `<svg viewBox="0 0 24 24" fill="currentColor"><polygon points="7 4 20 12 7 20 7 4"></polygon></svg>`,
+  pause: `<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"></rect><rect x="14" y="4" width="4" height="16" rx="1"></rect></svg>`,
+  cancel: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>`,
+  retry: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>`,
+  openFile: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="12" y1="18" x2="12" y2="12"></line><line x1="9" y1="15" x2="15" y2="15"></line></svg>`,
+  openFolder: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>`,
+  copy: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>`,
+  trash: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>`,
+  check: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>`,
+};
+
+const CATEGORY_SVGS = {
+  video: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect><line x1="7" y1="2" x2="7" y2="22"></line><line x1="17" y1="2" x2="17" y2="22"></line><line x1="2" y1="12" x2="22" y2="12"></line><line x1="2" y1="7" x2="7" y2="7"></line><line x1="2" y1="17" x2="7" y2="17"></line><line x1="17" y1="17" x2="22" y2="17"></line><line x1="17" y1="7" x2="22" y2="7"></line></svg>`,
+  music: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>`,
+  compressed: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 8 21 21 3 21 3 8"></polyline><rect x="1" y="3" width="22" height="5"></rect><line x1="10" y1="12" x2="14" y2="12"></line></svg>`,
+  document: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>`,
+  programs: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>`,
+};
+
 // Format helpers
 function formatBytes(bytes: number | null | undefined): string {
   if (!bytes || bytes <= 0) return "0 B";
@@ -81,6 +101,7 @@ class PopupController {
   private pollInterval: any = null;
   private refreshRateMs: number = 500;
   private port: chrome.runtime.Port | null = null;
+  private deleteModalTarget: { id: string; filename: string } | null = null;
 
   constructor() {
     this.init();
@@ -100,6 +121,12 @@ class PopupController {
         if (msg.type === "snapshot") {
           this.connectionState = msg.connectionStatus || "disconnected";
           this.updateConnectionPill();
+          if (msg.palette) {
+            document.documentElement.setAttribute("data-palette", msg.palette);
+          }
+          if (msg.theme) {
+            document.documentElement.setAttribute("data-theme", msg.theme);
+          }
           if (Array.isArray(msg.tasks)) {
             this.downloads = msg.tasks.map((t: any) => ({
               id: t.id,
@@ -115,11 +142,7 @@ class PopupController {
               connections: 8,
               created_at: "",
             }));
-            const badge = document.getElementById("tasksBadge");
-            if (badge) {
-              const activeCount = this.downloads.filter(d => d.state === "downloading").length;
-              badge.innerText = String(activeCount);
-            }
+            this.updateAllCounters();
             if (this.activeTab === "tasks") {
               this.renderTasksListOnly();
             }
@@ -136,9 +159,57 @@ class PopupController {
     }
   }
 
-  private sendTaskAction(id: string, action: string) {
+  private updateAllCounters() {
+    const activeDownloads = this.downloads.filter(
+      (d) => d.state === "downloading" || d.state === "queued" || d.state === "connecting"
+    );
+    const completedCount = this.downloads.filter((d) => d.state === "completed").length;
+    const failedCount = this.downloads.filter((d) => d.state === "failed" || d.state === "cancelled").length;
+    const aggSpeed = activeDownloads.reduce((sum, d) => sum + (d.speed_bytes_per_sec || 0), 0);
+
+    // Header badge
+    const badge = document.getElementById("tasksBadge");
+    if (badge) {
+      badge.innerText = String(activeDownloads.length);
+    }
+
+    // Filter pills
+    const pillAll = document.querySelector('.filter-pill[data-filter="all"]');
+    if (pillAll) pillAll.textContent = `All (${this.downloads.length})`;
+
+    const pillActive = document.querySelector('.filter-pill[data-filter="active"]');
+    if (pillActive) pillActive.textContent = `Active (${activeDownloads.length})`;
+
+    const pillDone = document.querySelector('.filter-pill[data-filter="completed"]');
+    if (pillDone) pillDone.textContent = `Done (${completedCount})`;
+
+    const pillFailed = document.querySelector('.filter-pill[data-filter="failed"]');
+    if (pillFailed) pillFailed.textContent = `Failed${failedCount > 0 ? ` (${failedCount})` : ""}`;
+
+    // Aggregate strip
+    const strip = document.querySelector(".aggregate-strip");
+    if (strip) {
+      strip.innerHTML = `
+        <span>Active: <span style="color: var(--accent); font-weight:600;">${activeDownloads.length}</span> · Completed: ${completedCount}</span>
+        <span class="aggregate-speed">${formatSpeed(aggSpeed)} Total</span>
+      `;
+    }
+  }
+
+  private sendTaskAction(id: string, action: string, deleteFile: boolean = false) {
+    if (action === "remove") {
+      this.downloads = this.downloads.filter((d) => d.id !== id);
+      this.updateAllCounters();
+      this.renderTasksListOnly();
+    }
     if (this.port) {
-      this.port.postMessage({ type: "task_action", id, action });
+      this.port.postMessage({
+        type: "task_action",
+        id,
+        action,
+        delete_file: deleteFile,
+        req_id: crypto.randomUUID(),
+      });
     }
   }
 
@@ -146,11 +217,15 @@ class PopupController {
     const data = await chrome.storage.local.get([
       "edm_refresh_rate",
       "edm_theme",
+      "edm_palette",
       "edm_ws_token",
       "edm_interception_enabled",
     ]);
     if (data.edm_refresh_rate) {
       this.refreshRateMs = parseInt(data.edm_refresh_rate, 10);
+    }
+    if (data.edm_palette) {
+      document.documentElement.setAttribute("data-palette", data.edm_palette);
     }
     if (data.edm_theme) {
       document.documentElement.setAttribute("data-theme", data.edm_theme);
@@ -374,80 +449,104 @@ class PopupController {
         const isCompleted = item.state === "completed";
         const isFailed = item.state === "failed" || item.state === "cancelled";
 
-        let catClass = "cat-programs";
-        let catLetter = "⚙";
+        let catClass = "tile-programs";
+        let catSvg = CATEGORY_SVGS.programs;
         const ext = item.filename.split(".").pop()?.toLowerCase() || "";
-        if (["mp4", "mkv", "webm", "avi"].includes(ext)) {
-          catClass = "cat-video";
-          catLetter = "🎬";
-        } else if (["mp3", "flac", "wav", "m4a"].includes(ext)) {
-          catClass = "cat-music";
-          catLetter = "🎵";
-        } else if (["zip", "rar", "7z", "tar", "gz", "iso"].includes(ext)) {
-          catClass = "cat-compressed";
-          catLetter = "📦";
-        } else if (["pdf", "doc", "docx", "txt"].includes(ext)) {
-          catClass = "cat-documents";
-          catLetter = "📄";
+        if (["mp4", "mkv", "webm", "avi", "mov", "flv", "m4v"].includes(ext)) {
+          catClass = "tile-video";
+          catSvg = CATEGORY_SVGS.video;
+        } else if (["mp3", "flac", "wav", "m4a", "aac", "ogg", "wma"].includes(ext)) {
+          catClass = "tile-music";
+          catSvg = CATEGORY_SVGS.music;
+        } else if (["zip", "rar", "7z", "tar", "gz", "iso", "bin", "7zip"].includes(ext)) {
+          catClass = "tile-compressed";
+          catSvg = CATEGORY_SVGS.compressed;
+        } else if (["pdf", "doc", "docx", "txt", "xlsx", "pptx", "epub", "csv"].includes(ext)) {
+          catClass = "tile-document";
+          catSvg = CATEGORY_SVGS.document;
         }
 
+        let metaHtml = "";
+        if (isDownloading) {
+          metaHtml = `
+            <span>${total > 0 ? `${formatBytes(done)} / ${formatBytes(total)} (${pct}%)` : `${formatBytes(done)}`}</span>
+            <span>•</span>
+            <span style="color: var(--accent); font-weight: 600;">${formatSpeed(item.speed_bytes_per_sec)}</span>
+            <span>•</span>
+            <span>${formatEta(total - done, item.speed_bytes_per_sec)}</span>
+          `;
+        } else if (isCompleted) {
+          metaHtml = `
+            <span>${formatBytes(done || total)}</span>
+            <span>•</span>
+            <span>${escapeHtml(item.category || "General")}</span>
+            <span>•</span>
+            <span style="color: #34D399; font-weight: 600; display: inline-flex; align-items: center; gap: 3px;">
+              <span style="display: inline-block; width: 11px; height: 11px;">${SVG_ICONS.check}</span> Finished
+            </span>
+          `;
+        } else if (isPaused) {
+          metaHtml = `
+            <span>${total > 0 ? `${formatBytes(done)} / ${formatBytes(total)} (${pct}%)` : `${formatBytes(done)}`}</span>
+            <span>•</span>
+            <span style="color: #FBBF24; font-weight: 600;">Paused</span>
+          `;
+        } else {
+          metaHtml = `
+            <span>${formatBytes(done)}</span>
+            <span>•</span>
+            <span style="color: #F87171; font-weight: 600;">Failed</span>
+          `;
+        }
+
+        let actionsHtml = "";
+        if (isDownloading) {
+          actionsHtml = `
+            <button class="btn-icon-3d act-pause" data-id="${escapeHtml(item.id)}" title="Pause Download">${SVG_ICONS.pause}</button>
+            <button class="btn-icon-3d btn-icon-danger act-cancel" data-id="${escapeHtml(item.id)}" title="Cancel Download">${SVG_ICONS.cancel}</button>
+          `;
+        } else if (isPaused) {
+          actionsHtml = `
+            <button class="btn-icon-3d btn-icon-success act-resume" data-id="${escapeHtml(item.id)}" title="Resume Download">${SVG_ICONS.play}</button>
+            <button class="btn-icon-3d btn-icon-danger act-cancel" data-id="${escapeHtml(item.id)}" title="Cancel Download">${SVG_ICONS.cancel}</button>
+          `;
+        } else if (isCompleted) {
+          actionsHtml = `
+            <button class="btn-icon-3d act-open-file" data-id="${escapeHtml(item.id)}" title="Open File">${SVG_ICONS.openFile}</button>
+            <button class="btn-icon-3d act-open-folder" data-id="${escapeHtml(item.id)}" title="Open Folder">${SVG_ICONS.openFolder}</button>
+          `;
+        } else if (isFailed) {
+          actionsHtml = `
+            <button class="btn-icon-3d btn-icon-primary act-retry" data-id="${escapeHtml(item.id)}" title="Retry Download">${SVG_ICONS.retry}</button>
+          `;
+        }
+
+        actionsHtml += `
+          <button class="btn-icon-3d act-copy" data-url="${escapeHtml(item.url || item.filename)}" title="Copy URL">${SVG_ICONS.copy}</button>
+          <button class="btn-icon-3d btn-icon-danger act-delete" data-id="${escapeHtml(item.id)}" data-name="${escapeHtml(item.filename)}" title="Remove">${SVG_ICONS.trash}</button>
+        `;
+
         return `
-        <div class="download-card" data-id="${escapeHtml(item.id)}">
-          <div class="card-header">
-            <div class="card-identity">
-              <div class="cat-icon ${catClass}">${catLetter}</div>
-              <div style="min-width: 0; flex: 1;">
-                <div class="file-name" title="${escapeHtml(item.filename)}">${escapeHtml(item.filename)}</div>
-                <div class="file-meta">${escapeHtml(item.category)} • ${escapeHtml(item.save_dir || "Downloads")}</div>
+          <div class="download-card ${isCompleted ? 'card-completed' : 'card-downloading'}" data-id="${escapeHtml(item.id)}">
+            <div class="card-inner">
+              <div class="card-icon-tile ${catClass}">
+                ${catSvg}
+              </div>
+              <div class="card-content">
+                <div class="card-title-row">
+                  <div class="file-name" title="${escapeHtml(item.filename)}">${escapeHtml(item.filename)}</div>
+                </div>
+                <div class="card-meta-row">
+                  ${metaHtml}
+                </div>
+              </div>
+              <div class="card-actions-cluster">
+                ${actionsHtml}
               </div>
             </div>
-            <span class="status-badge status-${escapeHtml(item.state)}">${escapeHtml(item.state)}</span>
+            ${isDownloading ? `<div class="card-progress-border" style="width: ${pct}%;"></div>` : ''}
           </div>
-
-          <div class="progress-track">
-            <div class="progress-bar-fill" style="width: ${pct}%;">
-              ${isDownloading ? '<div class="progress-bar-beacon"></div>' : ""}
-            </div>
-          </div>
-
-          <div class="card-stats">
-            <span>${total > 0 ? `${formatBytes(done)} / ${formatBytes(total)} (${pct}%)` : `${formatBytes(done)} downloaded`}</span>
-            <span class="card-stats-speed">
-              ${isDownloading ? `${formatSpeed(item.speed_bytes_per_sec)} · ${formatEta(total - done, item.speed_bytes_per_sec)}` : isCompleted ? "Finished" : isPaused ? "Paused" : escapeHtml(item.state)}
-            </span>
-          </div>
-
-          <div class="card-actions">
-            ${
-              isDownloading
-                ? `<button class="btn-3d act-pause" data-id="${escapeHtml(item.id)}" title="Pause Download">⏸ Pause</button>`
-                : isPaused
-                ? `<button class="btn-3d act-resume" data-id="${escapeHtml(item.id)}" style="color: #34D399;" title="Resume Download">▶ Resume</button>`
-                : ""
-            }
-            ${
-              isCompleted
-                ? `
-              <button class="btn-3d act-open-file" data-id="${escapeHtml(item.id)}" title="Open File">📄 Open</button>
-              <button class="btn-3d act-open-folder" data-id="${escapeHtml(item.id)}" title="Open Containing Folder">📁 Folder</button>
-            `
-                : ""
-            }
-            ${
-              isFailed
-                ? `<button class="btn-3d act-retry" data-id="${escapeHtml(item.id)}" style="color: #38BDF8;" title="Retry Download">↻ Retry</button>`
-                : ""
-            }
-            ${
-              !isCompleted
-                ? `<button class="btn-3d act-cancel" data-id="${escapeHtml(item.id)}" style="color: #F87171;" title="Cancel Download">✕ Cancel</button>`
-                : ""
-            }
-            <button class="btn-3d act-copy" data-url="${escapeHtml(item.url)}" title="Copy URL">📋</button>
-            <button class="btn-3d act-delete" data-id="${escapeHtml(item.id)}" title="Remove from list">🗑</button>
-          </div>
-        </div>
-      `;
+        `;
       })
       .join("");
   }
@@ -621,11 +720,62 @@ class PopupController {
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
         const id = btn.getAttribute("data-id");
+        const filename = btn.getAttribute("data-name") || "Download";
         if (id) {
-          this.sendTaskAction(id, "remove");
+          this.openDeleteModal(id, filename);
         }
       });
     });
+  }
+
+  private openDeleteModal(id: string, filename: string) {
+    this.deleteModalTarget = { id, filename };
+    let modal = document.getElementById("deleteConfirmModal");
+    if (!modal) {
+      modal = document.createElement("div");
+      modal.id = "deleteConfirmModal";
+      modal.className = "modal-overlay";
+      document.body.appendChild(modal);
+    }
+    modal.style.display = "flex";
+    modal.innerHTML = `
+      <div class="modal-dialog">
+        <div class="modal-title">Remove Download</div>
+        <div class="modal-desc">
+          Are you sure you want to remove <strong>${escapeHtml(filename)}</strong>?
+        </div>
+        <div class="modal-buttons">
+          <button id="modalCancelBtn" class="btn-3d">Cancel</button>
+          <button id="modalRemoveListBtn" class="btn-3d">Remove from list</button>
+          <button id="modalRecycleFileBtn" class="btn-3d btn-danger">Recycle File</button>
+        </div>
+      </div>
+    `;
+
+    document.getElementById("modalCancelBtn")?.addEventListener("click", () => {
+      this.closeDeleteModal();
+    });
+    document.getElementById("modalRemoveListBtn")?.addEventListener("click", () => {
+      if (this.deleteModalTarget) {
+        this.sendTaskAction(this.deleteModalTarget.id, "remove", false);
+      }
+      this.closeDeleteModal();
+    });
+    document.getElementById("modalRecycleFileBtn")?.addEventListener("click", () => {
+      if (this.deleteModalTarget) {
+        this.sendTaskAction(this.deleteModalTarget.id, "remove", true);
+      }
+      this.closeDeleteModal();
+    });
+  }
+
+  private closeDeleteModal() {
+    this.deleteModalTarget = null;
+    const modal = document.getElementById("deleteConfirmModal");
+    if (modal) {
+      modal.style.display = "none";
+      modal.innerHTML = "";
+    }
   }
 
   // ─────────────────────────────────────────────────────────────

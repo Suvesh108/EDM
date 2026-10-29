@@ -1,4 +1,5 @@
-:root {
+:root,
+[data-palette="blue"] {
   --bg-chassis: #000000;
   --bg-header: #080808;
   --bg-card: #111111;
@@ -12,6 +13,7 @@
   --text-muted: #71717A;
   --accent: #2563EB;
   --accent-hover: #3B82F6;
+  --accent-pressed: #1D4ED8;
   --accent-glow: rgba(37, 99, 235, 0.35);
   --accent-badge-bg: rgba(37, 99, 235, 0.16);
   --accent-badge-border: rgba(37, 99, 235, 0.35);
@@ -21,12 +23,54 @@
   --danger: #EF4444;
 }
 
-[data-theme="blue"] {
-  --bg-chassis: #050B14;
-  --bg-header: #0A1322;
-  --bg-card: #0E1B2E;
-  --bg-card-hover: #13243D;
-  --border-subtle: #1C3252;
+[data-palette="emerald"] {
+  --accent: #10B981;
+  --accent-hover: #34D399;
+  --accent-pressed: #059669;
+  --accent-glow: rgba(16, 185, 129, 0.35);
+  --accent-badge-bg: rgba(16, 185, 129, 0.16);
+  --accent-badge-border: rgba(16, 185, 129, 0.35);
+  --accent-badge-text: #34D399;
+}
+
+[data-palette="amber"] {
+  --accent: #F59E0B;
+  --accent-hover: #FBBF24;
+  --accent-pressed: #D97706;
+  --accent-glow: rgba(245, 158, 11, 0.35);
+  --accent-badge-bg: rgba(245, 158, 11, 0.16);
+  --accent-badge-border: rgba(245, 158, 11, 0.35);
+  --accent-badge-text: #FBBF24;
+}
+
+[data-palette="violet"] {
+  --accent: #8B5CF6;
+  --accent-hover: #A78BFA;
+  --accent-pressed: #7C3AED;
+  --accent-glow: rgba(139, 92, 246, 0.35);
+  --accent-badge-bg: rgba(139, 92, 246, 0.16);
+  --accent-badge-border: rgba(139, 92, 246, 0.35);
+  --accent-badge-text: #A78BFA;
+}
+
+[data-palette="rose"] {
+  --accent: #F43F5E;
+  --accent-hover: #FB7185;
+  --accent-pressed: #E11D48;
+  --accent-glow: rgba(244, 63, 94, 0.35);
+  --accent-badge-bg: rgba(244, 63, 94, 0.16);
+  --accent-badge-border: rgba(244, 63, 94, 0.35);
+  --accent-badge-text: #FB7185;
+}
+
+[data-palette="titanium"] {
+  --accent: #64748B;
+  --accent-hover: #94A3B8;
+  --accent-pressed: #475569;
+  --accent-glow: rgba(100, 116, 139, 0.30);
+  --accent-badge-bg: rgba(100, 116, 139, 0.18);
+  --accent-badge-border: rgba(100, 116, 139, 0.35);
+  --accent-badge-text: #CBD5E1;
 }
 
 * {
@@ -298,52 +342,100 @@ body {
   gap: 8px;
 }
 
+/* ── Compact 3D Task Card ────────────────────────── */
 .download-card {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.02) 0%, rgba(255, 255, 255, 0) 100%), var(--bg-card);
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.03) 0%, rgba(255, 255, 255, 0) 100%), var(--bg-card);
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
-  padding: 9px 10px;
+  padding: 7px 10px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  transition: all 0.12s ease;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  transition: border-color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
 }
 .download-card:hover {
   border-color: var(--border-strong);
   background-color: var(--bg-card-hover);
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.07);
 }
 
-.card-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+.download-card.card-completed {
+  min-height: 50px;
+  max-height: 52px;
 }
-.card-identity {
+
+.download-card.card-downloading {
+  min-height: 52px;
+  max-height: 58px;
+}
+
+.card-inner {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   min-width: 0;
-  flex: 1;
+  width: 100%;
 }
 
-.cat-icon {
-  width: 24px;
-  height: 24px;
-  border-radius: 6px;
-  background: #181818;
-  border: 1px solid var(--border-subtle);
+.card-icon-tile {
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  border-radius: 7px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 11px;
-  shrink: 0;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.15), 0 1px 2px rgba(0, 0, 0, 0.2);
+  flex-shrink: 0;
 }
-.cat-video { color: #A78BFA; }
-.cat-music { color: #FBBF24; }
-.cat-compressed { color: #FB923C; }
-.cat-documents { color: #60A5FA; }
-.cat-programs { color: #34D399; }
+.card-icon-tile svg {
+  width: 17px;
+  height: 17px;
+}
+
+.tile-video {
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.22) 0%, rgba(99, 102, 241, 0.12) 100%);
+  border-color: rgba(139, 92, 246, 0.35);
+  color: #A78BFA;
+}
+.tile-music {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.22) 0%, rgba(217, 119, 6, 0.12) 100%);
+  border-color: rgba(245, 158, 11, 0.35);
+  color: #FBBF24;
+}
+.tile-compressed {
+  background: linear-gradient(135deg, rgba(249, 115, 22, 0.22) 0%, rgba(234, 88, 12, 0.12) 100%);
+  border-color: rgba(249, 115, 22, 0.35);
+  color: #FB923C;
+}
+.tile-document {
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.22) 0%, rgba(37, 99, 235, 0.12) 100%);
+  border-color: rgba(59, 130, 246, 0.35);
+  color: #60A5FA;
+}
+.tile-programs {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.22) 0%, rgba(5, 150, 105, 0.12) 100%);
+  border-color: rgba(16, 185, 129, 0.35);
+  color: #34D399;
+}
+
+.card-content {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 0;
+  flex: 1;
+  gap: 2px;
+}
+
+.card-title-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
 
 .file-name {
   font-size: 11.5px;
@@ -352,99 +444,144 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  letter-spacing: -0.1px;
 }
-.file-meta {
+
+.card-meta-row {
   font-size: 10px;
   color: var(--text-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-/* Status Badges */
-.status-badge {
-  font-size: 9.5px;
-  font-weight: 600;
-  padding: 2px 6px;
-  border-radius: 4px;
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
-  shrink: 0;
-}
-.status-downloading {
-  background: rgba(37, 99, 235, 0.18);
-  border: 1px solid rgba(37, 99, 235, 0.4);
-  color: #60A5FA;
-}
-.status-completed {
-  background: rgba(16, 185, 129, 0.18);
-  border: 1px solid rgba(16, 185, 129, 0.4);
-  color: #34D399;
-}
-.status-paused {
-  background: rgba(245, 158, 11, 0.18);
-  border: 1px solid rgba(245, 158, 11, 0.4);
-  color: #FBBF24;
-}
-.status-failed {
-  background: rgba(239, 68, 68, 0.18);
-  border: 1px solid rgba(239, 68, 68, 0.4);
-  color: #F87171;
-}
-.status-queued {
-  background: rgba(139, 92, 246, 0.18);
-  border: 1px solid rgba(139, 92, 246, 0.4);
-  color: #A78BFA;
-}
-
-/* Progress Track */
-.progress-track {
-  width: 100%;
-  height: 6px;
-  background: #000000;
-  border-radius: 3px;
-  border: 1px solid var(--border-subtle);
-  overflow: hidden;
-  position: relative;
-}
-.progress-bar-fill {
-  height: 100%;
-  background: linear-gradient(90deg, #2563EB, #38BDF8);
-  border-radius: 2px;
-  transition: width 0.25s ease;
-  position: relative;
-}
-.progress-bar-beacon {
-  position: absolute;
-  right: 0;
-  top: 0;
-  bottom: 0;
-  width: 2px;
-  background-color: #FFFFFF;
-  box-shadow: 0 0 6px #38BDF8;
-}
-
-.card-stats {
+  font-variant-numeric: tabular-nums;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  font-size: 10px;
-  font-family: monospace;
-  color: var(--text-muted);
-}
-.card-stats-speed {
-  color: #10B981;
-  font-weight: 600;
+  gap: 4px;
 }
 
-/* Card Actions */
-.card-actions {
+.card-actions-cluster {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.btn-icon-3d {
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.07) 0%, rgba(255, 255, 255, 0.01) 100%), #141414;
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  transition: all 0.12s ease;
+}
+.btn-icon-3d:hover {
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.12) 0%, rgba(255, 255, 255, 0.02) 100%), #1c1c1c;
+  transform: translateY(-0.5px);
+}
+.btn-icon-3d:active {
+  transform: translateY(1px) scale(0.96);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+.btn-icon-3d svg {
+  width: 14px;
+  height: 14px;
+}
+
+.btn-icon-primary {
+  color: var(--accent);
+}
+.btn-icon-primary:hover {
+  color: var(--accent-hover);
+  border-color: var(--accent-badge-border);
+}
+
+.btn-icon-success {
+  color: #34D399;
+}
+.btn-icon-success:hover {
+  color: #10B981;
+}
+
+.btn-icon-danger {
+  color: #F87171;
+}
+.btn-icon-danger:hover {
+  color: #EF4444;
+  border-color: rgba(239, 68, 68, 0.35);
+}
+
+.card-progress-border {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  height: 3px;
+  background: var(--accent);
+  border-radius: 0 0 0 8px;
+  transition: width 0.25s linear;
+  box-shadow: 0 0 6px var(--accent-glow);
+}
+
+/* Delete Confirmation Modal */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(3px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 16px;
+}
+.modal-dialog {
+  background: var(--bg-card);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.65), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  padding: 16px;
+  width: 100%;
+  max-width: 340px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.modal-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.modal-desc {
+  font-size: 11px;
+  color: var(--text-secondary);
+  word-break: break-all;
+  line-height: 1.4;
+}
+.modal-buttons {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 5px;
-  border-top: 1px solid rgba(255, 255, 255, 0.04);
-  padding-top: 5px;
+  gap: 6px;
+  margin-top: 6px;
+}
+.btn-danger {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.15) 0%, rgba(255, 255, 255, 0) 100%), #DC2626;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #FFFFFF;
+  box-shadow: 0 1px 3px rgba(220, 38, 38, 0.4);
+}
+.btn-danger:hover {
+  background: #B91C1C;
 }
 
 /* Resources & Images Tab */

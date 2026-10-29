@@ -243,11 +243,11 @@ export async function tauriCancelDownload(id: string): Promise<void> {
   }
 }
 
-export async function tauriDeleteDownload(id: string): Promise<void> {
+export async function tauriDeleteDownload(id: string, deleteFile?: boolean): Promise<void> {
   if (isTauri()) {
     try {
       const { invoke } = await import("@tauri-apps/api/core");
-      await invoke("delete_download", { id });
+      await invoke("delete_download", { id, delete_file: deleteFile });
     } catch (err) {
       console.warn("Tauri delete_download:", err);
     }

@@ -318,11 +318,23 @@ export default function App() {
     // Initial immediate sync
     syncWithBackend();
 
+    // Listen for backend downloads-changed event (e.g. extension deleted task)
+    let unlisten: (() => void) | undefined;
+    import("@tauri-apps/api/event").then(({ listen }) => {
+      listen("downloads-changed", () => {
+        syncWithBackend();
+      }).then((fn) => {
+        if (mounted) unlisten = fn;
+        else fn();
+      });
+    }).catch(() => {});
+
     // Fast sync interval
     const interval = setInterval(syncWithBackend, 800);
     return () => {
       mounted = false;
       clearInterval(interval);
+      if (unlisten) unlisten();
     };
   }, []);
 

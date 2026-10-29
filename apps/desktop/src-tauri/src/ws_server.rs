@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use subtle::ConstantTimeEq;
@@ -71,8 +71,12 @@ pub enum InboundWsMessage {
         filename: Option<String>,
     },
     TaskAction {
+        #[serde(default)]
+        req_id: Option<String>,
         id: String,
         action: String, // "pause" | "resume" | "cancel" | "remove" | "open_file" | "open_folder"
+        #[serde(default)]
+        delete_file: Option<bool>,
     },
 }
 
@@ -91,6 +95,19 @@ pub enum OutboundWsMessage {
     },
     Snapshot {
         tasks: Vec<WsTaskItem>,
+        #[serde(default)]
+        epoch: String,
+        #[serde(default)]
+        rev: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        theme: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        palette: Option<String>,
+    },
+    TaskRemoved {
+        id: String,
+        epoch: String,
+        rev: u64,
     },
 }
 
@@ -108,8 +125,11 @@ pub struct CreateTaskCommand {
 
 #[derive(Debug)]
 pub struct ActionCommand {
+    #[allow(dead_code)]
+    pub req_id: Option<String>,
     pub id: String,
     pub action: String,
+    pub delete_file: bool,
     pub resp_tx: tokio::sync::oneshot::Sender<Result<(), String>>,
 }
 
@@ -118,6 +138,10 @@ pub struct WsManager {
     pub allowed_extension_id: String,
     pub store: Store,
     pub tasks: Arc<RwLock<HashMap<String, WsTaskItem>>>,
+    pub epoch: String,
+    pub rev: Arc<AtomicU64>,
+    pub theme: Arc<RwLock<Option<String>>>,
+    pub palette: Arc<RwLock<Option<String>>>,
     pub tx_broadcast: broadcast::Sender<String>,
     pub tx_create_task: mpsc::Sender<CreateTaskCommand>,
     pub tx_action: mpsc::Sender<ActionCommand>,
@@ -137,9 +161,66 @@ impl WsManager {
             allowed_extension_id,
             store,
             tasks: Arc::new(RwLock::new(HashMap::new())),
+            epoch: Uuid::new_v4().to_string(),
+            rev: Arc::new(AtomicU64::new(1)),
+            theme: Arc::new(RwLock::new(None)),
+            palette: Arc::new(RwLock::new(None)),
             tx_broadcast,
             tx_create_task,
             tx_action,
+        }
+    }
+
+    pub fn bump_rev(&self) -> u64 {
+        self.rev.fetch_add(1, Ordering::SeqCst) + 1
+    }
+
+    pub async fn update_theme_palette(&self, theme: Option<String>, palette: Option<String>) {
+        if let Some(t) = theme {
+            *self.theme.write().await = Some(t);
+        }
+        if let Some(p) = palette {
+            *self.palette.write().await = Some(p);
+        }
+        self.bump_rev();
+    }
+
+    pub async fn build_snapshot(&self) -> OutboundWsMessage {
+        let tasks: Vec<WsTaskItem> = {
+            let map = self.tasks.read().await;
+            map.values().cloned().collect()
+        };
+        let theme = self.theme.read().await.clone();
+        let palette = self.palette.read().await.clone();
+        OutboundWsMessage::Snapshot {
+            tasks,
+            epoch: self.epoch.clone(),
+            rev: self.rev.load(Ordering::Relaxed),
+            theme,
+            palette,
+        }
+    }
+
+    pub async fn broadcast_snapshot(&self) {
+        let msg = self.build_snapshot().await;
+        if let Ok(json) = serde_json::to_string(&msg) {
+            let _ = self.tx_broadcast.send(json);
+        }
+    }
+
+    pub async fn broadcast_task_removed(&self, id: &str) {
+        let rev = self.bump_rev();
+        {
+            let mut tasks = self.tasks.write().await;
+            tasks.remove(id);
+        }
+        let msg = OutboundWsMessage::TaskRemoved {
+            id: id.to_string(),
+            epoch: self.epoch.clone(),
+            rev,
+        };
+        if let Ok(json) = serde_json::to_string(&msg) {
+            let _ = self.tx_broadcast.send(json);
         }
     }
 
@@ -294,12 +375,7 @@ pub async fn start_ws_server(manager: Arc<WsManager>) {
         let mut last_serialized = String::new();
         loop {
             interval.tick().await;
-            let tasks: Vec<WsTaskItem> = {
-                let map = ticker_mgr.tasks.read().await;
-                map.values().cloned().collect()
-            };
-
-            let snapshot = OutboundWsMessage::Snapshot { tasks };
+            let snapshot = ticker_mgr.build_snapshot().await;
             if let Ok(json) = serde_json::to_string(&snapshot) {
                 if json != last_serialized {
                     last_serialized = json.clone();
@@ -614,11 +690,7 @@ async fn handle_ws_connection(stream: TcpStream, peer_addr: SocketAddr, manager:
                             }
                             Ok(InboundWsMessage::Subscribe) => {
                                 is_subscribed = true;
-                                let tasks: Vec<WsTaskItem> = {
-                                    let map = manager.tasks.read().await;
-                                    map.values().cloned().collect()
-                                };
-                                let snapshot = OutboundWsMessage::Snapshot { tasks };
+                                let snapshot = manager.build_snapshot().await;
                                 if let Ok(json) = serde_json::to_string(&snapshot) {
                                     if ws_tx.send(Message::Text(json.into())).await.is_err() {
                                         break;
@@ -673,14 +745,56 @@ async fn handle_ws_connection(stream: TcpStream, peer_addr: SocketAddr, manager:
                                     }
                                 }
                             }
-                            Ok(InboundWsMessage::TaskAction { id, action }) => {
-                                let (resp_tx, _) = tokio::sync::oneshot::channel();
+                            Ok(InboundWsMessage::TaskAction { req_id, id, action, delete_file }) => {
+                                let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
                                 let cmd = ActionCommand {
+                                    req_id: req_id.clone(),
                                     id,
                                     action,
+                                    delete_file: delete_file.unwrap_or(false),
                                     resp_tx,
                                 };
-                                let _ = manager.tx_action.send(cmd).await;
+                                let ack = if manager.tx_action.send(cmd).await.is_ok() {
+                                    match tokio::time::timeout(Duration::from_secs(3), resp_rx).await {
+                                        Ok(Ok(Ok(()))) => {
+                                            req_id.map(|rid| OutboundWsMessage::Ack {
+                                                req_id: rid,
+                                                ok: true,
+                                                id: None,
+                                                error: None,
+                                            })
+                                        }
+                                        Ok(Ok(Err(err))) => {
+                                            req_id.map(|rid| OutboundWsMessage::Ack {
+                                                req_id: rid,
+                                                ok: false,
+                                                id: None,
+                                                error: Some(err),
+                                            })
+                                        }
+                                        _ => {
+                                            req_id.map(|rid| OutboundWsMessage::Ack {
+                                                req_id: rid,
+                                                ok: false,
+                                                id: None,
+                                                error: Some("Timeout executing task action".into()),
+                                            })
+                                        }
+                                    }
+                                } else {
+                                    req_id.map(|rid| OutboundWsMessage::Ack {
+                                        req_id: rid,
+                                        ok: false,
+                                        id: None,
+                                        error: Some("Internal task dispatcher unavailable".into()),
+                                    })
+                                };
+
+                                if let Some(ack_msg) = ack {
+                                    if let Ok(json) = serde_json::to_string(&ack_msg) {
+                                        let _ = ws_tx.send(Message::Text(json.into())).await;
+                                    }
+                                }
                             }
                             Ok(InboundWsMessage::Hello { .. }) => {
                                 // Redundant hello ignored
@@ -773,6 +887,60 @@ pub fn secure_open_folder(save_dir: &std::path::Path, filename: &str) -> Result<
         open::that(save_dir).map_err(|e| format!("Failed to open directory: {}", e))?;
         Ok(())
     }
+}
+
+/// Send file or directory to OS Recycle Bin safely instead of permanent unlink
+#[cfg(windows)]
+pub fn send_to_recycle_bin(path: &std::path::Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+    wide.push(0);
+    wide.push(0);
+
+    #[repr(C, packed(2))]
+    #[allow(clippy::upper_case_acronyms)]
+    struct SHFILEOPSTRUCTW {
+        hwnd: *mut std::ffi::c_void,
+        w_func: u32,
+        p_from: *const u16,
+        p_to: *const u16,
+        f_flags: u16,
+        f_any_operations_aborted: i32,
+        h_name_mappings: *mut std::ffi::c_void,
+        lpsz_progress_title: *const u16,
+    }
+
+    const FO_DELETE: u32 = 0x0003;
+    const FOF_ALLOWUNDO: u16 = 0x0040;
+    const FOF_NOCONFIRMATION: u16 = 0x0010;
+    const FOF_SILENT: u16 = 0x0004;
+
+    extern "system" {
+        fn SHFileOperationW(lpFileOp: *mut SHFILEOPSTRUCTW) -> i32;
+    }
+
+    let mut op = SHFILEOPSTRUCTW {
+        hwnd: std::ptr::null_mut(),
+        w_func: FO_DELETE,
+        p_from: wide.as_ptr(),
+        p_to: std::ptr::null(),
+        f_flags: FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT,
+        f_any_operations_aborted: 0,
+        h_name_mappings: std::ptr::null_mut(),
+        lpsz_progress_title: std::ptr::null(),
+    };
+
+    let ret = unsafe { SHFileOperationW(&mut op) };
+    if ret == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::from_raw_os_error(ret))
+    }
+}
+
+#[cfg(not(windows))]
+pub fn send_to_recycle_bin(path: &std::path::Path) -> std::io::Result<()> {
+    std::fs::remove_file(path)
 }
 
 #[cfg(test)]
@@ -1116,8 +1284,10 @@ mod tests {
         let _ = ws_stream.next().await.unwrap().unwrap();
 
         let act = serde_json::to_string(&InboundWsMessage::TaskAction {
+            req_id: None,
             id: "unknown-uuid-999".into(),
             action: "pause".into(),
+            delete_file: None,
         })
         .unwrap();
         ws_stream.send(Message::Text(act.into())).await.unwrap();
