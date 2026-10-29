@@ -28,21 +28,21 @@
 Organize, manage, and monitor all your downloads in a distraction-free, high-density interface with quick filtering by videos, music, archives, documents, and programs.
 
 <p align="center">
-  <img src="./assets/desktop-main.png" alt="EDM Desktop Dashboard" width="900" />
+  <img src="https://raw.githubusercontent.com/Suvesh108/EDM/main/assets/screenshots/edm-desktop-dashboard-v0.0.5.png" alt="EDM Desktop Dashboard" width="900" />
 </p>
 
 ### Live Speed Telemetry & Multi-Connection Inspector
 Inspect genuine transfer speeds, real-time throughput graphs, and per-connection worker progress with zero synthetic numbers or fake peaks.
 
 <p align="center">
-  <img src="./assets/download-telemetry.png" alt="EDM Live Telemetry" width="720" />
+  <img src="https://raw.githubusercontent.com/Suvesh108/EDM/main/assets/screenshots/edm-telemetry-inspector-v0.0.5.png" alt="EDM Live Telemetry" width="720" />
 </p>
 
 ### Seamless Browser Companion Extension
 Catch downloads instantly from your favorite browser. Check live progress, pause, resume, or open files directly from the browser popup without switching windows.
 
 <p align="center">
-  <img src="./assets/browser-extension.png" alt="EDM Browser Extension" width="440" />
+  <img src="https://raw.githubusercontent.com/Suvesh108/EDM/main/assets/screenshots/edm-browser-extension-v0.0.5.png" alt="EDM Browser Extension" width="440" />
 </p>
 
 ---

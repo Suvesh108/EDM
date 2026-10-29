@@ -47,9 +47,13 @@ async function main() {
   const desktopDist = path.join(rootDir, "apps/desktop/dist");
   const extensionDist = path.join(rootDir, "extension/dist/chromium");
   const assetsDir = path.join(rootDir, "assets");
+  const screenshotsDir = path.join(assetsDir, "screenshots");
 
   if (!fs.existsSync(assetsDir)) {
     fs.mkdirSync(assetsDir, { recursive: true });
+  }
+  if (!fs.existsSync(screenshotsDir)) {
+    fs.mkdirSync(screenshotsDir, { recursive: true });
   }
 
   const desktopServer = createStaticServer(desktopDist);
@@ -175,11 +179,11 @@ async function main() {
     }
 
     // Save Main Desktop view
-    await desktopPage.screenshot({
-      path: path.join(assetsDir, "desktop-main.png"),
-      fullPage: false,
-    });
-    console.log("[Playwright] Saved assets/desktop-main.png");
+    const mainPath = path.join(assetsDir, "desktop-main.png");
+    const mainVersioned = path.join(screenshotsDir, "edm-desktop-dashboard-v0.0.5.png");
+    await desktopPage.screenshot({ path: mainPath, fullPage: false });
+    fs.copyFileSync(mainPath, mainVersioned);
+    console.log("[Playwright] Saved assets/desktop-main.png and assets/screenshots/edm-desktop-dashboard-v0.0.5.png");
 
     // -------------------------------------------------------------
     // 2. Download Status & Segment Telemetry Inspector Modal
@@ -197,18 +201,15 @@ async function main() {
 
     // Select the modal element specifically
     const modalElement = await desktopPage.$('.panel-3d.w-full.max-w-2xl');
+    const telePath = path.join(assetsDir, "download-telemetry.png");
+    const teleVersioned = path.join(screenshotsDir, "edm-telemetry-inspector-v0.0.5.png");
     if (modalElement) {
-      await modalElement.screenshot({
-        path: path.join(assetsDir, "download-telemetry.png"),
-      });
-      console.log("[Playwright] Saved assets/download-telemetry.png (modal element)");
+      await modalElement.screenshot({ path: telePath });
     } else {
-      // Screenshot centered around the modal backdrop
-      await desktopPage.screenshot({
-        path: path.join(assetsDir, "download-telemetry.png"),
-      });
-      console.log("[Playwright] Saved assets/download-telemetry.png (full view fallback)");
+      await desktopPage.screenshot({ path: telePath });
     }
+    fs.copyFileSync(telePath, teleVersioned);
+    console.log("[Playwright] Saved assets/download-telemetry.png and assets/screenshots/edm-telemetry-inspector-v0.0.5.png");
 
     await desktopContext.close();
 
@@ -295,10 +296,11 @@ async function main() {
     await extPage.waitForSelector(".download-card", { timeout: 4000 });
     await extPage.waitForTimeout(600);
 
-    await extPage.screenshot({
-      path: path.join(assetsDir, "browser-extension.png"),
-    });
-    console.log("[Playwright] Saved assets/browser-extension.png");
+    const extPath = path.join(assetsDir, "browser-extension.png");
+    const extVersioned = path.join(screenshotsDir, "edm-browser-extension-v0.0.5.png");
+    await extPage.screenshot({ path: extPath });
+    fs.copyFileSync(extPath, extVersioned);
+    console.log("[Playwright] Saved assets/browser-extension.png and assets/screenshots/edm-browser-extension-v0.0.5.png");
 
     await extContext.close();
   } finally {
