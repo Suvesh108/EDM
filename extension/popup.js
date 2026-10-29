@@ -65,6 +65,7 @@ class PopupController {
     __publicField(this, "downloads", []);
     __publicField(this, "connectionState", "connecting");
     __publicField(this, "lifecycleState", "active");
+    __publicField(this, "nmhHealth", { ok: true });
     __publicField(this, "latencyMs", 0);
     __publicField(this, "token", "");
     __publicField(this, "interceptionEnabled", true);
@@ -90,6 +91,9 @@ class PopupController {
           if (msg.lifecycleState) {
             this.lifecycleState = msg.lifecycleState;
           }
+          if (msg.nmhHealth) {
+            this.nmhHealth = msg.nmhHealth;
+          }
           this.updateConnectionPill();
           if (msg.palette) {
             document.documentElement.setAttribute("data-palette", msg.palette);
@@ -110,7 +114,8 @@ class PopupController {
               resumable: true,
               speed_bytes_per_sec: t.speed,
               connections: 8,
-              created_at: ""
+              created_at: "",
+              error_msg: t.error_msg || null
             }));
             this.updateAllCounters();
             if (this.activeTab === "tasks") {
@@ -137,7 +142,7 @@ class PopupController {
     const aggSpeed = activeDownloads.reduce((sum, d) => sum + (d.speed_bytes_per_sec || 0), 0);
     const badge = document.getElementById("tasksBadge");
     if (badge) {
-      badge.innerText = String(activeDownloads.length);
+      badge.innerText = String(this.downloads.length);
     }
     const pillAll = document.querySelector('.filter-pill[data-filter="all"]');
     if (pillAll) pillAll.textContent = `All (${this.downloads.length})`;
@@ -295,6 +300,10 @@ class PopupController {
     } else if (this.connectionState === "connecting" || this.connectionState === "reconnecting") {
       dot.classList.add("dot-connecting");
       text.innerText = "Connecting...";
+    } else if (!this.nmhHealth.ok) {
+      dot.classList.add("dot-failed");
+      text.innerText = "Wake unavailable: Open EDM once";
+      pill.title = `NMH Error: ${this.nmhHealth.reason || "Native host not found"}. Open EDM desktop once to repair registration.`;
     } else {
       dot.classList.add("dot-asleep");
       text.innerText = "Asleep, wakes automatically";
@@ -382,7 +391,13 @@ class PopupController {
         </div>
       `;
     }
-    return filtered.map((item) => {
+    const staleBanner = this.connectionState !== "connected" ? `
+        <div class="stale-notice" style="display: flex; align-items: center; gap: 6px; padding: 6px 10px; margin-bottom: 8px; border-radius: 6px; font-size: 10.5px; font-weight: 500; background: rgba(139, 92, 246, 0.12); border: 1px solid rgba(139, 92, 246, 0.25); color: #C4B5FD;">
+          <span style="display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #A78BFA;"></span>
+          <span>EDM is asleep. Showing last known state (actions disabled until connected).</span>
+        </div>
+      ` : "";
+    return staleBanner + filtered.map((item) => {
       const total = item.size_total || 0;
       const done = item.size_done || 0;
       const pct = total > 0 ? Math.min(100, Math.round(done / total * 100)) : 0;
@@ -432,36 +447,42 @@ class PopupController {
             <span style="color: #FBBF24; font-weight: 600;">Paused</span>
           `;
       } else {
+        const failReason = item.error_msg ? escapeHtml(item.error_msg) : "Download failed or link expired";
         metaHtml = `
             <span>${formatBytes(done)}</span>
             <span>\u2022</span>
-            <span style="color: #F87171; font-weight: 600;">Failed</span>
+            <span style="color: #F87171; font-weight: 600;" title="${failReason}">
+              Failed${item.error_msg ? `: ${failReason}` : ""}
+            </span>
           `;
       }
+      const isSyncable = this.connectionState === "connected";
+      const disAttr = isSyncable ? "" : "disabled";
+      const disStyle = isSyncable ? "" : 'style="opacity: 0.35; pointer-events: none; cursor: not-allowed;"';
       let actionsHtml = "";
       if (isDownloading) {
         actionsHtml = `
-            <button class="btn-icon-3d act-pause" data-id="${escapeHtml(item.id)}" title="Pause Download">${SVG_ICONS.pause}</button>
-            <button class="btn-icon-3d btn-icon-danger act-cancel" data-id="${escapeHtml(item.id)}" title="Cancel Download">${SVG_ICONS.cancel}</button>
+            <button class="btn-icon-3d act-pause" ${disAttr} ${disStyle} data-id="${escapeHtml(item.id)}" title="Pause Download">${SVG_ICONS.pause}</button>
+            <button class="btn-icon-3d btn-icon-danger act-cancel" ${disAttr} ${disStyle} data-id="${escapeHtml(item.id)}" title="Cancel Download">${SVG_ICONS.cancel}</button>
           `;
       } else if (isPaused) {
         actionsHtml = `
-            <button class="btn-icon-3d btn-icon-success act-resume" data-id="${escapeHtml(item.id)}" title="Resume Download">${SVG_ICONS.play}</button>
-            <button class="btn-icon-3d btn-icon-danger act-cancel" data-id="${escapeHtml(item.id)}" title="Cancel Download">${SVG_ICONS.cancel}</button>
+            <button class="btn-icon-3d btn-icon-success act-resume" ${disAttr} ${disStyle} data-id="${escapeHtml(item.id)}" title="Resume Download">${SVG_ICONS.play}</button>
+            <button class="btn-icon-3d btn-icon-danger act-cancel" ${disAttr} ${disStyle} data-id="${escapeHtml(item.id)}" title="Cancel Download">${SVG_ICONS.cancel}</button>
           `;
       } else if (isCompleted) {
         actionsHtml = `
-            <button class="btn-icon-3d act-open-file" data-id="${escapeHtml(item.id)}" title="Open File">${SVG_ICONS.openFile}</button>
-            <button class="btn-icon-3d act-open-folder" data-id="${escapeHtml(item.id)}" title="Open Folder">${SVG_ICONS.openFolder}</button>
+            <button class="btn-icon-3d act-open-file" ${disAttr} ${disStyle} data-id="${escapeHtml(item.id)}" title="Open File">${SVG_ICONS.openFile}</button>
+            <button class="btn-icon-3d act-open-folder" ${disAttr} ${disStyle} data-id="${escapeHtml(item.id)}" title="Open Folder">${SVG_ICONS.openFolder}</button>
           `;
       } else if (isFailed) {
         actionsHtml = `
-            <button class="btn-icon-3d btn-icon-primary act-retry" data-id="${escapeHtml(item.id)}" title="Retry Download">${SVG_ICONS.retry}</button>
+            <button class="btn-icon-3d btn-icon-primary act-retry" ${disAttr} ${disStyle} data-id="${escapeHtml(item.id)}" title="Retry Download">${SVG_ICONS.retry}</button>
           `;
       }
       actionsHtml += `
-          <button class="btn-icon-3d act-copy" data-url="${escapeHtml(item.url || item.filename)}" title="Copy URL">${SVG_ICONS.copy}</button>
-          <button class="btn-icon-3d btn-icon-danger act-delete" data-id="${escapeHtml(item.id)}" data-name="${escapeHtml(item.filename)}" title="Remove">${SVG_ICONS.trash}</button>
+          <button class="btn-icon-3d act-copy" ${disAttr} ${disStyle} data-url="${escapeHtml(item.url || item.filename)}" title="Copy URL">${SVG_ICONS.copy}</button>
+          <button class="btn-icon-3d btn-icon-danger act-delete" ${disAttr} ${disStyle} data-id="${escapeHtml(item.id)}" data-name="${escapeHtml(item.filename)}" title="Remove">${SVG_ICONS.trash}</button>
         `;
       return `
           <div class="download-card ${isCompleted ? "card-completed" : "card-downloading"}" data-id="${escapeHtml(item.id)}">
@@ -974,7 +995,7 @@ class PopupController {
               }
             } else if (updateFeedback) {
               updateFeedback.style.color = "#10B981";
-              updateFeedback.textContent = "Extension is up to date (v0.0.4).";
+              updateFeedback.textContent = "Extension is up to date (v0.0.5).";
             }
           } else if (updateFeedback) {
             updateFeedback.style.color = "#EF4444";

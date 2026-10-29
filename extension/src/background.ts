@@ -19,6 +19,7 @@ const WS_URL = "ws://127.0.0.1:14370";
 let socket: WebSocket | null = null;
 let connectionStatus: "connecting" | "connected" | "disconnected" | "waking" | "asleep" = "asleep";
 let latestLifecycleState: string = "active";
+let nmhHealth: { ok: boolean; reason?: string } = { ok: true };
 let reconnectTimer: any = null;
 let pingInterval: any = null;
 let bypassNextDownload = false;
@@ -111,6 +112,7 @@ function notifyPopupPorts() {
     tasks: latestTasks,
     connectionStatus,
     lifecycleState: latestLifecycleState,
+    nmhHealth,
     epoch: currentEpoch,
     rev: currentRev,
     theme: currentTheme,
@@ -137,6 +139,28 @@ function notifyPopupPorts() {
   }
 }
 
+async function checkNmhHealth(): Promise<{ ok: boolean; reason?: string }> {
+  return new Promise((resolve) => {
+    try {
+      chrome.runtime.sendNativeMessage("com.edm.nmh", { type: "ping" }, (response) => {
+        if (chrome.runtime.lastError) {
+          const err = chrome.runtime.lastError.message || "Native host not found";
+          nmhHealth = { ok: false, reason: err };
+          notifyPopupPorts();
+          return resolve(nmhHealth);
+        }
+        nmhHealth = { ok: true };
+        notifyPopupPorts();
+        resolve(nmhHealth);
+      });
+    } catch (e: any) {
+      nmhHealth = { ok: false, reason: e?.message || "Failed to contact host" };
+      notifyPopupPorts();
+      resolve(nmhHealth);
+    }
+  });
+}
+
 // 2b. Complete Wake Routine via Native Messaging Host
 async function wakeDesktop(showWindow = false): Promise<{ ok: boolean; token?: string; error?: string }> {
   connectionStatus = "waking";
@@ -148,14 +172,18 @@ async function wakeDesktop(showWindow = false): Promise<{ ok: boolean; token?: s
         { type: "wake", show_window: showWindow },
         (response) => {
           if (chrome.runtime.lastError) {
-            return resolve({ ok: false, error: chrome.runtime.lastError.message });
+            const err = chrome.runtime.lastError.message || "Failed to communicate with NMH";
+            nmhHealth = { ok: false, reason: err };
+            return resolve({ ok: false, error: err });
           }
+          nmhHealth = { ok: true };
           resolve(response || { ok: false, error: "No response from NMH" });
         }
       );
     });
 
     if (res && res.ok) {
+      nmhHealth = { ok: true };
       if (res.token && typeof res.token === "string" && res.token.length >= 32) {
         await chrome.storage.local.set({ edm_ws_token: res.token });
       }
@@ -171,11 +199,15 @@ async function wakeDesktop(showWindow = false): Promise<{ ok: boolean; token?: s
       }
     } else {
       connectionStatus = "asleep";
+      if (res && res.error) {
+        nmhHealth = { ok: false, reason: res.error };
+      }
       notifyPopupPorts();
       return { ok: false, error: res?.error || "Wake failed" };
     }
   } catch (err: any) {
     connectionStatus = "asleep";
+    nmhHealth = { ok: false, reason: err?.message || String(err) };
     notifyPopupPorts();
     return { ok: false, error: err?.message || String(err) };
   }
@@ -417,12 +449,15 @@ async function sendWsTaskAction(
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name === "popup") {
     popupPorts.add(port);
+    checkNmhHealth();
 
     // Instantly receive last snapshot and connection status on connect
     port.postMessage({
       type: "snapshot",
       tasks: latestTasks,
       connectionStatus,
+      lifecycleState: latestLifecycleState,
+      nmhHealth,
       epoch: currentEpoch,
       rev: currentRev,
       theme: currentTheme,
@@ -730,7 +765,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           sendResponse({
             ok: true,
             status, // "throttled" | "no_update" | "update_available"
-            version: details?.version || "0.0.4",
+            version: details?.version || "0.0.5",
           });
         }
       });

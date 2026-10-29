@@ -94,13 +94,36 @@ fn register_native_messaging_host() {
 
     let current_exe = std::env::current_exe().unwrap_or_default();
     let current_dir = current_exe.parent().unwrap_or(&app_dir);
-    let nmh_path = current_dir.join("edm-nmh.exe");
-    if !nmh_path.exists() {
+
+    // Look for edm-nmh in current_dir, resources subfolder, or app_dir
+    let candidates = [
+        current_dir.join("edm-nmh.exe"),
+        current_dir.join("resources").join("edm-nmh.exe"),
+        app_dir.join("edm-nmh.exe"),
+    ];
+
+    let found_nmh = candidates
+        .iter()
+        .find(|p| p.exists() && p.is_file())
+        .cloned();
+    let target_nmh = app_dir.join("edm-nmh.exe");
+
+    if let Some(ref src) = found_nmh {
+        if src != &target_nmh {
+            let _ = std::fs::copy(src, &target_nmh);
+        }
+    } else {
         tracing::warn!(
             "edm-nmh.exe not found next to current executable at {}",
-            nmh_path.display()
+            current_dir.display()
         );
     }
+
+    let nmh_path = if target_nmh.exists() {
+        target_nmh
+    } else {
+        found_nmh.unwrap_or_else(|| current_dir.join("edm-nmh.exe"))
+    };
 
     let manifest_path = app_dir.join("com.edm.nmh.json");
     let manifest_json = serde_json::json!({
@@ -386,6 +409,7 @@ fn execute_download(
         user_agent: user_agent.clone(),
         connections: config.max_connections,
         created_at: Utc::now(),
+        error_msg: None,
     };
     let _ = state.store.insert_download(&record);
 
@@ -460,8 +484,14 @@ fn execute_download(
         let (final_state, error_msg) = match result {
             Ok(_) => (DownloadState::Completed, None),
             Err(ref e) if e.contains("cancelled") => (DownloadState::Paused, None),
+            Err(ref e) if e.contains("400") || e.contains("expired") => {
+                (DownloadState::Failed, Some("Link expired or invalid (HTTP 400)"))
+            }
             Err(ref e) if e.contains("403") => {
                 (DownloadState::Failed, Some("HTTP 403 Forbidden"))
+            }
+            Err(ref e) if e.contains("410") => {
+                (DownloadState::Failed, Some("HTTP 410 Gone (Link Expired)"))
             }
             Err(ref e) if e.contains("429") => {
                 (DownloadState::Failed, Some("HTTP 429 Rate Limited"))
@@ -476,10 +506,11 @@ fn execute_download(
         let final_status_str = match &final_state {
             DownloadState::Completed => "completed".to_string(),
             DownloadState::Paused => "paused".to_string(),
-            _ => format!("failed: {}", error_msg.unwrap_or("error")),
+            _ => "failed".to_string(),
         };
         let ws_mgr_fin = ws_mgr_cb.clone();
         let ws_id_fin = ws_id_cb.clone();
+        let error_msg_owned = error_msg.map(String::from);
         let (final_done, final_total) = match store_clone.list_all_downloads() {
             Ok(records) => records
                 .into_iter()
@@ -489,15 +520,21 @@ fn execute_download(
             Err(_) => (0, effective_size),
         };
         tokio::spawn(async move {
-            ws_mgr_fin
-                .update_task_progress(
-                    &ws_id_fin,
-                    final_done,
-                    final_total,
-                    0,
-                    &final_status_str,
-                )
-                .await;
+            if final_state == DownloadState::Failed {
+                ws_mgr_fin
+                    .update_task_error(&ws_id_fin, error_msg_owned)
+                    .await;
+            } else {
+                ws_mgr_fin
+                    .update_task_progress(
+                        &ws_id_fin,
+                        final_done,
+                        final_total,
+                        0,
+                        &final_status_str,
+                    )
+                    .await;
+            }
         });
     });
 
@@ -633,7 +670,7 @@ async fn handle_extension_message(msg: ExtensionMessage, state: &AppState) -> Ap
                         connections: r.connections,
                         created_at: r.created_at,
                         completed_at: if is_completed { Some(Utc::now()) } else { None },
-                        error_msg: None,
+                        error_msg: r.error_msg,
                     });
                 }
             }
@@ -683,7 +720,7 @@ async fn handle_extension_message(msg: ExtensionMessage, state: &AppState) -> Ap
                         connections: r.connections,
                         created_at: r.created_at,
                         completed_at: if is_comp { Some(Utc::now()) } else { None },
-                        error_msg: None,
+                        error_msg: r.error_msg,
                     },
                 }
             } else {
@@ -1968,6 +2005,12 @@ fn main() {
             get_lifecycle_status,
             wake_engine
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running EDM desktop application");
+        .build(tauri::generate_context!())
+        .expect("error while building EDM desktop application")
+        .run(|_app_handle, event| {
+            if let tauri::RunEvent::ExitRequested { api, .. } = event {
+                // Keep the background runtime, tray icon, and WebSocket server alive when windows are destroyed
+                api.prevent_exit();
+            }
+        });
 }

@@ -361,7 +361,7 @@ fn handle_message(msg: ExtensionMessage, store: &Arc<Mutex<Store>>) -> AppReply 
                         connections: r.connections,
                         created_at: r.created_at,
                         completed_at: if is_completed { Some(Utc::now()) } else { None },
-                        error_msg: None,
+                        error_msg: r.error_msg,
                     });
                 }
             }
@@ -391,15 +391,11 @@ fn handle_message(msg: ExtensionMessage, store: &Arc<Mutex<Store>>) -> AppReply 
                         size_total: r.size_total,
                         size_done: r.size_done,
                         resumable: r.resumable,
-                        speed_bytes_per_sec: if r.state == DownloadState::Downloading {
-                            3_500_000
-                        } else {
-                            0
-                        },
+                        speed_bytes_per_sec: 0,
                         connections: r.connections,
                         created_at: r.created_at,
                         completed_at: if is_comp { Some(Utc::now()) } else { None },
-                        error_msg: None,
+                        error_msg: r.error_msg,
                     },
                 }
             } else {
@@ -514,6 +510,7 @@ fn handle_message(msg: ExtensionMessage, store: &Arc<Mutex<Store>>) -> AppReply 
                 user_agent,
                 connections: 8,
                 created_at: Utc::now(),
+                error_msg: None,
             };
 
             let s = store.lock().unwrap();

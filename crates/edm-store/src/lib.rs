@@ -34,6 +34,7 @@ pub struct DownloadRecord {
     pub user_agent: Option<String>,
     pub connections: u32,
     pub created_at: DateTime<Utc>,
+    pub error_msg: Option<String>,
 }
 
 pub struct SegmentRecord {
@@ -295,7 +296,7 @@ impl Store {
             r#"
             SELECT id, url, final_url, filename, save_dir, category, state,
                    size_total, size_done, resumable, etag, last_modified,
-                   content_type, referer, user_agent, connections, created_at
+                   content_type, referer, user_agent, connections, created_at, error_msg
             FROM downloads
             ORDER BY created_at DESC
             "#,
@@ -342,6 +343,7 @@ impl Store {
                 user_agent: row.get(14)?,
                 connections: row.get(15)?,
                 created_at,
+                error_msg: row.get(17)?,
             })
         })?;
 
@@ -398,6 +400,7 @@ mod tests {
             user_agent: None,
             connections: 8,
             created_at: Utc::now(),
+            error_msg: None,
         };
 
         store

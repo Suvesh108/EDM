@@ -38,6 +38,8 @@ pub struct WsTaskItem {
     pub downloaded: u64,
     pub speed: u64,
     pub status: String, // "queued" | "downloading" | "paused" | "completed" | "failed"
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub error_msg: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -262,6 +264,7 @@ impl WsManager {
                 downloaded: 0,
                 speed: 0,
                 status,
+                error_msg: None,
             },
         );
     }
@@ -299,6 +302,15 @@ impl WsManager {
         map.remove(id);
     }
 
+    pub async fn update_task_error(&self, id: &str, error_msg: Option<String>) {
+        let mut map = self.tasks.write().await;
+        if let Some(item) = map.get_mut(id) {
+            item.error_msg = error_msg;
+            item.status = "failed".to_string();
+            item.speed = 0;
+        }
+    }
+
     pub async fn sync_from_store(&self) {
         if let Ok(records) = self.store.list_all_downloads() {
             let mut map = self.tasks.write().await;
@@ -322,6 +334,7 @@ impl WsManager {
                         downloaded: r.size_done,
                         speed: 0,
                         status: status.to_string(),
+                        error_msg: r.error_msg,
                     },
                 );
             }

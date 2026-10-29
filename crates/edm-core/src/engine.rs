@@ -78,6 +78,7 @@ impl Engine {
             user_agent: None,
             connections: task.connections,
             created_at: Utc::now(),
+            error_msg: None,
         };
 
         let _ = self.store.insert_download(&record);

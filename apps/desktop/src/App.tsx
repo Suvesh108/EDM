@@ -88,6 +88,7 @@ export interface DownloadItem {
   workers?: WorkerInfo[];
   speedHistory?: number[];
   peakSpeedBps?: number;
+  error_msg?: string | null;
 }
 
 export const INITIAL_NETPULSE_PROFILE: number[] = [];
@@ -283,11 +284,12 @@ export default function App() {
             category,
             sizeTotal: total,
             sizeDone: done,
+            error_msg: b.error_msg || existing?.error_msg || null,
             speed: itemState === "downloading" ? formatSpeed(speedVal) : "0 B/s",
             eta: itemState === "completed"
               ? "Finished"
               : itemState === "failed"
-              ? "Download Failed"
+              ? (b.error_msg || "Download Failed")
               : itemState === "paused"
               ? "Paused"
               : (etaSec > 0 ? formatEta(etaSec) : (speedVal > 0 ? "Estimating..." : "Connecting...")),
@@ -338,11 +340,20 @@ export default function App() {
     };
   }, []);
 
-  // Synchronize mode and palette attributes on root document
+  // Synchronize mode and palette attributes on root document, and pause idle animations when unfocused
   useEffect(() => {
     document.documentElement.setAttribute("data-mode", mode);
     document.documentElement.setAttribute("data-palette", palette);
     document.documentElement.setAttribute("data-theme", mode);
+
+    const onBlur = () => document.documentElement.classList.add("window-unfocused");
+    const onFocus = () => document.documentElement.classList.remove("window-unfocused");
+    window.addEventListener("blur", onBlur);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      window.removeEventListener("blur", onBlur);
+      window.removeEventListener("focus", onFocus);
+    };
   }, [mode, palette]);
 
 
@@ -780,7 +791,7 @@ export default function App() {
     }
   };
 
-  const getStatusBadge = (state: string) => {
+  const getStatusBadge = (state: string, errorMsg?: string | null) => {
     switch (state) {
       case "downloading":
         return (
@@ -805,7 +816,7 @@ export default function App() {
         );
       case "failed":
         return (
-          <span className="inline-flex items-center justify-center w-5 h-5 text-rose-400" title="Failed">
+          <span className="inline-flex items-center justify-center w-5 h-5 text-rose-400" title={errorMsg || "Download Failed"}>
             <X className="w-4 h-4" />
           </span>
         );
@@ -1223,7 +1234,7 @@ export default function App() {
                           <div className="space-y-1 min-w-0">
                             <div className="flex items-center justify-between text-[11px] font-mono tabular-nums min-w-0 gap-1.5">
                               <div className="flex items-center gap-1.5 shrink-0">
-                                {getStatusBadge(item.state)}
+                                {getStatusBadge(item.state, item.error_msg)}
                                 <span className="font-semibold text-[var(--accent)]">{item.progress}%</span>
                               </div>
                               <span className="text-[var(--text-muted)] truncate text-right">
@@ -1398,7 +1409,7 @@ export default function App() {
                           </div>
                         </div>
                       </div>
-                      <div className="shrink-0">{getStatusBadge(item.state)}</div>
+                      <div className="shrink-0">{getStatusBadge(item.state, item.error_msg)}</div>
                     </div>
 
                     {/* Middle Info Strip: Technical Metadata */}

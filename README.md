@@ -67,8 +67,8 @@ Get the latest binaries from the [**Releases Page**](https://github.com/Suvesh10
 
 | File | Description |
 | :--- | :--- |
-| **[`EDM_0.0.4_x64-setup.exe`](https://github.com/Suvesh108/EDM/releases/download/v0.0.4/EDM_0.0.4_x64-setup.exe)** | Official Standalone Windows Installer setup program (64-bit, v0.0.4). |
-| **[`edm-extension.tar.gz`](https://github.com/Suvesh108/EDM/releases/download/v0.0.4/edm-extension.tar.gz)** | Chromium browser extension for Chrome, Edge, Brave, and Opera. |
+| **[`EDM_0.0.5_x64-setup.exe`](https://github.com/Suvesh108/EDM/releases/download/v0.0.5/EDM_0.0.5_x64-setup.exe)** | Official Standalone Windows Installer setup program (64-bit, v0.0.5). |
+| **[`edm-extension.tar.gz`](https://github.com/Suvesh108/EDM/releases/download/v0.0.5/edm-extension.tar.gz)** | Chromium browser extension for Chrome, Edge, Brave, and Opera. |
 
 ---
 
@@ -107,7 +107,7 @@ This script automatically:
 2. Builds and packages the browser extension.
 3. Compiles `edm-nmh`.
 4. Copies and bundles `WebView2Loader.dll`.
-5. Compiles and packages the NSIS installer into `target/release/bundle/nsis/EDM_0.0.4_x64-setup.exe`.
+5. Compiles and packages the NSIS installer into `target/release/bundle/nsis/EDM_0.0.5_x64-setup.exe`.
 6. Verifies that all assets are offline-bundled and free of any dev URLs.
 
 ---

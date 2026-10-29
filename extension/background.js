@@ -2,6 +2,7 @@ const WS_URL = "ws://127.0.0.1:14370";
 let socket = null;
 let connectionStatus = "asleep";
 let latestLifecycleState = "active";
+let nmhHealth = { ok: true };
 let reconnectTimer = null;
 let pingInterval = null;
 let bypassNextDownload = false;
@@ -74,6 +75,7 @@ function notifyPopupPorts() {
     tasks: latestTasks,
     connectionStatus,
     lifecycleState: latestLifecycleState,
+    nmhHealth,
     epoch: currentEpoch,
     rev: currentRev,
     theme: currentTheme,
@@ -97,6 +99,27 @@ function notifyPopupPorts() {
     chrome.action.setBadgeText({ text: "" });
   }
 }
+async function checkNmhHealth() {
+  return new Promise((resolve) => {
+    try {
+      chrome.runtime.sendNativeMessage("com.edm.nmh", { type: "ping" }, (response) => {
+        if (chrome.runtime.lastError) {
+          const err = chrome.runtime.lastError.message || "Native host not found";
+          nmhHealth = { ok: false, reason: err };
+          notifyPopupPorts();
+          return resolve(nmhHealth);
+        }
+        nmhHealth = { ok: true };
+        notifyPopupPorts();
+        resolve(nmhHealth);
+      });
+    } catch (e) {
+      nmhHealth = { ok: false, reason: e?.message || "Failed to contact host" };
+      notifyPopupPorts();
+      resolve(nmhHealth);
+    }
+  });
+}
 async function wakeDesktop(showWindow = false) {
   connectionStatus = "waking";
   notifyPopupPorts();
@@ -107,13 +130,17 @@ async function wakeDesktop(showWindow = false) {
         { type: "wake", show_window: showWindow },
         (response) => {
           if (chrome.runtime.lastError) {
-            return resolve({ ok: false, error: chrome.runtime.lastError.message });
+            const err = chrome.runtime.lastError.message || "Failed to communicate with NMH";
+            nmhHealth = { ok: false, reason: err };
+            return resolve({ ok: false, error: err });
           }
+          nmhHealth = { ok: true };
           resolve(response || { ok: false, error: "No response from NMH" });
         }
       );
     });
     if (res && res.ok) {
+      nmhHealth = { ok: true };
       if (res.token && typeof res.token === "string" && res.token.length >= 32) {
         await chrome.storage.local.set({ edm_ws_token: res.token });
       }
@@ -129,11 +156,15 @@ async function wakeDesktop(showWindow = false) {
       }
     } else {
       connectionStatus = "asleep";
+      if (res && res.error) {
+        nmhHealth = { ok: false, reason: res.error };
+      }
       notifyPopupPorts();
       return { ok: false, error: res?.error || "Wake failed" };
     }
   } catch (err) {
     connectionStatus = "asleep";
+    nmhHealth = { ok: false, reason: err?.message || String(err) };
     notifyPopupPorts();
     return { ok: false, error: err?.message || String(err) };
   }
@@ -326,10 +357,13 @@ async function sendWsTaskAction(id, action, delete_file, req_id) {
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name === "popup") {
     popupPorts.add(port);
+    checkNmhHealth();
     port.postMessage({
       type: "snapshot",
       tasks: latestTasks,
       connectionStatus,
+      lifecycleState: latestLifecycleState,
+      nmhHealth,
       epoch: currentEpoch,
       rev: currentRev,
       theme: currentTheme,
@@ -612,7 +646,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             ok: true,
             status,
             // "throttled" | "no_update" | "update_available"
-            version: details?.version || "0.0.4"
+            version: details?.version || "0.0.5"
           });
         }
       });

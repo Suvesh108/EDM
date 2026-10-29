@@ -44,7 +44,7 @@ pub struct LifecycleManager {
 impl LifecycleManager {
     pub fn new(store: Store, ws_manager: Arc<crate::ws_server::WsManager>) -> Self {
         // Read initial settings
-        let mut exit_mins = Some(15u64); // default 15 mins
+        let mut exit_mins = Some(30u64); // default 30 mins
         let mut keep = false;
 
         if let Ok(Some(s)) = store.get_setting("app_settings") {
@@ -153,7 +153,7 @@ impl LifecycleManager {
                         .min_inner_size(800.0, 500.0)
                         .center()
                         .decorations(false)
-                        .transparent(true);
+                        .transparent(false);
 
                 match builder.build() {
                     Ok(w) => {

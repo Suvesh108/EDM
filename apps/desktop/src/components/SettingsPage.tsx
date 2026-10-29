@@ -123,7 +123,7 @@ export default function SettingsPage({
   const [customCatExt, setCustomCatExt] = useState("");
   const [isLimiterOpen, setIsLimiterOpen] = useState(false);
   const [showTranslatorNotice, setShowTranslatorNotice] = useState(false);
-  const [appVersion, setAppVersion] = useState<string>("0.0.4");
+  const [appVersion, setAppVersion] = useState<string>("0.0.5");
   const [updateStatus, setUpdateStatus] = useState<
     "idle" | "checking" | "up-to-date" | "update-available" | "downloading" | "ready" | "error"
   >("idle");
