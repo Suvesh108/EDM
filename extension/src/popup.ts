@@ -93,6 +93,7 @@ class PopupController {
 
   private downloads: DownloadItem[] = [];
   private connectionState: string = "connecting";
+  private lifecycleState: string = "active";
   private latencyMs: number = 0;
   private token: string = "";
   private interceptionEnabled: boolean = true;
@@ -119,7 +120,10 @@ class PopupController {
       this.port = chrome.runtime.connect({ name: "popup" });
       this.port.onMessage.addListener((msg) => {
         if (msg.type === "snapshot") {
-          this.connectionState = msg.connectionStatus || "disconnected";
+          this.connectionState = msg.connectionStatus || "asleep";
+          if (msg.lifecycleState) {
+            this.lifecycleState = msg.lifecycleState;
+          }
           this.updateConnectionPill();
           if (msg.palette) {
             document.documentElement.setAttribute("data-palette", msg.palette);
@@ -291,6 +295,19 @@ class PopupController {
   }
 
   private bindHeaderNav() {
+    const openEdmBtn = document.getElementById("openEdmBtn");
+    if (openEdmBtn) {
+      openEdmBtn.addEventListener("click", () => {
+        this.connectionState = "waking";
+        this.updateConnectionPill();
+        if (this.port) {
+          this.port.postMessage({ type: "wake_desktop", show_window: true });
+        } else {
+          chrome.runtime.sendMessage({ action: "wake_desktop", show_window: true });
+        }
+      });
+    }
+
     document.querySelectorAll(".tab-btn").forEach((btn) => {
       btn.addEventListener("click", () => {
         const tab = btn.getAttribute("data-tab") as any;
@@ -320,23 +337,23 @@ class PopupController {
     };
 
     dot.className = "status-dot";
-    switch (this.connectionState) {
-      case "connected":
+    if (this.connectionState === "connected") {
+      if (this.lifecycleState === "listener_sleep" || this.lifecycleState === "warm") {
+        dot.classList.add("dot-asleep");
+        text.innerText = "Connected (sleeping)";
+      } else {
         dot.classList.add("dot-connected");
         text.innerText = "Connected";
-        break;
-      case "connecting":
-        dot.classList.add("dot-connecting");
-        text.innerText = "Connecting...";
-        break;
-      case "reconnecting":
-        dot.classList.add("dot-reconnecting");
-        text.innerText = "Reconnecting...";
-        break;
-      default:
-        dot.classList.add("dot-failed");
-        text.innerText = "Offline (Setup)";
-        break;
+      }
+    } else if (this.connectionState === "waking") {
+      dot.classList.add("dot-waking");
+      text.innerText = "Waking...";
+    } else if (this.connectionState === "connecting" || this.connectionState === "reconnecting") {
+      dot.classList.add("dot-connecting");
+      text.innerText = "Connecting...";
+    } else {
+      dot.classList.add("dot-asleep");
+      text.innerText = "Asleep, wakes automatically";
     }
   }
 
@@ -1085,7 +1102,7 @@ class PopupController {
               }
             } else if (updateFeedback) {
               updateFeedback.style.color = "#10B981";
-              updateFeedback.textContent = "Extension is up to date (v0.0.3).";
+              updateFeedback.textContent = "Extension is up to date (v0.0.4).";
             }
           } else if (updateFeedback) {
             updateFeedback.style.color = "#EF4444";

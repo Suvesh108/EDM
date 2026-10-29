@@ -436,7 +436,7 @@ export async function tauriGetAppVersion(): Promise<string> {
       console.warn("Tauri get_app_version failed:", err);
     }
   }
-  return "0.0.3";
+  return "0.0.4";
 }
 
 function isSemverNewer(latest: string, current: string): boolean {
@@ -467,7 +467,7 @@ export async function tauriCheckForUpdates(): Promise<UpdateCheckResult> {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const release = await res.json();
     const rawTag = (release.tag_name || "").replace(/^v/i, "").trim();
-    const currentVersion = "0.0.3";
+    const currentVersion = "0.0.4";
     const setupAsset =
       (release.assets || []).find((a: any) =>
         a.name.endsWith(".exe") && a.name.toLowerCase().includes("setup")

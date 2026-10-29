@@ -25,6 +25,8 @@ export interface EdmSettings {
     autoCheckUpdates: boolean;
     anonymousAnalytics: boolean;
     confirmDestructiveActions: boolean;
+    keepAwake?: boolean;
+    idleExitMinutes?: number | null; // null = never, 0 = immediately after listener sleep, 5, 15, 30, 60
   };
   downloads: {
     defaultDirectory: string;
@@ -121,6 +123,8 @@ export const defaultSettings: EdmSettings = {
     autoCheckUpdates: true,
     anonymousAnalytics: false,
     confirmDestructiveActions: true,
+    keepAwake: false,
+    idleExitMinutes: 15,
   },
   downloads: {
     defaultDirectory: "C:\\Users\\Suvesh\\Downloads",

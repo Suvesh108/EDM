@@ -103,6 +103,8 @@ pub enum OutboundWsMessage {
         theme: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         palette: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        lifecycle_state: Option<String>,
     },
     TaskRemoved {
         id: String,
@@ -142,6 +144,7 @@ pub struct WsManager {
     pub rev: Arc<AtomicU64>,
     pub theme: Arc<RwLock<Option<String>>>,
     pub palette: Arc<RwLock<Option<String>>>,
+    pub lifecycle_state: Arc<RwLock<Option<String>>>,
     pub tx_broadcast: broadcast::Sender<String>,
     pub tx_create_task: mpsc::Sender<CreateTaskCommand>,
     pub tx_action: mpsc::Sender<ActionCommand>,
@@ -165,6 +168,7 @@ impl WsManager {
             rev: Arc::new(AtomicU64::new(1)),
             theme: Arc::new(RwLock::new(None)),
             palette: Arc::new(RwLock::new(None)),
+            lifecycle_state: Arc::new(RwLock::new(Some("active".to_string()))),
             tx_broadcast,
             tx_create_task,
             tx_action,
@@ -185,6 +189,11 @@ impl WsManager {
         self.bump_rev();
     }
 
+    pub async fn update_lifecycle_state(&self, state: Option<String>) {
+        *self.lifecycle_state.write().await = state;
+        self.bump_rev();
+    }
+
     pub async fn build_snapshot(&self) -> OutboundWsMessage {
         let tasks: Vec<WsTaskItem> = {
             let map = self.tasks.read().await;
@@ -192,12 +201,14 @@ impl WsManager {
         };
         let theme = self.theme.read().await.clone();
         let palette = self.palette.read().await.clone();
+        let lifecycle_state = self.lifecycle_state.read().await.clone();
         OutboundWsMessage::Snapshot {
             tasks,
             epoch: self.epoch.clone(),
             rev: self.rev.load(Ordering::Relaxed),
             theme,
             palette,
+            lifecycle_state,
         }
     }
 

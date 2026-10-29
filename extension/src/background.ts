@@ -17,7 +17,8 @@ interface PendingAck {
 
 const WS_URL = "ws://127.0.0.1:14370";
 let socket: WebSocket | null = null;
-let connectionStatus: "connecting" | "connected" | "disconnected" = "disconnected";
+let connectionStatus: "connecting" | "connected" | "disconnected" | "waking" | "asleep" = "asleep";
+let latestLifecycleState: string = "active";
 let reconnectTimer: any = null;
 let pingInterval: any = null;
 let bypassNextDownload = false;
@@ -109,6 +110,7 @@ function notifyPopupPorts() {
     type: "snapshot",
     tasks: latestTasks,
     connectionStatus,
+    lifecycleState: latestLifecycleState,
     epoch: currentEpoch,
     rev: currentRev,
     theme: currentTheme,
@@ -124,12 +126,74 @@ function notifyPopupPorts() {
 
   // Update extension badge
   const activeCount = latestTasks.filter((t) => t.status === "downloading").length;
-  if (activeCount > 0) {
+  if (connectionStatus === "waking") {
+    chrome.action.setBadgeText({ text: "..." });
+    chrome.action.setBadgeBackgroundColor({ color: "#F59E0B" });
+  } else if (activeCount > 0) {
     chrome.action.setBadgeText({ text: String(activeCount) });
     chrome.action.setBadgeBackgroundColor({ color: "#2563EB" });
   } else {
     chrome.action.setBadgeText({ text: "" });
   }
+}
+
+// 2b. Complete Wake Routine via Native Messaging Host
+async function wakeDesktop(showWindow = false): Promise<{ ok: boolean; token?: string; error?: string }> {
+  connectionStatus = "waking";
+  notifyPopupPorts();
+  try {
+    const res = await new Promise<any>((resolve) => {
+      chrome.runtime.sendNativeMessage(
+        "com.edm.nmh",
+        { type: "wake", show_window: showWindow },
+        (response) => {
+          if (chrome.runtime.lastError) {
+            return resolve({ ok: false, error: chrome.runtime.lastError.message });
+          }
+          resolve(response || { ok: false, error: "No response from NMH" });
+        }
+      );
+    });
+
+    if (res && res.ok) {
+      if (res.token && typeof res.token === "string" && res.token.length >= 32) {
+        await chrome.storage.local.set({ edm_ws_token: res.token });
+      }
+      const connected = await connectWebSocketPromise(8000);
+      if (connected) {
+        connectionStatus = "connected";
+        notifyPopupPorts();
+        return { ok: true, token: res.token };
+      } else {
+        connectionStatus = "asleep";
+        notifyPopupPorts();
+        return { ok: false, error: "Wake succeeded but WebSocket failed to connect" };
+      }
+    } else {
+      connectionStatus = "asleep";
+      notifyPopupPorts();
+      return { ok: false, error: res?.error || "Wake failed" };
+    }
+  } catch (err: any) {
+    connectionStatus = "asleep";
+    notifyPopupPorts();
+    return { ok: false, error: err?.message || String(err) };
+  }
+}
+
+async function connectWebSocketPromise(timeoutMs = 8000): Promise<boolean> {
+  if (socket && socket.readyState === WebSocket.OPEN && connectionStatus === "connected") {
+    return true;
+  }
+  connectWebSocket();
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (socket && socket.readyState === WebSocket.OPEN && connectionStatus === "connected") {
+      return true;
+    }
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  return socket !== null && socket.readyState === WebSocket.OPEN && connectionStatus === "connected";
 }
 
 // 3. Connect to Desktop App WebSocket Server
@@ -197,6 +261,9 @@ async function connectWebSocket() {
             currentPalette = data.palette;
             chrome.storage.local.set({ edm_palette: data.palette });
           }
+          if (data.lifecycle_state) {
+            latestLifecycleState = data.lifecycle_state;
+          }
           notifyPopupPorts();
           break;
         }
@@ -242,7 +309,7 @@ async function connectWebSocket() {
   };
 
   socket.onclose = () => {
-    connectionStatus = "disconnected";
+    connectionStatus = "asleep";
     socket = null;
     stopPingInterval();
     notifyPopupPorts();
@@ -259,10 +326,12 @@ async function connectWebSocket() {
 
 function scheduleReconnect() {
   if (reconnectTimer) clearTimeout(reconnectTimer);
-  // Auto-reconnect every 2 seconds
+  // Reconnect after 3 seconds if not in asleep state, otherwise keep dormant until triggered
   reconnectTimer = setTimeout(() => {
-    connectWebSocket();
-  }, 2000);
+    if (connectionStatus !== "connected") {
+      connectWebSocket();
+    }
+  }, 3000);
 }
 
 function startPingInterval() {
@@ -376,6 +445,8 @@ chrome.runtime.onConnect.addListener((port) => {
         });
       } else if (msg.type === "reconnect") {
         connectWebSocket();
+      } else if (msg.type === "wake_desktop") {
+        wakeDesktop(!!msg.show_window);
       }
     });
 
@@ -475,6 +546,24 @@ chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
     const userAgent = navigator.userAgent;
     const req_id = crypto.randomUUID();
 
+    // 4b. If desktop is offline / asleep, pause download and wake via NMH
+    if (!socket || socket.readyState !== WebSocket.OPEN || connectionStatus !== "connected") {
+      console.log("[EDM Extension] EDM is not connected. Pausing browser download and waking EDM...");
+      try {
+        await chrome.downloads.pause(item.id);
+      } catch {}
+
+      const wakeRes = await wakeDesktop(false);
+      if (!wakeRes.ok) {
+        console.warn("[EDM Extension] NMH wake failed or timed out:", wakeRes.error);
+        try {
+          await chrome.downloads.resume(item.id);
+        } catch {}
+        safeSuggest();
+        return;
+      }
+    }
+
     try {
       const ack = await sendWsCreateTask(
         {
@@ -486,7 +575,7 @@ chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
           user_agent: userAgent,
           filename,
         },
-        3000
+        5000
       );
 
       if (ack && ack.ok) {
@@ -500,10 +589,16 @@ chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
         safeSuggest();
       } else {
         console.warn("[EDM Extension] App rejected task or ack timeout. Calling suggest for normal browser download.");
+        try {
+          await chrome.downloads.resume(item.id);
+        } catch {}
         safeSuggest();
       }
     } catch (err) {
       console.warn("[EDM Extension] create_task failed, falling back to browser download:", err);
+      try {
+        await chrome.downloads.resume(item.id);
+      } catch {}
       safeSuggest();
     }
   })();
@@ -514,6 +609,12 @@ chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
 
 // 8. Runtime Messages from Content Script & Options Page
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg.action === "wake_desktop") {
+    wakeDesktop(!!msg.show_window).then((res) => {
+      sendResponse(res);
+    });
+    return true;
+  }
   if (msg.action === "bypass_next") {
     bypassNextDownload = true;
     setTimeout(() => {
@@ -629,7 +730,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           sendResponse({
             ok: true,
             status, // "throttled" | "no_update" | "update_available"
-            version: details?.version || "0.0.3",
+            version: details?.version || "0.0.4",
           });
         }
       });

@@ -93,11 +93,21 @@ pub enum ExtensionMessage {
         id: Uuid,
     },
     GetToken,
+    Wake {
+        #[serde(default)]
+        show_window: bool,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AppReply {
+    WakeResult {
+        ok: bool,
+        status: String,
+        token: Option<String>,
+        error: Option<String>,
+    },
     Token {
         token: String,
     },

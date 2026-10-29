@@ -7,7 +7,166 @@ use std::fs;
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use uuid::Uuid;
+
+const ALLOWED_EXTENSION_IDS: &[&str] = &[
+    "ginpdimhcdbojbhemgjedghkeolbcmgj",
+    "ebdcbpghekpbgjiclaclbgmdnimeheci",
+    "knldjmfmopnpolahpmmgbagdohdnhkik",
+    "cphjfljhggknldkppchfobogknclmblg",
+    "edm@suvesh.dev",
+];
+
+fn verify_caller_origin() -> bool {
+    let args: Vec<String> = env::args().collect();
+    if args.len() <= 1 {
+        return true;
+    }
+    for arg in &args[1..] {
+        if arg.starts_with("chrome-extension://") || arg.starts_with("moz-extension://") {
+            for id in ALLOWED_EXTENSION_IDS {
+                if arg.contains(id) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+    true
+}
+
+#[cfg(windows)]
+mod win_lock {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn CreateMutexW(
+            lpMutexAttributes: *mut std::ffi::c_void,
+            bInitialOwner: i32,
+            lpName: *const u16,
+        ) -> *mut std::ffi::c_void;
+        fn WaitForSingleObject(hHandle: *mut std::ffi::c_void, dwMilliseconds: u32) -> u32;
+        fn ReleaseMutex(hMutex: *mut std::ffi::c_void) -> i32;
+        fn CloseHandle(hObject: *mut std::ffi::c_void) -> i32;
+    }
+
+    pub struct NamedLock {
+        handle: *mut std::ffi::c_void,
+    }
+
+    impl NamedLock {
+        pub fn acquire(name: &str, timeout_ms: u32) -> Option<Self> {
+            let wide: Vec<u16> = OsStr::new(name)
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect();
+            let handle = unsafe { CreateMutexW(std::ptr::null_mut(), 0, wide.as_ptr()) };
+            if handle.is_null() {
+                return None;
+            }
+            let wait_res = unsafe { WaitForSingleObject(handle, timeout_ms) };
+            if wait_res == 0 || wait_res == 0x80 {
+                Some(Self { handle })
+            } else {
+                unsafe {
+                    CloseHandle(handle);
+                }
+                None
+            }
+        }
+    }
+
+    impl Drop for NamedLock {
+        fn drop(&mut self) {
+            unsafe {
+                ReleaseMutex(self.handle);
+                CloseHandle(self.handle);
+            }
+        }
+    }
+}
+
+fn find_edm_exe() -> Option<PathBuf> {
+    let current_exe = env::current_exe().ok()?;
+    let dir = current_exe.parent()?;
+
+    let candidates = [
+        dir.join("edm-desktop-app.exe"),
+        dir.join("edm.exe"),
+        dir.join("EDM.exe"),
+    ];
+
+    for c in &candidates {
+        if c.exists() && c.is_file() {
+            return Some(c.clone());
+        }
+    }
+
+    if let Ok(local_app_data) = env::var("LOCALAPPDATA") {
+        let p = PathBuf::from(local_app_data)
+            .join("EDM")
+            .join("edm-desktop-app.exe");
+        if p.exists() {
+            return Some(p);
+        }
+    }
+
+    None
+}
+
+fn launch_detached(exe: &PathBuf, show_window: bool) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        const DETACHED_PROCESS: u32 = 0x00000008;
+        const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x01000000;
+
+        let mut cmd = std::process::Command::new(exe);
+        if show_window {
+            cmd.arg("--show-window");
+        } else {
+            cmd.arg("--background");
+        }
+        cmd.creation_flags(DETACHED_PROCESS | CREATE_BREAKAWAY_FROM_JOB | CREATE_NO_WINDOW);
+        let _ = cmd.spawn();
+    }
+
+    #[cfg(not(windows))]
+    {
+        let mut cmd = std::process::Command::new(exe);
+        if show_window {
+            cmd.arg("--show-window");
+        } else {
+            cmd.arg("--background");
+        }
+        let _ = cmd.spawn();
+    }
+}
+
+fn is_ws_server_ready() -> bool {
+    use std::net::{SocketAddr, TcpStream};
+    if let Ok(addr) = "127.0.0.1:14370".parse::<SocketAddr>() {
+        TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok()
+    } else {
+        false
+    }
+}
+
+fn wait_for_ws_server(timeout_secs: u64) -> bool {
+    let start = Instant::now();
+    let limit = Duration::from_secs(timeout_secs);
+    while start.elapsed() < limit {
+        if is_ws_server_ready() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(150));
+    }
+    is_ws_server_ready()
+}
 
 fn get_db_path() -> PathBuf {
     if let Ok(local_app_data) = env::var("LOCALAPPDATA") {
@@ -44,6 +203,57 @@ fn get_ws_token() -> String {
 
 fn handle_message(msg: ExtensionMessage, store: &Arc<Mutex<Store>>) -> AppReply {
     match msg {
+        ExtensionMessage::Wake { show_window } => {
+            #[cfg(windows)]
+            let _lock = win_lock::NamedLock::acquire(r"Local\EDM_Wake_Lock", 12000);
+
+            if is_ws_server_ready() {
+                if show_window {
+                    if let Some(exe) = find_edm_exe() {
+                        launch_detached(&exe, true);
+                    }
+                }
+                let token = get_ws_token();
+                return AppReply::WakeResult {
+                    ok: true,
+                    status: "ready".into(),
+                    token: Some(token),
+                    error: None,
+                };
+            }
+
+            let exe = match find_edm_exe() {
+                Some(p) => p,
+                None => {
+                    return AppReply::WakeResult {
+                        ok: false,
+                        status: "error".into(),
+                        token: None,
+                        error: Some("EDM executable not found".into()),
+                    };
+                }
+            };
+
+            launch_detached(&exe, show_window);
+
+            if wait_for_ws_server(10) {
+                let token = get_ws_token();
+                AppReply::WakeResult {
+                    ok: true,
+                    status: "ready".into(),
+                    token: Some(token),
+                    error: None,
+                }
+            } else {
+                AppReply::WakeResult {
+                    ok: false,
+                    status: "error".into(),
+                    token: None,
+                    error: Some("Timeout waiting for EDM desktop to initialize".into()),
+                }
+            }
+        }
+
         ExtensionMessage::GetToken => AppReply::Token {
             token: get_ws_token(),
         },
@@ -459,6 +669,17 @@ fn write_reply<W: Write>(mut writer: W, reply: &AppReply) -> io::Result<()> {
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
+    if !verify_caller_origin() {
+        eprintln!("Untrusted caller origin");
+        let reply = AppReply::Error {
+            message: "Security violation: Untrusted caller origin".into(),
+        };
+        let stdout = io::stdout();
+        let mut writer = stdout.lock();
+        let _ = write_reply(&mut writer, &reply);
+        return Ok(());
+    }
+
     let args: Vec<String> = env::args().collect();
     let store = Arc::new(Mutex::new(open_store()));
 

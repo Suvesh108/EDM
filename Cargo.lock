@@ -1432,7 +1432,7 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
 name = "edm-cli"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "clap",
  "edm-core",
@@ -1447,7 +1447,7 @@ dependencies = [
 
 [[package]]
 name = "edm-core"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "aes",
  "async-trait",
@@ -1477,7 +1477,7 @@ dependencies = [
 
 [[package]]
 name = "edm-desktop-app"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "anyhow",
  "axum",
@@ -1508,7 +1508,7 @@ dependencies = [
 
 [[package]]
 name = "edm-ipc"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "chrono",
  "serde",
@@ -1519,7 +1519,7 @@ dependencies = [
 
 [[package]]
 name = "edm-nmh"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "axum",
  "chrono",
@@ -1538,7 +1538,7 @@ dependencies = [
 
 [[package]]
 name = "edm-store"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "chrono",
  "edm-ipc",
@@ -1553,7 +1553,7 @@ dependencies = [
 
 [[package]]
 name = "edm-testsrv"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "axum",
  "bytes",

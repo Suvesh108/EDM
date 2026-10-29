@@ -123,7 +123,7 @@ export default function SettingsPage({
   const [customCatExt, setCustomCatExt] = useState("");
   const [isLimiterOpen, setIsLimiterOpen] = useState(false);
   const [showTranslatorNotice, setShowTranslatorNotice] = useState(false);
-  const [appVersion, setAppVersion] = useState<string>("0.0.3");
+  const [appVersion, setAppVersion] = useState<string>("0.0.4");
   const [updateStatus, setUpdateStatus] = useState<
     "idle" | "checking" | "up-to-date" | "update-available" | "downloading" | "ready" | "error"
   >("idle");
@@ -785,6 +785,57 @@ export default function SettingsPage({
                       </span>
                     </div>
                   </label>
+
+                  {/* Complete Sleep & Lifecycle Controls */}
+                  <div className="pt-3 mt-3 border-t border-[var(--border-subtle)] space-y-3">
+                    <label className="flex items-center gap-3 cursor-pointer group">
+                      <input
+                        type="checkbox"
+                        checked={settings.general.keepAwake ?? false}
+                        onChange={(e) => update("general", { keepAwake: e.target.checked })}
+                        className="w-[18px] h-[18px] rounded accent-[var(--accent)] cursor-pointer align-middle transition-transform active:scale-90"
+                      />
+                      <div className="text-xs">
+                        <span className="font-medium text-[var(--text-primary)] group-hover:text-[var(--accent)] transition-colors">
+                          Keep awake (prevent entering listener sleep or idle exit)
+                        </span>
+                        <p className="text-[11px] text-[var(--text-muted)] mt-0.5">
+                          When disabled, EDM steps down to listener sleep and frees WebView2 RAM (~500 MB) when idle.
+                        </p>
+                      </div>
+                    </label>
+
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pl-7">
+                      <div>
+                        <label className="text-xs font-medium text-[var(--text-primary)] block">
+                          Exit completely after idle
+                        </label>
+                        <span className="text-[11px] text-[var(--text-muted)]">
+                          Browser extension wakes EDM automatically when a download starts.
+                        </span>
+                      </div>
+                      <select
+                        value={
+                          settings.general.idleExitMinutes === null || settings.general.idleExitMinutes === undefined
+                            ? "never"
+                            : String(settings.general.idleExitMinutes)
+                        }
+                        disabled={settings.general.keepAwake}
+                        onChange={(e) => {
+                          const val = e.target.value === "never" ? null : parseInt(e.target.value, 10);
+                          update("general", { idleExitMinutes: val });
+                        }}
+                        className="h-8 px-2.5 rounded-lg bg-[var(--bg-chassis)] border border-[var(--border-subtle)] text-xs text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)] cursor-pointer disabled:opacity-40"
+                      >
+                        <option value="never">Never (Stay in Listener Sleep)</option>
+                        <option value="0">Immediately after Listener Sleep</option>
+                        <option value="5">After 5 minutes idle</option>
+                        <option value="15">After 15 minutes idle (Default)</option>
+                        <option value="30">After 30 minutes idle</option>
+                        <option value="60">After 60 minutes idle</option>
+                      </select>
+                    </div>
+                  </div>
                 </div>
               </div>
             </section>

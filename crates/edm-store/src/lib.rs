@@ -364,6 +364,12 @@ impl Store {
         )?;
         Ok(())
     }
+
+    pub fn checkpoint(&self) -> std::result::Result<(), StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let _ = conn.execute_batch("PRAGMA wal_checkpoint(PASSIVE); PRAGMA optimize;");
+        Ok(())
+    }
 }
 
 #[cfg(test)]

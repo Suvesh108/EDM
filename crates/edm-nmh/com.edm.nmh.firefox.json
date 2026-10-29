@@ -1,0 +1,9 @@
+{
+  "name": "com.edm.nmh",
+  "description": "EDM Native Messaging Host for Mozilla Firefox",
+  "path": "edm-nmh.exe",
+  "type": "stdio",
+  "allowed_extensions": [
+    "edm@suvesh.dev"
+  ]
+}

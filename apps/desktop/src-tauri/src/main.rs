@@ -16,6 +16,7 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{command, Manager, State};
 use uuid::Uuid;
 
+mod lifecycle;
 mod updater;
 mod ws_server;
 
@@ -34,6 +35,7 @@ pub(crate) struct AppState {
     pub(crate) ws_manager: Arc<ws_server::WsManager>,
     pub(crate) tray_handle: Arc<Mutex<Option<tauri::tray::TrayIcon>>>,
     pub(crate) app_handle: Arc<Mutex<Option<tauri::AppHandle>>>,
+    pub(crate) lifecycle: Arc<lifecycle::LifecycleManager>,
 }
 
 fn init_logging() {
@@ -118,13 +120,28 @@ fn register_native_messaging_host() {
         let _ = std::fs::write(&manifest_path, content);
     }
 
-    let reg_targets = [
+    // Mozilla Firefox manifest (allowed_extensions instead of allowed_origins)
+    let ff_manifest_path = app_dir.join("com.edm.nmh.firefox.json");
+    let ff_manifest_json = serde_json::json!({
+        "name": "com.edm.nmh",
+        "description": "EDM Native Messaging Host for Mozilla Firefox",
+        "path": nmh_path.to_string_lossy(),
+        "type": "stdio",
+        "allowed_extensions": [
+            "edm@suvesh.dev"
+        ]
+    });
+    if let Ok(content) = serde_json::to_string_pretty(&ff_manifest_json) {
+        let _ = std::fs::write(&ff_manifest_path, content);
+    }
+
+    let chromium_reg_targets = [
         r"Software\Google\Chrome\NativeMessagingHosts\com.edm.nmh",
         r"Software\Microsoft\Edge\NativeMessagingHosts\com.edm.nmh",
         r"Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.edm.nmh",
     ];
 
-    for key in &reg_targets {
+    for key in &chromium_reg_targets {
         let _ = std::process::Command::new("reg")
             .args([
                 "add",
@@ -139,6 +156,21 @@ fn register_native_messaging_host() {
             .creation_flags(CREATE_NO_WINDOW)
             .output();
     }
+
+    // Register Firefox
+    let _ = std::process::Command::new("reg")
+        .args([
+            "add",
+            r"HKCU\Software\Mozilla\NativeMessagingHosts\com.edm.nmh",
+            "/ve",
+            "/t",
+            "REG_SZ",
+            "/d",
+            &ff_manifest_path.to_string_lossy(),
+            "/f",
+        ])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output();
 }
 
 #[cfg(not(windows))]
@@ -242,6 +274,10 @@ fn execute_download(
     referer: Option<String>,
     user_agent: Option<String>,
 ) -> Result<Uuid, String> {
+    let lc = state.lifecycle.clone();
+    state.rt_handle.spawn(async move {
+        lc.record_activity().await;
+    });
     validate_url_security(&url)?;
     let id_str = id.to_string();
 
@@ -1288,6 +1324,26 @@ async fn save_settings(
     state.ws_manager.update_theme_palette(theme, palette).await;
     state.ws_manager.broadcast_snapshot().await;
 
+    let keep_awake = settings
+        .get("general")
+        .and_then(|g| g.get("keepAwake"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let idle_exit_mins = settings
+        .get("general")
+        .and_then(|g| g.get("idleExitMinutes"))
+        .and_then(|v| {
+            if v.is_null() || v.as_str() == Some("never") {
+                None
+            } else {
+                v.as_u64()
+            }
+        });
+    state
+        .lifecycle
+        .update_settings(keep_awake, idle_exit_mins)
+        .await;
+
     Ok(serde_json::json!({ "status": "saved" }))
 }
 
@@ -1329,7 +1385,7 @@ fn app_toggle_maximize(window: tauri::WebviewWindow) {
 }
 
 #[tauri::command]
-fn app_close(window: tauri::WebviewWindow, state: State<'_, AppState>) {
+async fn app_close(window: tauri::WebviewWindow, state: State<'_, AppState>) -> Result<(), String> {
     // Read user settings for minimizeToTray / close_to_tray
     let close_to_tray = if let Ok(Some(json_str)) = state.store.get_setting("app_settings") {
         if let Ok(val) = serde_json::from_str::<serde_json::Value>(&json_str) {
@@ -1345,10 +1401,40 @@ fn app_close(window: tauri::WebviewWindow, state: State<'_, AppState>) {
     };
 
     if close_to_tray {
-        let _ = window.hide();
+        tracing::info!("Closing main window and destroying WebView2 to reclaim memory");
+        let _ = window.destroy();
+        state.lifecycle.check_lifecycle_step(0, false).await;
     } else {
         trigger_graceful_quit(window.app_handle().clone(), state.inner().clone());
     }
+    Ok(())
+}
+
+#[tauri::command]
+async fn get_lifecycle_status(
+    state: State<'_, AppState>,
+) -> Result<lifecycle::LifecycleStatus, String> {
+    let active_count = {
+        let mut count = 0;
+        if let Ok(tasks) = state.tasks.lock() {
+            for handle in tasks.values() {
+                if !handle.cancelled.load(Ordering::Relaxed) {
+                    count += 1;
+                }
+            }
+        }
+        count
+    };
+    Ok(state.lifecycle.get_status(active_count).await)
+}
+
+#[tauri::command]
+async fn wake_engine(state: State<'_, AppState>, show_window: Option<bool>) -> Result<(), String> {
+    state
+        .lifecycle
+        .record_wake(show_window.unwrap_or(false))
+        .await;
+    Ok(())
 }
 
 pub(crate) fn trigger_graceful_quit(app_handle: tauri::AppHandle, state: AppState) {
@@ -1423,6 +1509,11 @@ fn main() {
         action_tx,
     ));
 
+    let lifecycle = Arc::new(lifecycle::LifecycleManager::new(
+        store.clone(),
+        ws_manager.clone(),
+    ));
+
     let app_state = AppState {
         store,
         engine,
@@ -1431,7 +1522,30 @@ fn main() {
         ws_manager: ws_manager.clone(),
         tray_handle: Arc::new(Mutex::new(None)),
         app_handle: Arc::new(Mutex::new(None)),
+        lifecycle: lifecycle.clone(),
     };
+
+    // Background lifecycle monitoring loop (checks every 15 seconds)
+    let lc_monitor = lifecycle.clone();
+    let tasks_monitor = app_state.tasks.clone();
+    rt_handle.spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(15));
+        loop {
+            interval.tick().await;
+            let active_count = {
+                let mut count = 0;
+                if let Ok(tasks) = tasks_monitor.lock() {
+                    for handle in tasks.values() {
+                        if !handle.cancelled.load(Ordering::Relaxed) {
+                            count += 1;
+                        }
+                    }
+                }
+                count
+            };
+            lc_monitor.check_lifecycle_step(active_count, false).await;
+        }
+    });
 
     spawn_extension_bridge(app_state.clone(), rt_handle.clone());
 
@@ -1616,18 +1730,20 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             // Autostart launches when an instance is already running exit silently
             let is_autostart = argv.iter().any(|arg| arg == "--autostart");
-            if !is_autostart {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.unminimize();
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                    // If saved window position was moved off-screen, center it
-                    if let Ok(pos) = window.outer_position() {
-                        if pos.x < -2000 || pos.y < -2000 || pos.x > 10000 || pos.y > 10000 {
-                            let _ = window.center();
-                        }
-                    }
-                }
+            let is_background = argv.iter().any(|arg| arg == "--background" || arg == "--listener-only");
+            let show_window = argv.iter().any(|arg| arg == "--show-window");
+
+            let state = app.state::<AppState>();
+            let lc = state.lifecycle.clone();
+
+            if !is_autostart && (!is_background || show_window) {
+                state.rt_handle.spawn(async move {
+                    lc.record_wake(true).await;
+                });
+            } else {
+                state.rt_handle.spawn(async move {
+                    lc.record_wake(false).await;
+                });
             }
         }))
         .plugin(tauri_plugin_autostart::init(
@@ -1635,8 +1751,13 @@ fn main() {
             Some(vec!["--autostart"]),
         ))
         .setup(|app| {
+            let app_state_ref = app.state::<AppState>();
+            app_state_ref.lifecycle.set_app_handle(app.handle().clone());
+
             let args: Vec<String> = std::env::args().collect();
             let is_autostart_boot = args.iter().any(|arg| arg == "--autostart");
+            let is_background_boot = args.iter().any(|arg| arg == "--background" || arg == "--listener-only");
+            let show_window = args.iter().any(|arg| arg == "--show-window");
 
             if let Some(window) = app.get_webview_window("main") {
                 if let Ok(icon) =
@@ -1646,11 +1767,11 @@ fn main() {
                 }
                 let _ = window.center();
 
-                if is_autostart_boot {
+                if (is_autostart_boot || is_background_boot) && !show_window {
                     tracing::info!(
-                        "EDM started with --autostart flag; staying hidden in system tray"
+                        "EDM started in background mode; destroying window to minimize memory footprint"
                     );
-                    let _ = window.hide();
+                    let _ = window.destroy();
                 } else {
                     tracing::info!(
                         "Main desktop window successfully loaded: {:?}",
@@ -1684,11 +1805,11 @@ fn main() {
                 .show_menu_on_left_click(false)
                 .on_menu_event(move |app, event| match event.id.as_ref() {
                     "open" => {
-                        if let Some(w) = app.get_webview_window("main") {
-                            let _ = w.unminimize();
-                            let _ = w.show();
-                            let _ = w.set_focus();
-                        }
+                        let state = app.state::<AppState>();
+                        let lc = state.lifecycle.clone();
+                        state.rt_handle.spawn(async move {
+                            lc.record_wake(true).await;
+                        });
                     }
                     "pause_all" => {
                         let state = app.state::<AppState>();
@@ -1724,11 +1845,11 @@ fn main() {
                         }
                     }
                     "settings" => {
-                        if let Some(w) = app.get_webview_window("main") {
-                            let _ = w.unminimize();
-                            let _ = w.show();
-                            let _ = w.set_focus();
-                        }
+                        let state = app.state::<AppState>();
+                        let lc = state.lifecycle.clone();
+                        state.rt_handle.spawn(async move {
+                            lc.record_wake(true).await;
+                        });
                     }
                     "quit" => {
                         let state = app.state::<AppState>();
@@ -1743,12 +1864,11 @@ fn main() {
                         ..
                     } = event
                     {
-                        let app = tray.app_handle();
-                        if let Some(w) = app.get_webview_window("main") {
-                            let _ = w.unminimize();
-                            let _ = w.show();
-                            let _ = w.set_focus();
-                        }
+                        let state = tray.app_handle().state::<AppState>();
+                        let lc = state.lifecycle.clone();
+                        state.rt_handle.spawn(async move {
+                            lc.record_wake(true).await;
+                        });
                     }
                 })
                 .build(app)?;
@@ -1844,7 +1964,9 @@ fn main() {
             app_start_dragging,
             updater::get_app_version,
             updater::check_for_updates,
-            updater::install_update
+            updater::install_update,
+            get_lifecycle_status,
+            wake_engine
         ])
         .run(tauri::generate_context!())
         .expect("error while running EDM desktop application");
