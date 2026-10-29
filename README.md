@@ -35,14 +35,14 @@ Organize, manage, and monitor all your downloads in a distraction-free, high-den
 Inspect genuine transfer speeds, real-time throughput graphs, and per-connection worker progress with zero synthetic numbers or fake peaks.
 
 <p align="center">
-  <img src="./assets/download-telemetry.png" alt="EDM Live Telemetry" width="850" />
+  <img src="./assets/download-telemetry.png" alt="EDM Live Telemetry" width="720" />
 </p>
 
 ### Seamless Browser Companion Extension
 Catch downloads instantly from your favorite browser. Check live progress, pause, resume, or open files directly from the browser popup without switching windows.
 
 <p align="center">
-  <img src="./assets/browser-extension.png" alt="EDM Browser Extension" width="480" />
+  <img src="./assets/browser-extension.png" alt="EDM Browser Extension" width="440" />
 </p>
 
 ---
