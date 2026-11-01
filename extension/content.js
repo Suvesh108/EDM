@@ -125,8 +125,178 @@ function sniffImages() {
   });
   return images.slice(0, 60);
 }
+function injectFloatingMediaButton() {
+  const hostDomain = window.location.hostname;
+  chrome.storage.local.get(["disabled_video_domains", "disable_floating_button"], (res) => {
+    if (res.disable_floating_button) return;
+    const disabledList = res.disabled_video_domains || [];
+    if (disabledList.includes(hostDomain)) return;
+    const videos = document.querySelectorAll("video, audio");
+    if (videos.length === 0) return;
+    if (document.getElementById("edm-video-sniffer-host")) return;
+    const hostEl = document.createElement("div");
+    hostEl.id = "edm-video-sniffer-host";
+    hostEl.style.position = "fixed";
+    hostEl.style.bottom = "24px";
+    hostEl.style.right = "24px";
+    hostEl.style.zIndex = "2147483647";
+    document.documentElement.appendChild(hostEl);
+    const shadow = hostEl.attachShadow({ mode: "closed" });
+    const style = document.createElement("style");
+    style.textContent = `
+      .edm-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        background: rgba(15, 23, 42, 0.94);
+        backdrop-filter: blur(12px);
+        color: #f8fafc;
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        border-radius: 9999px;
+        padding: 8px 16px;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+        box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.3);
+        transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+        user-select: none;
+      }
+      .edm-pill:hover {
+        background: #0284c7;
+        transform: translateY(-2px);
+        box-shadow: 0 15px 30px -5px rgba(2, 132, 199, 0.4);
+      }
+      .edm-icon {
+        width: 16px;
+        height: 16px;
+        fill: currentColor;
+      }
+      .edm-panel {
+        display: none;
+        position: absolute;
+        bottom: 50px;
+        right: 0;
+        width: 300px;
+        background: #0f172a;
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        border-radius: 12px;
+        padding: 12px;
+        box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.6);
+        color: #e2e8f0;
+      }
+      .edm-panel.open { display: block; }
+      .edm-title { font-size: 13px; font-weight: 700; margin-bottom: 8px; display: flex; justify-content: space-between; }
+      .edm-variant {
+        padding: 8px 10px;
+        margin-bottom: 6px;
+        background: rgba(255, 255, 255, 0.06);
+        border-radius: 6px;
+        cursor: pointer;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-size: 12px;
+        transition: background 0.15s;
+      }
+      .edm-variant:hover { background: #0284c7; color: #fff; }
+      .edm-drm-warning {
+        background: rgba(239, 68, 68, 0.15);
+        border: 1px solid rgba(239, 68, 68, 0.3);
+        color: #f87171;
+        padding: 8px 10px;
+        border-radius: 6px;
+        font-size: 11px;
+        line-height: 1.4;
+      }
+      .edm-hide-site {
+        margin-top: 8px;
+        font-size: 11px;
+        color: #94a3b8;
+        cursor: pointer;
+        text-align: right;
+      }
+      .edm-hide-site:hover { color: #f1f5f9; text-decoration: underline; }
+    `;
+    const container = document.createElement("div");
+    container.innerHTML = `
+      <div class="edm-pill">
+        <svg class="edm-icon" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14l-4-4 1.41-1.41L11 13.17V7h2v6.17l2.59-2.58L17 12l-5 4z"/></svg>
+        <span>Download Video</span>
+      </div>
+      <div class="edm-panel">
+        <div class="edm-title">
+          <span>Detected Streams</span>
+          <span style="cursor:pointer;" class="edm-close">\u2715</span>
+        </div>
+        <div class="edm-content">Scanning media...</div>
+        <div class="edm-hide-site">Hide button on this site</div>
+      </div>
+    `;
+    shadow.appendChild(style);
+    shadow.appendChild(container);
+    const pill = container.querySelector(".edm-pill");
+    const panel = container.querySelector(".edm-panel");
+    const closeBtn = container.querySelector(".edm-close");
+    const contentEl = container.querySelector(".edm-content");
+    const hideBtn = container.querySelector(".edm-hide-site");
+    pill.addEventListener("click", () => {
+      panel.classList.toggle("open");
+      if (panel.classList.contains("open")) {
+        const resources = sniffResources().filter((r) => r.type === "video" || r.type === "stream");
+        if (resources.length === 0) {
+          contentEl.innerHTML = '<div style="font-size:11px; color:#94a3b8; padding:8px 0;">No direct video streams captured yet. Start playing video to sniff streams.</div>';
+          return;
+        }
+        contentEl.innerHTML = resources.map(
+          (r, idx) => `
+          <div class="edm-variant" data-idx="${idx}">
+            <div>
+              <div style="font-weight:600; max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${r.title}</div>
+              <div style="font-size:10px; opacity:0.7;">${r.format} Stream</div>
+            </div>
+            <button style="background:#0284c7; color:#fff; border:none; border-radius:4px; padding:4px 8px; font-size:11px; cursor:pointer;">Download</button>
+          </div>
+        `
+        ).join("");
+        contentEl.querySelectorAll(".edm-variant").forEach((item) => {
+          item.addEventListener("click", () => {
+            const idx = parseInt(item.getAttribute("data-idx") || "0", 10);
+            const target = resources[idx];
+            if (target) {
+              chrome.runtime.sendMessage({
+                action: "add_download",
+                url: target.url,
+                filename: target.title + (target.format ? `.${target.format.toLowerCase()}` : ""),
+                referrer: window.location.href
+              });
+              panel.classList.remove("open");
+            }
+          });
+        });
+      }
+    });
+    closeBtn.addEventListener("click", () => panel.classList.remove("open"));
+    hideBtn.addEventListener("click", () => {
+      chrome.storage.local.get(["disabled_video_domains"], (r) => {
+        const list = r.disabled_video_domains || [];
+        list.push(hostDomain);
+        chrome.storage.local.set({ disabled_video_domains: list }, () => {
+          hostEl.remove();
+        });
+      });
+    });
+  });
+}
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", () => {
+    setTimeout(injectFloatingMediaButton, 1200);
+  });
+} else {
+  setTimeout(injectFloatingMediaButton, 1200);
+}
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  if (msg.action === "get_page_resources") {
+  if (msg.action === "get_page_resources" || msg.action === "grab_page_links") {
     sendResponse({ resources: sniffResources(), pageTitle: document.title, pageUrl: window.location.href });
     return true;
   }

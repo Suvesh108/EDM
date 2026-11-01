@@ -684,3 +684,122 @@ export async function tauriGetSystemDownloadsDir(): Promise<string> {
   }
   return "C:\\Users\\User\\Downloads";
 }
+
+export async function tauriRefreshDownloadLink(taskId: string, newUrl: string): Promise<void> {
+  if (isTauri()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("refresh_download_link", { taskId, newUrl });
+  }
+}
+
+export async function tauriExpandBatchUrls(pattern: string): Promise<string[]> {
+  if (isTauri()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<string[]>("expand_batch_urls", { pattern });
+  }
+  return [pattern];
+}
+
+export async function tauriAddBatchDownloads(
+  urls: string[],
+  category?: string,
+  saveDir?: string
+): Promise<number> {
+  if (isTauri()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<number>("add_batch_downloads", { urls, category, saveDir });
+  }
+  return urls.length;
+}
+
+export async function tauriCheckDuplicateDownload(
+  url: string,
+  filename: string,
+  size?: number
+): Promise<{ is_duplicate: boolean; existing_id?: string; existing_filename?: string; existing_state?: string }> {
+  if (isTauri()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke("check_duplicate_download", { url, filename, size });
+  }
+  return { is_duplicate: false };
+}
+
+export async function tauriVerifyFileChecksum(
+  filePath: string,
+  expectedHash: string,
+  algo: string
+): Promise<{ verified: boolean; actual_hash: string; algo: string }> {
+  if (isTauri()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke("verify_file_checksum", { filePath, expectedHash, algo });
+  }
+  return { verified: true, actual_hash: expectedHash, algo };
+}
+
+export async function tauriGetHistory(limit?: number, query?: string): Promise<any[]> {
+  if (isTauri()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<any[]>("get_history", { limit, query });
+  }
+  return [];
+}
+
+export async function tauriClearHistory(): Promise<void> {
+  if (isTauri()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("clear_history");
+  }
+}
+
+export async function tauriExportHistoryCsv(): Promise<string> {
+  if (isTauri()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<string>("export_history_csv");
+  }
+  return "";
+}
+
+export async function tauriGetQueues(): Promise<any[]> {
+  if (isTauri()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<any[]>("get_queues");
+  }
+  return [];
+}
+
+export async function tauriSaveQueue(queue: any): Promise<void> {
+  if (isTauri()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("save_queue", { queue });
+  }
+}
+
+export async function tauriDeleteQueue(queueId: string): Promise<void> {
+  if (isTauri()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("delete_queue", { queueId });
+  }
+}
+
+export async function tauriCancelPowerCountdown(): Promise<void> {
+  if (isTauri()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("cancel_power_countdown");
+  }
+}
+
+export async function tauriGetPowerCountdownStatus(): Promise<{ active: boolean; action: string; seconds_remaining: number }> {
+  if (isTauri()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke("get_power_countdown_status");
+  }
+  return { active: false, action: "none", seconds_remaining: 0 };
+}
+
+export async function tauriProbeMediaPage(mediaUrl: string): Promise<{ variants: any[]; is_drm: boolean }> {
+  if (isTauri()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke("probe_media_page", { mediaUrl });
+  }
+  return { variants: [], is_drm: false };
+}

@@ -8,7 +8,7 @@ use edm_ipc::{AppReply, DownloadOverview, DownloadState, ExtensionMessage, PROTO
 use edm_store::{DownloadRecord, Store};
 use reqwest::Client;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::menu::{Menu, MenuItem};
@@ -16,6 +16,7 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{command, Manager, State};
 use uuid::Uuid;
 
+mod features;
 mod lifecycle;
 mod updater;
 mod ws_server;
@@ -36,6 +37,7 @@ pub(crate) struct AppState {
     pub(crate) tray_handle: Arc<Mutex<Option<tauri::tray::TrayIcon>>>,
     pub(crate) app_handle: Arc<Mutex<Option<tauri::AppHandle>>>,
     pub(crate) lifecycle: Arc<lifecycle::LifecycleManager>,
+    pub(crate) power_countdown: Arc<features::PowerCountdownController>,
 }
 
 fn init_logging() {
@@ -472,6 +474,10 @@ fn execute_download(
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or(clean_name);
 
+    if let Some(warn_msg) = edm_core::security::check_double_extension(&final_clean_name) {
+        tracing::warn!("[SECURITY] {}", warn_msg);
+    }
+
     let mut config = AdaptiveConfig::default();
     if let Some(conns) = max_connections {
         config.max_connections = conns;
@@ -508,6 +514,18 @@ fn execute_download(
     };
 
     let effective_size = size_total.or(pack_target.estimated_size);
+
+    if let Some(sz) = effective_size {
+        if let Err(e) = edm_core::security::check_disk_space(&save_path, sz) {
+            tracing::warn!("[DISK SPACE] {}", e);
+        }
+    }
+
+    if let Some(ref c) = cookies {
+        if let Ok(enc) = edm_core::security::encrypt_dpapi(c.as_bytes()) {
+            let _ = state.store.save_encrypted_cookies(id, &enc);
+        }
+    }
 
     let record = DownloadRecord {
         id,
@@ -550,14 +568,14 @@ fn execute_download(
 
     let task = AdaptiveDownloadTask {
         id,
-        url,
-        filename: final_clean_name,
-        save_dir: save_path,
+        url: url.clone(),
+        filename: final_clean_name.clone(),
+        save_dir: save_path.clone(),
         config,
         limiter: None,
         cancelled,
         cookies,
-        referer,
+        referer: referer.clone(),
         user_agent,
     };
 
@@ -567,6 +585,12 @@ fn execute_download(
     let store_cb = state.store.clone();
     let ws_mgr_cb = state.ws_manager.clone();
     let ws_id_cb = id_str.clone();
+    let save_path_fin = save_path.clone();
+    let final_clean_name_fin = final_clean_name.clone();
+    let url_fin = url.clone();
+    let referer_fin = referer.clone();
+    let power_ctrl = state.power_countdown.clone();
+    let app_handle_opt = state.app_handle.lock().unwrap().clone();
 
     state.rt_handle.spawn(async move {
         let ws_mgr_tick = ws_mgr_cb.clone();
@@ -602,14 +626,16 @@ fn execute_download(
         let (final_state, error_msg) = match result {
             Ok(_) => (DownloadState::Completed, None),
             Err(ref e) if e.contains("cancelled") => (DownloadState::Paused, None),
-            Err(ref e) if e.contains("400") || e.contains("expired") => {
-                (DownloadState::Failed, Some("Link expired or invalid (HTTP 400)"))
-            }
-            Err(ref e) if e.contains("403") => {
-                (DownloadState::Failed, Some("HTTP 403 Forbidden"))
-            }
-            Err(ref e) if e.contains("410") => {
-                (DownloadState::Failed, Some("HTTP 410 Gone (Link Expired)"))
+            Err(ref e)
+                if e.contains("401")
+                    || e.contains("403")
+                    || e.contains("410")
+                    || e.contains("expired") =>
+            {
+                (
+                    DownloadState::LinkExpired,
+                    Some("Download link expired (HTTP 401/403/410). Refresh link to resume."),
+                )
             }
             Err(ref e) if e.contains("429") => {
                 (DownloadState::Failed, Some("HTTP 429 Rate Limited"))
@@ -621,9 +647,42 @@ fn execute_download(
         };
         let _ = store_clone.update_download_state(id, final_state, error_msg);
 
+        if final_state == DownloadState::Completed {
+            let full_path = save_path_fin.join(&final_clean_name_fin);
+            let _ = edm_core::security::apply_mark_of_the_web(&full_path, Some(&url_fin));
+            let _ = store_clone.purge_encrypted_cookies(id);
+            if let Ok(records) = store_clone.list_all_downloads() {
+                if let Some(r) = records.into_iter().find(|d| d.id == id) {
+                    let _ = store_clone.add_to_history(&r, Utc::now());
+                }
+            }
+            if let Ok(queues) = store_clone.list_queues() {
+                if let Some(def_q) = queues.into_iter().find(|q| q.id == "default") {
+                    if def_q.post_action != "none" {
+                        let all_records = store_clone.list_all_downloads().unwrap_or_default();
+                        let all_done = all_records.iter().all(|d| d.state == DownloadState::Completed);
+                        let no_errors = all_records.iter().all(|d| d.state != DownloadState::Failed && d.state != DownloadState::LinkExpired);
+                        if all_done && no_errors && !all_records.is_empty() {
+                            power_ctrl.start_countdown(&def_q.post_action, ws_mgr_cb.clone(), app_handle_opt);
+                        }
+                    }
+                }
+            }
+        } else if final_state == DownloadState::LinkExpired {
+            ws_mgr_cb
+                .broadcast_refresh_link(
+                    &id.to_string(),
+                    referer_fin.as_deref(),
+                    &final_clean_name_fin,
+                    effective_size,
+                )
+                .await;
+        }
+
         let final_status_str = match &final_state {
             DownloadState::Completed => "completed".to_string(),
             DownloadState::Paused => "paused".to_string(),
+            DownloadState::LinkExpired => "needs_fresh_link".to_string(),
             _ => "failed".to_string(),
         };
         let ws_mgr_fin = ws_mgr_cb.clone();
@@ -1959,6 +2018,159 @@ fn get_system_downloads_dir() -> String {
     std::env::temp_dir().to_string_lossy().to_string()
 }
 
+#[command]
+async fn refresh_download_link(
+    state: State<'_, AppState>,
+    task_id: String,
+    new_url: String,
+) -> Result<(), String> {
+    let id = Uuid::parse_str(&task_id).map_err(|e| e.to_string())?;
+    let task = features::validate_and_refresh_link(&state.store, id, &new_url, None).await?;
+    let _ = execute_download(
+        &state,
+        task.id,
+        task.url,
+        Some(task.filename),
+        Some(PathBuf::from(task.save_dir)),
+        Some(task.connections),
+        task.size_total,
+        None,
+        task.referer,
+        task.user_agent,
+    );
+    Ok(())
+}
+
+#[command]
+fn expand_batch_urls(pattern: String) -> Result<Vec<String>, String> {
+    edm_core::batch::expand_batch_pattern(&pattern)
+}
+
+#[command]
+async fn add_batch_downloads(
+    state: State<'_, AppState>,
+    urls: Vec<String>,
+    _category: Option<String>,
+    save_dir: Option<String>,
+) -> Result<usize, String> {
+    let mut added = 0;
+    for url in urls {
+        let u = url.trim();
+        if u.is_empty() {
+            continue;
+        }
+        let id = Uuid::new_v4();
+        let s_dir = save_dir.as_ref().map(PathBuf::from);
+        if execute_download(
+            &state,
+            id,
+            u.to_string(),
+            None,
+            s_dir,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .is_ok()
+        {
+            added += 1;
+        }
+    }
+    Ok(added)
+}
+
+#[command]
+fn check_duplicate_download(
+    state: State<'_, AppState>,
+    url: String,
+    filename: String,
+    size: Option<u64>,
+) -> Result<features::DuplicateCheckResult, String> {
+    match state.store.find_duplicate(&url, &filename, size) {
+        Ok(Some(d)) => Ok(features::DuplicateCheckResult {
+            is_duplicate: true,
+            existing_id: Some(d.id.to_string()),
+            existing_filename: Some(d.filename),
+            existing_state: Some(format!("{:?}", d.state).to_lowercase()),
+        }),
+        _ => Ok(features::DuplicateCheckResult {
+            is_duplicate: false,
+            existing_id: None,
+            existing_filename: None,
+            existing_state: None,
+        }),
+    }
+}
+
+#[command]
+fn verify_file_checksum(
+    file_path: String,
+    expected_hash: String,
+    algo: String,
+) -> Result<features::ChecksumResult, String> {
+    features::verify_file_checksum(Path::new(&file_path), &expected_hash, &algo)
+}
+
+#[command]
+fn get_history(
+    state: State<'_, AppState>,
+    limit: Option<usize>,
+    query: Option<String>,
+) -> Result<Vec<edm_store::HistoryRecord>, String> {
+    state
+        .store
+        .list_history(limit, query.as_deref())
+        .map_err(|e| e.to_string())
+}
+
+#[command]
+fn clear_history(state: State<'_, AppState>) -> Result<(), String> {
+    state.store.clear_history().map_err(|e| e.to_string())
+}
+
+#[command]
+fn export_history_csv(state: State<'_, AppState>) -> Result<String, String> {
+    state.store.export_history_csv().map_err(|e| e.to_string())
+}
+
+#[command]
+fn get_queues(state: State<'_, AppState>) -> Result<Vec<edm_store::QueueRecord>, String> {
+    state.store.list_queues().map_err(|e| e.to_string())
+}
+
+#[command]
+fn save_queue(state: State<'_, AppState>, queue: edm_store::QueueRecord) -> Result<(), String> {
+    state.store.upsert_queue(&queue).map_err(|e| e.to_string())
+}
+
+#[command]
+fn delete_queue(state: State<'_, AppState>, queue_id: String) -> Result<(), String> {
+    state
+        .store
+        .delete_queue(&queue_id)
+        .map_err(|e| e.to_string())
+}
+
+#[command]
+fn cancel_power_countdown(state: State<'_, AppState>) -> Result<(), String> {
+    state.power_countdown.cancel();
+    Ok(())
+}
+
+#[command]
+fn get_power_countdown_status(
+    state: State<'_, AppState>,
+) -> Result<features::PowerCountdownInfo, String> {
+    Ok(state.power_countdown.status())
+}
+
+#[command]
+async fn probe_media_page(media_url: String) -> Result<features::MediaProbeResult, String> {
+    features::probe_media(&media_url).await
+}
+
 fn main() {
     let t_boot = std::time::Instant::now();
     init_logging();
@@ -1984,6 +2196,10 @@ fn main() {
     let (create_task_tx, mut create_task_rx) =
         tokio::sync::mpsc::channel::<ws_server::CreateTaskCommand>(64);
     let (action_tx, mut action_rx) = tokio::sync::mpsc::channel::<ws_server::ActionCommand>(64);
+    let (refresh_task_tx, mut refresh_task_rx) =
+        tokio::sync::mpsc::channel::<ws_server::RefreshTaskCommand>(64);
+    let (probe_media_tx, mut probe_media_rx) =
+        tokio::sync::mpsc::channel::<ws_server::ProbeMediaCommand>(64);
 
     let ws_manager = Arc::new(ws_server::WsManager::new(
         token,
@@ -1991,12 +2207,16 @@ fn main() {
         store.clone(),
         create_task_tx,
         action_tx,
+        refresh_task_tx,
+        probe_media_tx,
     ));
 
     let lifecycle = Arc::new(lifecycle::LifecycleManager::new(
         store.clone(),
         ws_manager.clone(),
     ));
+
+    let power_countdown = Arc::new(features::PowerCountdownController::new());
 
     let app_state = AppState {
         store,
@@ -2007,6 +2227,7 @@ fn main() {
         tray_handle: Arc::new(Mutex::new(None)),
         app_handle: Arc::new(Mutex::new(None)),
         lifecycle: lifecycle.clone(),
+        power_countdown,
     };
 
     // Fast-path: Start WebSocket Server on 127.0.0.1:14370 FIRST
@@ -2047,15 +2268,6 @@ fn main() {
             };
             lc_monitor.check_lifecycle_step(active_count, false).await;
         }
-    });
-
-    spawn_extension_bridge(app_state.clone(), rt_handle.clone());
-
-    // Start WebSocket Server on 127.0.0.1:14370
-    let ws_mgr_srv = ws_manager.clone();
-    rt_handle.spawn(async move {
-        ws_mgr_srv.sync_from_store().await;
-        ws_server::start_ws_server(ws_mgr_srv).await;
     });
 
     // Inbound WebSocket Task Creator Loop
@@ -2225,6 +2437,52 @@ fn main() {
                 _ => Err("Unsupported action".into()),
             };
             let _ = cmd.resp_tx.send(res);
+        }
+    });
+
+    // Inbound WebSocket Task Refresh Loop
+    let refresh_state = app_state.clone();
+    rt_handle.spawn(async move {
+        while let Some(cmd) = refresh_task_rx.recv().await {
+            if let Ok(id_uuid) = Uuid::parse_str(&cmd.task_id) {
+                let res = features::validate_and_refresh_link(
+                    &refresh_state.store,
+                    id_uuid,
+                    &cmd.new_url,
+                    cmd.headers.as_ref(),
+                )
+                .await;
+                match res {
+                    Ok(task) => {
+                        let _ = execute_download(
+                            &refresh_state,
+                            task.id,
+                            task.url,
+                            Some(task.filename),
+                            Some(PathBuf::from(task.save_dir)),
+                            Some(task.connections),
+                            task.size_total,
+                            None,
+                            task.referer,
+                            task.user_agent,
+                        );
+                        let _ = cmd.resp_tx.send(Ok(()));
+                    }
+                    Err(e) => {
+                        let _ = cmd.resp_tx.send(Err(e));
+                    }
+                }
+            } else {
+                let _ = cmd.resp_tx.send(Err("Invalid task UUID".into()));
+            }
+        }
+    });
+
+    // Inbound WebSocket Media Prober Loop
+    rt_handle.spawn(async move {
+        while let Some(cmd) = probe_media_rx.recv().await {
+            let res = features::probe_media(&cmd.media_url).await;
+            let _ = cmd.resp_tx.send(res.map(|r| (r.variants, r.is_drm)));
         }
     });
 
@@ -2480,7 +2738,21 @@ fn main() {
             get_firefox_xpi_url,
             is_wizard_completed,
             set_wizard_completed,
-            get_system_downloads_dir
+            get_system_downloads_dir,
+            refresh_download_link,
+            expand_batch_urls,
+            add_batch_downloads,
+            check_duplicate_download,
+            verify_file_checksum,
+            get_history,
+            clear_history,
+            export_history_csv,
+            get_queues,
+            save_queue,
+            delete_queue,
+            cancel_power_countdown,
+            get_power_countdown_status,
+            probe_media_page
         ])
         .build(tauri::generate_context!())
         .expect("error while building EDM desktop application")

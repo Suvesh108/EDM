@@ -32,9 +32,15 @@ import {
   Settings,
   Minus,
   RotateCcw,
+  Sparkles,
 } from "lucide-react";
 import SettingsPage from "./components/SettingsPage";
 import SetupWizard from "./components/SetupWizard";
+import { HistoryView } from "./components/HistoryView";
+import { QueuesView } from "./components/QueuesView";
+import { BatchDownloadModal } from "./components/BatchDownloadModal";
+import { RefreshLinkModal } from "./components/RefreshLinkModal";
+import { PowerCountdownModal } from "./components/PowerCountdownModal";
 import { SpeedChartInteractive } from "./components/SpeedChartInteractive";
 import { loadSettings, saveSettings, EdmSettings } from "./types/settings";
 import { formatBytes, formatSpeed, formatEta } from "./utils/format";
@@ -62,6 +68,7 @@ import {
   tauriWindowClose,
   tauriStartDragging,
   tauriIsWizardCompleted,
+  tauriCheckDuplicateDownload,
 } from "./services/tauriBridge";
 
 export interface WorkerInfo {
@@ -157,11 +164,20 @@ export const generateSpeedSvgPath = (history: number[] = [], peakBps: number = 0
 };
 
 export default function App() {
-  const [activeView, setActiveView] = useState<"downloads" | "settings">(
-    () => (typeof window !== "undefined" && window.location.hash === "#settings" ? "settings" : "downloads")
+  const [activeView, setActiveView] = useState<"downloads" | "settings" | "history" | "queues">(
+    () => {
+      if (typeof window !== "undefined") {
+        if (window.location.hash === "#settings") return "settings";
+        if (window.location.hash === "#history") return "history";
+        if (window.location.hash === "#queues") return "queues";
+      }
+      return "downloads";
+    }
   );
   const [settings, setSettings] = useState<EdmSettings>(loadSettings);
   const [isWizardOpen, setIsWizardOpen] = useState(false);
+  const [isBatchModalOpen, setIsBatchModalOpen] = useState(false);
+  const [refreshModalTask, setRefreshModalTask] = useState<DownloadItem | null>(null);
 
   useEffect(() => {
     tauriIsWizardCompleted().then((completed) => {
@@ -185,7 +201,10 @@ export default function App() {
   // Synchronize hash routing with activeView
   useEffect(() => {
     const handleHash = () => {
-      setActiveView(window.location.hash === "#settings" ? "settings" : "downloads");
+      if (window.location.hash === "#settings") setActiveView("settings");
+      else if (window.location.hash === "#history") setActiveView("history");
+      else if (window.location.hash === "#queues") setActiveView("queues");
+      else setActiveView("downloads");
     };
     window.addEventListener("hashchange", handleHash);
     return () => window.removeEventListener("hashchange", handleHash);
@@ -468,6 +487,18 @@ export default function App() {
       hostname = new URL(urlInput.startsWith("http") ? urlInput : `https://${urlInput}`).hostname;
     } catch {
       hostname = "download.net";
+    }
+
+    const dupCheck = await tauriCheckDuplicateDownload(
+      urlInput,
+      name,
+      probeResult?.sizeBytes || 0
+    );
+    if (dupCheck.is_duplicate) {
+      const proceed = confirm(
+        `Duplicate Download Detected:\n${dupCheck.existing_filename ? `File already exists as ${dupCheck.existing_filename} (${dupCheck.existing_state})` : "This download already exists in tasks."}\n\nDo you still wish to add it again?`
+      );
+      if (!proceed) return;
     }
 
     const conns = settings.downloads.maxConnectionsPerFile || 8;
@@ -826,9 +857,22 @@ export default function App() {
           </span>
         );
       case "failed":
+        if (errorMsg?.toLowerCase().includes("expire") || errorMsg?.includes("401") || errorMsg?.includes("403") || errorMsg?.includes("410")) {
+          return (
+            <span className="inline-flex items-center justify-center w-5 h-5 text-amber-400" title="Download Link Expired - Click Refresh">
+              <RotateCcw className="w-4 h-4" />
+            </span>
+          );
+        }
         return (
           <span className="inline-flex items-center justify-center w-5 h-5 text-rose-400" title={errorMsg || "Download Failed"}>
             <X className="w-4 h-4" />
+          </span>
+        );
+      case "link_expired":
+        return (
+          <span className="inline-flex items-center justify-center w-5 h-5 text-amber-400" title="Download Link Expired - Click Refresh">
+            <RotateCcw className="w-4 h-4" />
           </span>
         );
       default:
@@ -867,6 +911,38 @@ export default function App() {
               activeThreads={totalActiveThreads}
               totalSessionBytes={totalSessionBytes}
               onOpenWizard={() => setIsWizardOpen(true)}
+            />
+          </motion.div>
+        ) : activeView === "history" ? (
+          <motion.div
+            key="history-view"
+            variants={viewVariants}
+            initial="initial"
+            animate="animate"
+            exit="exit"
+            className="flex-1 flex flex-col min-h-0 overflow-hidden w-full h-full"
+          >
+            <HistoryView
+              onBack={() => {
+                setActiveView("downloads");
+                window.location.hash = "";
+              }}
+            />
+          </motion.div>
+        ) : activeView === "queues" ? (
+          <motion.div
+            key="queues-view"
+            variants={viewVariants}
+            initial="initial"
+            animate="animate"
+            exit="exit"
+            className="flex-1 flex flex-col min-h-0 overflow-hidden w-full h-full"
+          >
+            <QueuesView
+              onBack={() => {
+                setActiveView("downloads");
+                window.location.hash = "";
+              }}
             />
           </motion.div>
         ) : (
@@ -1006,6 +1082,15 @@ export default function App() {
                 title="Add Download URL (Ctrl+N)"
               >
                 <Plus className="w-4 h-4 stroke-[2.5]" />
+              </button>
+
+              {/* Batch Download Pattern */}
+              <button
+                onClick={() => setIsBatchModalOpen(true)}
+                className="btn-3d h-8 w-8 rounded-lg flex items-center justify-center shrink-0 cursor-pointer text-[var(--accent)] hover:text-white"
+                title="Batch Download Pattern (Ranges & Sets)"
+              >
+                <Sparkles className="w-4 h-4" />
               </button>
 
               {/* Search Box */}
@@ -1166,6 +1251,40 @@ export default function App() {
                 );
               })}
             </div>
+
+            <div className="w-5 h-[1px] bg-[var(--border-subtle)] my-0.5" />
+
+            {/* Specialized Views (Queues, History) */}
+            <div className="space-y-0.5">
+              <button
+                onClick={() => {
+                  setActiveView("queues");
+                  window.location.hash = "#queues";
+                }}
+                title="Queue Scheduler & Rules"
+                className={`w-8 h-8 mx-auto flex items-center justify-center rounded-lg text-xs font-medium transition-all duration-150 cursor-pointer ${
+                  (activeView as string) === "queues"
+                    ? "sidebar-item-active-3d text-[var(--accent)] font-semibold shadow-sm"
+                    : "sidebar-item-inactive-3d text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+                }`}
+              >
+                <Layers className="w-3.5 h-3.5" />
+              </button>
+              <button
+                onClick={() => {
+                  setActiveView("history");
+                  window.location.hash = "#history";
+                }}
+                title="Download History & Logs"
+                className={`w-8 h-8 mx-auto flex items-center justify-center rounded-lg text-xs font-medium transition-all duration-150 cursor-pointer ${
+                  (activeView as string) === "history"
+                    ? "sidebar-item-active-3d text-[var(--accent)] font-semibold shadow-sm"
+                    : "sidebar-item-inactive-3d text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+                }`}
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+              </button>
+            </div>
           </div>
         </aside>
 
@@ -1319,13 +1438,26 @@ export default function App() {
                                 <Play className="w-3.5 h-3.5 text-emerald-400 icon-3d" />
                               </button>
                             ) : item.state === "failed" ? (
-                              <button
-                                onClick={(e) => toggleDownloadState(item.id, e)}
-                                className="p-1.5 rounded-lg btn-3d text-rose-400 hover:text-rose-300 hover:bg-rose-500/10 cursor-pointer transition-all"
-                                title="Retry Download"
-                              >
-                                <RotateCcw className="w-3.5 h-3.5 text-rose-400 icon-3d" />
-                              </button>
+                              item.error_msg?.toLowerCase().includes("expire") || item.error_msg?.includes("401") || item.error_msg?.includes("403") || item.error_msg?.includes("410") ? (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setRefreshModalTask(item);
+                                  }}
+                                  className="p-1.5 rounded-lg btn-3d text-amber-400 hover:text-amber-300 hover:bg-amber-500/10 cursor-pointer transition-all"
+                                  title="Refresh Expired Download Link"
+                                >
+                                  <RotateCcw className="w-3.5 h-3.5 text-amber-400 icon-3d" />
+                                </button>
+                              ) : (
+                                <button
+                                  onClick={(e) => toggleDownloadState(item.id, e)}
+                                  className="p-1.5 rounded-lg btn-3d text-rose-400 hover:text-rose-300 hover:bg-rose-500/10 cursor-pointer transition-all"
+                                  title="Retry Download"
+                                >
+                                  <RotateCcw className="w-3.5 h-3.5 text-rose-400 icon-3d" />
+                                </button>
+                              )
                             ) : (
                               <button
                                 onClick={(e) => toggleDownloadState(item.id, e)}
@@ -1508,13 +1640,26 @@ export default function App() {
                             <Play className="w-4 h-4 text-emerald-400" />
                           </button>
                         ) : item.state === "failed" ? (
-                          <button
-                            onClick={(e) => toggleDownloadState(item.id, e)}
-                            className="btn-3d p-1.5 rounded-md text-rose-400 hover:text-rose-300 hover:bg-rose-500/10 cursor-pointer transition-all"
-                            title="Retry Download"
-                          >
-                            <RotateCcw className="w-4 h-4 text-rose-400" />
-                          </button>
+                          item.error_msg?.toLowerCase().includes("expire") || item.error_msg?.includes("401") || item.error_msg?.includes("403") || item.error_msg?.includes("410") ? (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setRefreshModalTask(item);
+                              }}
+                              className="btn-3d p-1.5 rounded-md text-amber-400 hover:text-amber-300 hover:bg-amber-500/10 cursor-pointer transition-all"
+                              title="Refresh Expired Download Link"
+                            >
+                              <RotateCcw className="w-4 h-4 text-amber-400" />
+                            </button>
+                          ) : (
+                            <button
+                              onClick={(e) => toggleDownloadState(item.id, e)}
+                              className="btn-3d p-1.5 rounded-md text-rose-400 hover:text-rose-300 hover:bg-rose-500/10 cursor-pointer transition-all"
+                              title="Retry Download"
+                            >
+                              <RotateCcw className="w-4 h-4 text-rose-400" />
+                            </button>
+                          )
                         ) : (
                           <button
                             onClick={(e) => toggleDownloadState(item.id, e)}
@@ -1592,6 +1737,40 @@ export default function App() {
           >
             <Settings className="w-3.5 h-3.5 text-[var(--accent)] shrink-0 icon-3d" />
             <span className="hidden xs:inline">Settings</span>
+          </button>
+
+          {/* Queues Trigger */}
+          <button
+            onClick={() => {
+              setActiveView("queues");
+              window.location.hash = "#queues";
+            }}
+            className={`h-7 px-2.5 rounded-md text-[11px] sm:text-xs font-medium btn-3d inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer ${
+              (activeView as string) === "queues"
+                ? "text-[var(--accent)] font-semibold shadow-sm"
+                : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+            }`}
+            title="Queue Scheduler & Rules"
+          >
+            <Layers className="w-3.5 h-3.5 text-[var(--accent)] shrink-0 icon-3d" />
+            <span className="hidden xs:inline">Queues</span>
+          </button>
+
+          {/* History Trigger */}
+          <button
+            onClick={() => {
+              setActiveView("history");
+              window.location.hash = "#history";
+            }}
+            className={`h-7 px-2.5 rounded-md text-[11px] sm:text-xs font-medium btn-3d inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer ${
+              (activeView as string) === "history"
+                ? "text-[var(--accent)] font-semibold shadow-sm"
+                : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+            }`}
+            title="Download History & Logs"
+          >
+            <RotateCcw className="w-3.5 h-3.5 text-[var(--accent)] shrink-0 icon-3d" />
+            <span className="hidden xs:inline">History</span>
           </button>
 
           {/* Speed Limiter Dial (Opens upward from status bar) */}
@@ -2222,6 +2401,31 @@ export default function App() {
         settings={settings}
         onSaveSettings={handleUpdateSettings}
       />
+
+      <BatchDownloadModal
+        isOpen={isBatchModalOpen}
+        onClose={() => setIsBatchModalOpen(false)}
+        onSuccess={(_count) => {
+          // Success toast or feedback
+        }}
+      />
+
+      <RefreshLinkModal
+        isOpen={Boolean(refreshModalTask)}
+        task={refreshModalTask}
+        onClose={() => setRefreshModalTask(null)}
+        onRefreshed={(taskId, newUrl) => {
+          setDownloads((prev) =>
+            prev.map((d) =>
+              d.id === taskId
+                ? { ...d, url: newUrl, state: "downloading", speed: "Connecting..." }
+                : d
+            )
+          );
+        }}
+      />
+
+      <PowerCountdownModal />
     </div>
   );
 }

@@ -94,6 +94,41 @@ impl MediaGrabber {
 
         Ok(variants)
     }
+
+    /// Fetches and probes a media URL (HLS playlist, DASH manifest, or direct stream)
+    pub async fn probe_media_stream(url: &str, client: &reqwest::Client) -> Result<(Vec<StreamVariant>, bool), String> {
+        let resp = client.get(url).send().await.map_err(|e| e.to_string())?;
+        let text = resp.text().await.map_err(|e| e.to_string())?;
+        if Self::is_drm_protected(&text) {
+            return Ok((Vec::new(), true));
+        }
+        if text.contains("#EXT-X-STREAM-INF") {
+            let variants = Self::parse_hls_master(&text, url)?;
+            Ok((variants, false))
+        } else if text.contains("#EXTM3U") {
+            Ok((
+                vec![StreamVariant {
+                    quality: "Default".into(),
+                    resolution: None,
+                    bandwidth: None,
+                    url: url.to_string(),
+                    is_drm_protected: false,
+                }],
+                false,
+            ))
+        } else {
+            Ok((
+                vec![StreamVariant {
+                    quality: "Direct Stream".into(),
+                    resolution: None,
+                    bandwidth: None,
+                    url: url.to_string(),
+                    is_drm_protected: false,
+                }],
+                false,
+            ))
+        }
+    }
 }
 
 #[cfg(test)]

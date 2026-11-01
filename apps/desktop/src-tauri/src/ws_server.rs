@@ -86,6 +86,31 @@ pub enum InboundWsMessage {
         #[serde(default)]
         delete_file: Option<bool>,
     },
+    RefreshTask {
+        #[serde(default)]
+        req_id: Option<String>,
+        task_id: String,
+        new_url: String,
+        #[serde(default)]
+        headers: Option<HashMap<String, String>>,
+    },
+    ProbeMedia {
+        req_id: String,
+        media_url: String,
+    },
+    BatchAdd {
+        req_id: String,
+        items: Vec<BatchAddItem>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchAddItem {
+    pub url: String,
+    #[serde(default)]
+    pub filename: Option<String>,
+    #[serde(default)]
+    pub referrer: Option<String>,
 }
 
 impl InboundWsMessage {
@@ -145,6 +170,23 @@ pub enum OutboundWsMessage {
         epoch: String,
         rev: u64,
     },
+    RefreshLink {
+        task_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        page_url: Option<String>,
+        filename: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        size: Option<u64>,
+    },
+    MediaVariants {
+        req_id: String,
+        variants: Vec<edm_ipc::MediaVariant>,
+        is_drm: bool,
+    },
+    PowerCountdown {
+        action: String,
+        seconds_remaining: u32,
+    },
 }
 
 #[derive(Debug)]
@@ -169,6 +211,24 @@ pub struct ActionCommand {
     pub resp_tx: tokio::sync::oneshot::Sender<Result<(), String>>,
 }
 
+#[derive(Debug)]
+pub struct RefreshTaskCommand {
+    #[allow(dead_code)]
+    pub req_id: Option<String>,
+    pub task_id: String,
+    pub new_url: String,
+    pub headers: Option<HashMap<String, String>>,
+    pub resp_tx: tokio::sync::oneshot::Sender<Result<(), String>>,
+}
+
+#[derive(Debug)]
+pub struct ProbeMediaCommand {
+    #[allow(dead_code)]
+    pub req_id: String,
+    pub media_url: String,
+    pub resp_tx: tokio::sync::oneshot::Sender<Result<(Vec<edm_ipc::MediaVariant>, bool), String>>,
+}
+
 pub struct WsManager {
     token: String,
     pub allowed_extension_id: String,
@@ -183,6 +243,8 @@ pub struct WsManager {
     pub tx_broadcast: broadcast::Sender<String>,
     pub tx_create_task: mpsc::Sender<CreateTaskCommand>,
     pub tx_action: mpsc::Sender<ActionCommand>,
+    pub tx_refresh_task: mpsc::Sender<RefreshTaskCommand>,
+    pub tx_probe_media: mpsc::Sender<ProbeMediaCommand>,
 }
 
 impl WsManager {
@@ -192,6 +254,8 @@ impl WsManager {
         store: Store,
         tx_create_task: mpsc::Sender<CreateTaskCommand>,
         tx_action: mpsc::Sender<ActionCommand>,
+        tx_refresh_task: mpsc::Sender<RefreshTaskCommand>,
+        tx_probe_media: mpsc::Sender<ProbeMediaCommand>,
     ) -> Self {
         let (tx_broadcast, _) = broadcast::channel(128);
         Self {
@@ -208,6 +272,8 @@ impl WsManager {
             tx_broadcast,
             tx_create_task,
             tx_action,
+            tx_refresh_task,
+            tx_probe_media,
         }
     }
 
@@ -262,6 +328,34 @@ impl WsManager {
 
     pub async fn broadcast_snapshot(&self) {
         let msg = self.build_snapshot().await;
+        if let Ok(json) = serde_json::to_string(&msg) {
+            let _ = self.tx_broadcast.send(json);
+        }
+    }
+
+    pub async fn broadcast_refresh_link(
+        &self,
+        task_id: &str,
+        page_url: Option<&str>,
+        filename: &str,
+        size: Option<u64>,
+    ) {
+        let msg = OutboundWsMessage::RefreshLink {
+            task_id: task_id.to_string(),
+            page_url: page_url.map(String::from),
+            filename: filename.to_string(),
+            size,
+        };
+        if let Ok(json) = serde_json::to_string(&msg) {
+            let _ = self.tx_broadcast.send(json);
+        }
+    }
+
+    pub async fn broadcast_power_countdown(&self, action: &str, seconds_remaining: u32) {
+        let msg = OutboundWsMessage::PowerCountdown {
+            action: action.to_string(),
+            seconds_remaining,
+        };
         if let Ok(json) = serde_json::to_string(&msg) {
             let _ = self.tx_broadcast.send(json);
         }
@@ -930,6 +1024,94 @@ async fn handle_ws_connection(stream: TcpStream, peer_addr: SocketAddr, manager:
                                     }
                                 }
                             }
+                            Ok(InboundWsMessage::RefreshTask { req_id, task_id, new_url, headers }) => {
+                                let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+                                let cmd = RefreshTaskCommand {
+                                    req_id: req_id.clone(),
+                                    task_id,
+                                    new_url,
+                                    headers,
+                                    resp_tx,
+                                };
+                                let ack = if manager.tx_refresh_task.send(cmd).await.is_ok() {
+                                    match tokio::time::timeout(Duration::from_secs(15), resp_rx).await {
+                                        Ok(Ok(Ok(()))) => OutboundWsMessage::Ack {
+                                            req_id: req_id.unwrap_or_default(),
+                                            ok: true,
+                                            id: None,
+                                            error: None,
+                                        },
+                                        Ok(Ok(Err(err))) => OutboundWsMessage::Ack {
+                                            req_id: req_id.unwrap_or_default(),
+                                            ok: false,
+                                            id: None,
+                                            error: Some(err),
+                                        },
+                                        _ => OutboundWsMessage::Ack {
+                                            req_id: req_id.unwrap_or_default(),
+                                            ok: false,
+                                            id: None,
+                                            error: Some("Timeout verifying and refreshing link".into()),
+                                        },
+                                    }
+                                } else {
+                                    OutboundWsMessage::Ack {
+                                        req_id: req_id.unwrap_or_default(),
+                                        ok: false,
+                                        id: None,
+                                        error: Some("Task refresh service unavailable".into()),
+                                    }
+                                };
+                                if let Ok(json) = serde_json::to_string(&ack) {
+                                    let _ = ws_tx.send(Message::Text(json.into())).await;
+                                }
+                            }
+                            Ok(InboundWsMessage::ProbeMedia { req_id, media_url }) => {
+                                let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+                                let cmd = ProbeMediaCommand {
+                                    req_id: req_id.clone(),
+                                    media_url,
+                                    resp_tx,
+                                };
+                                if manager.tx_probe_media.send(cmd).await.is_ok() {
+                                    if let Ok(Ok(Ok((variants, is_drm)))) = tokio::time::timeout(Duration::from_secs(10), resp_rx).await {
+                                        let reply = OutboundWsMessage::MediaVariants {
+                                            req_id,
+                                            variants,
+                                            is_drm,
+                                        };
+                                        if let Ok(json) = serde_json::to_string(&reply) {
+                                            let _ = ws_tx.send(Message::Text(json.into())).await;
+                                        }
+                                    }
+                                }
+                            }
+                            Ok(InboundWsMessage::BatchAdd { req_id, items }) => {
+                                let mut added = 0;
+                                for item in items {
+                                    let (resp_tx, _resp_rx) = tokio::sync::oneshot::channel();
+                                    let cmd = CreateTaskCommand {
+                                        req_id: format!("{}_{}", req_id, added),
+                                        url: item.url,
+                                        cookies: Vec::new(),
+                                        referrer: item.referrer,
+                                        user_agent: None,
+                                        filename: item.filename,
+                                        resp_tx,
+                                    };
+                                    let _ = manager.tx_create_task.send(cmd).await;
+                                    added += 1;
+                                }
+                                let ack = OutboundWsMessage::Ack {
+                                    req_id,
+                                    ok: true,
+                                    id: Some(format!("Added {} tasks", added)),
+                                    error: None,
+                                };
+                                if let Ok(json) = serde_json::to_string(&ack) {
+                                    let _ = ws_tx.send(Message::Text(json.into())).await;
+                                }
+                            }
                             Ok(InboundWsMessage::Hello { .. }) => {
                                 // Redundant hello ignored
                             }
@@ -1093,6 +1275,8 @@ mod tests {
         let store = Store::open_in_memory().unwrap();
         let (create_tx, create_rx) = mpsc::channel(32);
         let (action_tx, action_rx) = mpsc::channel(32);
+        let (refresh_tx, _refresh_rx) = mpsc::channel(32);
+        let (probe_tx, _probe_rx) = mpsc::channel(32);
 
         let manager = Arc::new(WsManager::new(
             token.to_string(),
@@ -1100,6 +1284,8 @@ mod tests {
             store,
             create_tx,
             action_tx,
+            refresh_tx,
+            probe_tx,
         ));
 
         let addr = start_ws_server_on("127.0.0.1:0", manager.clone())

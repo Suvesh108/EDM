@@ -215,10 +215,15 @@ impl AdaptiveWorker {
 
             let status = resp.status();
 
-            // Handle HTTP 403 Forbidden or 410 Gone (Signed URLs expired)
-            if status == reqwest::StatusCode::FORBIDDEN || status == reqwest::StatusCode::GONE {
-                let err_msg = "Download link expired (HTTP 403/410). Please refresh URL to resume."
-                    .to_string();
+            // Handle HTTP 401 Unauthorized, 403 Forbidden or 410 Gone (Signed URLs expired)
+            if status == reqwest::StatusCode::UNAUTHORIZED
+                || status == reqwest::StatusCode::FORBIDDEN
+                || status == reqwest::StatusCode::GONE
+            {
+                let err_msg = format!(
+                    "Download link expired (HTTP {}). Please refresh URL to resume.",
+                    status.as_u16()
+                );
                 warn!(
                     "Worker {} encountered HTTP {}: {}",
                     self.idx, status, err_msg

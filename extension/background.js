@@ -358,6 +358,33 @@ async function connectWebSocket() {
           }
           break;
         }
+        case "refresh_link": {
+          console.log("[EDM Extension] Download link expired for task:", data.task_id, data.filename);
+          chrome.storage.local.set({
+            pending_refresh_task: {
+              task_id: data.task_id,
+              page_url: data.page_url,
+              filename: data.filename,
+              size: data.size,
+              timestamp: Date.now()
+            }
+          });
+          if (chrome.notifications) {
+            chrome.notifications.create({
+              type: "basic",
+              iconUrl: "logo.png",
+              title: "EDM: Link Expired",
+              message: `${data.filename || "Your download"} expired mid-download. Refresh link in popup to resume.`,
+              priority: 2
+            });
+          }
+          notifyPopupPorts();
+          break;
+        }
+        case "power_countdown": {
+          notifyPopupPorts();
+          break;
+        }
         default:
           break;
       }

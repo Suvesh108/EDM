@@ -292,8 +292,17 @@ impl AdaptiveEngine {
                             error!("Worker {} failed: {}", idx, reason);
                             if scheduler.active_count() == 0 {
                                 let _ = self.store.update_download_progress(task.id, total_downloaded);
-                                let _ = self.store.update_download_state(task.id, DownloadState::Failed, Some(&reason));
-                                return Err(format!("All workers failed: {}", reason));
+                                let is_expired = reason.contains("expired")
+                                    || reason.contains("401")
+                                    || reason.contains("403")
+                                    || reason.contains("410");
+                                let state = if is_expired {
+                                    DownloadState::LinkExpired
+                                } else {
+                                    DownloadState::Failed
+                                };
+                                let _ = self.store.update_download_state(task.id, state, Some(&reason));
+                                return Err(format!("Workers stopped: {}", reason));
                             }
                         }
                         None => {

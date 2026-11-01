@@ -62,6 +62,9 @@ class PopupController {
     __publicField(this, "isAddFormOpen", false);
     __publicField(this, "newUrlInput", "");
     __publicField(this, "newFileNameInput", "");
+    __publicField(this, "pageResources", []);
+    __publicField(this, "selectedGrabberUrls", /* @__PURE__ */ new Set());
+    __publicField(this, "grabberFilter", "all");
     __publicField(this, "downloads", []);
     __publicField(this, "connectionState", "connecting");
     __publicField(this, "lifecycleState", "active");
@@ -98,6 +101,21 @@ class PopupController {
     this.bindHeaderNav();
     this.connectPort();
     await this.loadSettings();
+    try {
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (tabs[0]?.id) {
+          chrome.tabs.sendMessage(tabs[0].id, { action: "grab_page_links" }, (res) => {
+            if (res && res.resources) {
+              this.pageResources = res.resources;
+              if (this.activeTab === "media" || this.activeTab === "grabber") {
+                this.render();
+              }
+            }
+          });
+        }
+      });
+    } catch {
+    }
     this.render();
   }
   connectPort() {
@@ -363,6 +381,12 @@ class PopupController {
     if (this.activeTab === "tasks") {
       app.innerHTML = this.renderTasksTab();
       this.attachTasksEvents();
+    } else if (this.activeTab === "media") {
+      app.innerHTML = this.renderMediaTab();
+      this.attachMediaEvents();
+    } else if (this.activeTab === "grabber") {
+      app.innerHTML = this.renderGrabberTab();
+      this.attachGrabberEvents();
     } else if (this.activeTab === "diagnostics") {
       app.innerHTML = this.renderDiagnosticsTab();
       this.attachDiagnosticsEvents();
@@ -497,6 +521,12 @@ class PopupController {
             <span>\u2022</span>
             <span style="color: #FBBF24; font-weight: 600;">Paused</span>
           `;
+      } else if (item.state === "needs_fresh_link" || item.state === "link_expired") {
+        metaHtml = `
+            <span>${total > 0 ? `${formatBytes(done)} / ${formatBytes(total)} (${pct}%)` : `${formatBytes(done)}`}</span>
+            <span>\u2022</span>
+            <span style="color: #F59E0B; font-weight: 600;">Link Expired</span>
+          `;
       } else {
         const failReason = item.error_msg ? escapeHtml(item.error_msg) : "Download failed or link expired";
         metaHtml = `
@@ -529,6 +559,10 @@ class PopupController {
       } else if (isFailed) {
         actionsHtml = `
             <button class="btn-icon-3d btn-icon-primary act-retry" ${disAttr} ${disStyle} data-id="${escapeHtml(item.id)}" title="Retry Download">${SVG_ICONS.retry}</button>
+          `;
+      } else if (item.state === "needs_fresh_link" || item.state === "link_expired") {
+        actionsHtml = `
+            <button class="btn-icon-3d act-refresh-link" ${disAttr} ${disStyle} data-id="${escapeHtml(item.id)}" title="Refresh Expired Link">\u{1F504}</button>
           `;
       }
       actionsHtml += `
@@ -694,6 +728,20 @@ class PopupController {
         }
       });
     });
+    document.querySelectorAll(".act-refresh-link").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const id = btn.getAttribute("data-id");
+        const freshUrl = prompt("Enter new/refreshed download URL for this file:");
+        if (id && freshUrl && freshUrl.trim().startsWith("http")) {
+          chrome.runtime.sendMessage({
+            action: "refresh_task",
+            task_id: id,
+            new_url: freshUrl.trim()
+          });
+        }
+      });
+    });
     document.querySelectorAll(".act-delete").forEach((btn) => {
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -750,6 +798,211 @@ class PopupController {
     if (modal) {
       modal.style.display = "none";
       modal.innerHTML = "";
+    }
+  }
+  // ─────────────────────────────────────────────────────────────
+  // MEDIA SNIFFER TAB
+  // ─────────────────────────────────────────────────────────────
+  renderMediaTab() {
+    const mediaResources = this.pageResources.filter((r) => r.type === "video" || r.type === "audio" || r.type === "stream");
+    return `
+      <div class="tasks-toolbar">
+        <div style="font-weight: 600; font-size: 12px; margin-bottom: 4px;">Media Detected on Active Tab</div>
+        <div style="font-size: 11px; color: #94A3B8;">Direct streams and audio tracks sniffed on this web page.</div>
+      </div>
+      <div class="downloads-list">
+        ${mediaResources.length === 0 ? `
+          <div class="empty-state">
+            <div class="empty-icon">\u{1F3AC}</div>
+            <div style="font-weight: 600;">No media detected on this page</div>
+            <div style="font-size: 11px; max-width: 280px;">Play a video or audio file on the current tab, then re-open this popup.</div>
+          </div>
+        ` : mediaResources.map(
+      (m, idx) => `
+          <div class="download-item">
+            <div class="file-icon-box tile-video" style="margin-right: 10px;">
+              ${CATEGORY_SVGS.video}
+            </div>
+            <div class="item-main">
+              <div class="file-title" title="${escapeHtml(m.url)}">${escapeHtml(m.title)}</div>
+              <div class="item-meta">
+                <span>${m.format} Stream</span>
+                <span>\u2022</span>
+                <span style="max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(m.url)}</span>
+              </div>
+            </div>
+            <button class="btn-3d btn-primary download-media-btn" data-idx="${idx}" style="padding: 4px 10px; font-size: 11px;">
+              Download
+            </button>
+          </div>
+        `
+    ).join("")}
+      </div>
+    `;
+  }
+  attachMediaEvents() {
+    const mediaResources = this.pageResources.filter((r) => r.type === "video" || r.type === "audio" || r.type === "stream");
+    document.querySelectorAll(".download-media-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const idx = parseInt(btn.getAttribute("data-idx") || "0", 10);
+        const item = mediaResources[idx];
+        if (item) {
+          chrome.runtime.sendMessage({
+            action: "add_download",
+            url: item.url,
+            filename: item.title + (item.format ? `.${item.format.toLowerCase()}` : "")
+          });
+          this.activeTab = "tasks";
+          document.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("active"));
+          document.querySelector('[data-tab="tasks"]')?.classList.add("active");
+          this.render();
+        }
+      });
+    });
+  }
+  // ─────────────────────────────────────────────────────────────
+  // GRAB LINKS TAB
+  // ─────────────────────────────────────────────────────────────
+  renderGrabberTab() {
+    const filtered = this.pageResources.filter((r) => {
+      if (this.grabberFilter === "all") return true;
+      if (this.grabberFilter === "media") return r.type === "video" || r.type === "audio" || r.type === "stream";
+      if (this.grabberFilter === "archive") return r.type === "archive";
+      if (this.grabberFilter === "document") return r.type === "document";
+      if (this.grabberFilter === "executable") return r.type === "executable";
+      return true;
+    });
+    const isAllSelected = filtered.length > 0 && filtered.every((r) => this.selectedGrabberUrls.has(r.url));
+    return `
+      <div class="tasks-toolbar">
+        <div class="toolbar-row" style="margin-bottom: 6px;">
+          <div class="filter-pills">
+            <button class="filter-pill ${this.grabberFilter === "all" ? "active" : ""}" data-grab-filter="all">All (${this.pageResources.length})</button>
+            <button class="filter-pill ${this.grabberFilter === "media" ? "active" : ""}" data-grab-filter="media">Media</button>
+            <button class="filter-pill ${this.grabberFilter === "archive" ? "active" : ""}" data-grab-filter="archive">Archives</button>
+            <button class="filter-pill ${this.grabberFilter === "document" ? "active" : ""}" data-grab-filter="document">Docs</button>
+            <button class="filter-pill ${this.grabberFilter === "executable" ? "active" : ""}" data-grab-filter="executable">Software</button>
+          </div>
+          <button id="selectAllGrabberBtn" class="btn-3d" style="font-size: 11px;">
+            ${isAllSelected ? "Deselect All" : "Select All"}
+          </button>
+        </div>
+        <div style="display: flex; justify-content: space-between; align-items: center; font-size: 11px;">
+          <span>Selected: <strong style="color: #60A5FA;">${this.selectedGrabberUrls.size}</strong> link(s)</span>
+          <button id="sendBatchBtn" class="btn-3d btn-primary" ${this.selectedGrabberUrls.size === 0 ? "disabled style='opacity:0.4;'" : ""}>
+            Download Selected (${this.selectedGrabberUrls.size})
+          </button>
+        </div>
+      </div>
+      <div class="downloads-list">
+        ${filtered.length === 0 ? `
+          <div class="empty-state">
+            <div class="empty-icon">\u{1F517}</div>
+            <div style="font-weight: 600;">No matching links on this page</div>
+            <div style="font-size: 11px;">Try another category filter or browse to a page with downloadable content.</div>
+          </div>
+        ` : filtered.map((r) => {
+      const checked = this.selectedGrabberUrls.has(r.url) ? "checked" : "";
+      return `
+            <div class="download-item" style="padding: 6px 10px;">
+              <input type="checkbox" class="grabber-check" data-url="${escapeHtml(r.url)}" ${checked} style="margin-right: 8px; cursor: pointer;">
+              <div class="item-main">
+                <div class="file-title" style="font-size: 11.5px;" title="${escapeHtml(r.url)}">${escapeHtml(r.title)}</div>
+                <div class="item-meta">
+                  <span>${r.type.toUpperCase()}</span>
+                  <span>\u2022</span>
+                  <span>${r.format}</span>
+                  <span>\u2022</span>
+                  <span style="max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(r.url)}</span>
+                </div>
+              </div>
+            </div>
+          `;
+    }).join("")}
+      </div>
+    `;
+  }
+  attachGrabberEvents() {
+    document.querySelectorAll("[data-grab-filter]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        this.grabberFilter = btn.getAttribute("data-grab-filter") || "all";
+        this.render();
+      });
+    });
+    const selectAllBtn = document.getElementById("selectAllGrabberBtn");
+    if (selectAllBtn) {
+      selectAllBtn.addEventListener("click", () => {
+        const filtered = this.pageResources.filter((r) => {
+          if (this.grabberFilter === "all") return true;
+          if (this.grabberFilter === "media") return r.type === "video" || r.type === "audio" || r.type === "stream";
+          if (this.grabberFilter === "archive") return r.type === "archive";
+          if (this.grabberFilter === "document") return r.type === "document";
+          if (this.grabberFilter === "executable") return r.type === "executable";
+          return true;
+        });
+        const isAllSelected = filtered.length > 0 && filtered.every((r) => this.selectedGrabberUrls.has(r.url));
+        if (isAllSelected) {
+          filtered.forEach((r) => this.selectedGrabberUrls.delete(r.url));
+        } else {
+          filtered.forEach((r) => this.selectedGrabberUrls.add(r.url));
+        }
+        this.render();
+      });
+    }
+    document.querySelectorAll(".grabber-check").forEach((cb) => {
+      cb.addEventListener("change", (e) => {
+        const target = e.target;
+        const url = target.getAttribute("data-url");
+        if (url) {
+          if (target.checked) {
+            this.selectedGrabberUrls.add(url);
+          } else {
+            this.selectedGrabberUrls.delete(url);
+          }
+        }
+        const sendBtn = document.getElementById("sendBatchBtn");
+        if (sendBtn) {
+          sendBtn.textContent = `Download Selected (${this.selectedGrabberUrls.size})`;
+          if (this.selectedGrabberUrls.size > 0) {
+            sendBtn.removeAttribute("disabled");
+            sendBtn.removeAttribute("style");
+          } else {
+            sendBtn.setAttribute("disabled", "true");
+            sendBtn.setAttribute("style", "opacity: 0.4;");
+          }
+        }
+      });
+    });
+    const sendBatchBtn = document.getElementById("sendBatchBtn");
+    if (sendBatchBtn) {
+      sendBatchBtn.addEventListener("click", () => {
+        if (this.selectedGrabberUrls.size === 0) return;
+        const items = Array.from(this.selectedGrabberUrls).map((url) => {
+          const res = this.pageResources.find((r) => r.url === url);
+          return {
+            url,
+            filename: res ? res.title : void 0
+          };
+        });
+        if (items.length > 1e3) {
+          alert("Cannot queue more than 1,000 items in a single batch.");
+          return;
+        }
+        if (items.length > 200) {
+          if (!confirm(`You are about to start ${items.length} downloads. Continue?`)) {
+            return;
+          }
+        }
+        chrome.runtime.sendMessage({
+          action: "batch_add",
+          items
+        });
+        this.selectedGrabberUrls.clear();
+        this.activeTab = "tasks";
+        document.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("active"));
+        document.querySelector('[data-tab="tasks"]')?.classList.add("active");
+        this.render();
+      });
     }
   }
   // ─────────────────────────────────────────────────────────────
