@@ -83,8 +83,7 @@ fn open_persistent_store() -> Store {
 
 #[cfg(windows)]
 fn register_native_messaging_host() {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    use windows_registry::CURRENT_USER;
 
     let app_dir = match std::env::var("LOCALAPPDATA") {
         Ok(dir) => PathBuf::from(dir).join("EDM"),
@@ -164,40 +163,159 @@ fn register_native_messaging_host() {
         r"Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.edm.nmh",
     ];
 
+    let manifest_str = manifest_path.to_string_lossy().to_string();
     for key in &chromium_reg_targets {
-        let _ = std::process::Command::new("reg")
-            .args([
-                "add",
-                &format!(r"HKCU\{}", key),
-                "/ve",
-                "/t",
-                "REG_SZ",
-                "/d",
-                &manifest_path.to_string_lossy(),
-                "/f",
-            ])
-            .creation_flags(CREATE_NO_WINDOW)
-            .output();
+        if let Ok(k) = CURRENT_USER.create(key) {
+            let _ = k.set_string("", &manifest_str);
+        }
     }
 
     // Register Firefox
-    let _ = std::process::Command::new("reg")
-        .args([
-            "add",
-            r"HKCU\Software\Mozilla\NativeMessagingHosts\com.edm.nmh",
-            "/ve",
-            "/t",
-            "REG_SZ",
-            "/d",
-            &ff_manifest_path.to_string_lossy(),
-            "/f",
-        ])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output();
+    let ff_manifest_str = ff_manifest_path.to_string_lossy().to_string();
+    if let Ok(k) = CURRENT_USER.create(r"Software\Mozilla\NativeMessagingHosts\com.edm.nmh") {
+        let _ = k.set_string("", &ff_manifest_str);
+    }
+
+    // Register HKCU\Software\EDM
+    if let Ok(k) = CURRENT_USER.create(r"Software\EDM") {
+        let _ = k.set_string("AppPath", current_exe.to_string_lossy());
+        let _ = k.set_string("InstallDir", current_dir.to_string_lossy());
+        let _ = k.set_string("NmhPath", nmh_path.to_string_lossy());
+        let _ = k.set_string("Version", env!("CARGO_PKG_VERSION"));
+    }
 }
 
 #[cfg(not(windows))]
 fn register_native_messaging_host() {}
+
+#[cfg(windows)]
+fn collect_browser_diagnostics(ext_id: Option<String>) -> edm_ipc::DiagnosticsReport {
+    use windows_registry::CURRENT_USER;
+
+    let target_ext_id = ext_id.unwrap_or_else(|| "ginpdimhcdbojbhemgjedghkeolbcmgj".to_string());
+
+    let browsers_meta = [
+        ("edge", r"Software\Microsoft\Edge\NativeMessagingHosts\com.edm.nmh", false),
+        ("chrome", r"Software\Google\Chrome\NativeMessagingHosts\com.edm.nmh", false),
+        ("brave", r"Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.edm.nmh", false),
+        ("firefox", r"Software\Mozilla\NativeMessagingHosts\com.edm.nmh", true),
+    ];
+
+    let mut browser_diagnostics = Vec::new();
+
+    for (name, subkey, is_firefox) in &browsers_meta {
+        let mut diag = edm_ipc::BrowserDiagnostic {
+            browser: name.to_string(),
+            registry_key: format!(r"HKCU\{}", subkey),
+            helper_registered: false,
+            manifest_path: None,
+            manifest_exists: false,
+            helper_path: None,
+            helper_exists: false,
+            origin_matched: false,
+            error: None,
+        };
+
+        match CURRENT_USER.open(subkey) {
+            Ok(key) => {
+                diag.helper_registered = true;
+                match key.get_string("") {
+                    Ok(val) => {
+                        diag.manifest_path = Some(val.clone());
+                        let mpath = PathBuf::from(&val);
+                        if mpath.exists() && mpath.is_file() {
+                            diag.manifest_exists = true;
+                            if let Ok(content) = std::fs::read_to_string(&mpath) {
+                                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+                                    if let Some(hpath_str) = json.get("path").and_then(|v| v.as_str()) {
+                                        let hpath = PathBuf::from(hpath_str);
+                                        let full_hpath = if hpath.is_relative() {
+                                            mpath.parent().unwrap_or(&mpath).join(hpath)
+                                        } else {
+                                            hpath
+                                        };
+                                        diag.helper_path = Some(full_hpath.to_string_lossy().to_string());
+                                        diag.helper_exists = full_hpath.exists() && full_hpath.is_file();
+                                    }
+
+                                    if *is_firefox {
+                                        if let Some(exts) = json.get("allowed_extensions").and_then(|v| v.as_array()) {
+                                            diag.origin_matched = exts.iter().any(|e| {
+                                                e.as_str() == Some("edm@suvesh.dev")
+                                                    || e.as_str() == Some(&target_ext_id)
+                                            });
+                                        }
+                                    } else if let Some(origins) = json.get("allowed_origins").and_then(|v| v.as_array()) {
+                                        diag.origin_matched = origins.iter().any(|o| {
+                                            if let Some(s) = o.as_str() {
+                                                s.contains(&target_ext_id)
+                                            } else {
+                                                false
+                                            }
+                                        });
+                                    }
+                                } else {
+                                    diag.error = Some("Failed to parse manifest JSON".to_string());
+                                }
+                            } else {
+                                diag.error = Some("Failed to read manifest file".to_string());
+                            }
+                        } else {
+                            diag.error = Some(format!("Manifest file does not exist at {}", val));
+                        }
+                    }
+                    Err(e) => {
+                        diag.error = Some(format!("Registry (Default) value error: {}", e));
+                    }
+                }
+            }
+            Err(_) => {
+                diag.error = Some("Registry key not registered".to_string());
+            }
+        }
+        browser_diagnostics.push(diag);
+    }
+
+    let current_exe = std::env::current_exe().ok();
+    let dot = PathBuf::from(".");
+    let app_dir = current_exe.as_ref().and_then(|p| p.parent()).unwrap_or(&dot);
+    let helper_path = [
+        app_dir.join("edm-nmh.exe"),
+        app_dir.join("resources").join("edm-nmh.exe"),
+    ].into_iter().find(|p| p.exists()).map(|p| p.to_string_lossy().to_string());
+
+    let (last_err, last_ts, ready_ms) = {
+        let p = match std::env::var("LOCALAPPDATA") {
+            Ok(dir) => PathBuf::from(dir).join("EDM").join("last_wake.json"),
+            Err(_) => std::env::temp_dir().join("EDM").join("last_wake.json"),
+        };
+        if let Ok(content) = std::fs::read_to_string(&p) {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) {
+                let err = v.get("error").and_then(|e| e.as_str()).map(|s| s.to_string());
+                let ts = v.get("timestamp").and_then(|t| t.as_str()).map(|s| s.to_string());
+                let ms = v.get("time_to_ready_ms").and_then(|m| m.as_u64());
+                (err, ts, ms)
+            } else {
+                (None, None, None)
+            }
+        } else {
+            (None, None, None)
+        }
+    };
+
+    edm_ipc::DiagnosticsReport {
+        app_version: env!("CARGO_PKG_VERSION").to_string(),
+        os: "Windows".to_string(),
+        helper_path,
+        app_exe_path: current_exe.map(|p| p.to_string_lossy().to_string()),
+        app_installed: true,
+        ws_port_ready: true,
+        time_to_ready_ms: ready_ms,
+        last_wake_error: last_err,
+        last_wake_timestamp: last_ts,
+        browsers: browser_diagnostics,
+    }
+}
 
 fn validate_url_security(raw_url: &str) -> Result<url::Url, String> {
     let trimmed = raw_url.trim();
@@ -1509,18 +1627,345 @@ fn app_start_dragging(window: tauri::WebviewWindow) {
     let _ = window.start_dragging();
 }
 
-#[tauri::command]
+#[command]
 fn get_extension_token(state: State<'_, AppState>) -> String {
     state.ws_manager.get_token().to_string()
 }
 
+#[command]
+fn get_browser_diagnostics(ext_id: Option<String>) -> Result<edm_ipc::DiagnosticsReport, String> {
+    #[cfg(windows)]
+    {
+        Ok(collect_browser_diagnostics(ext_id))
+    }
+    #[cfg(not(windows))]
+    {
+        Err("Windows only".into())
+    }
+}
+
+#[command]
+fn repair_native_host_registration() -> Result<String, String> {
+    #[cfg(windows)]
+    {
+        register_native_messaging_host();
+        Ok("Native messaging host registration repaired successfully".into())
+    }
+    #[cfg(not(windows))]
+    {
+        Err("Windows only".into())
+    }
+}
+
+#[cfg(windows)]
+fn find_browser_exe(
+    app_paths_key: &str,
+    common_subpaths: &[&str],
+) -> Option<String> {
+    use windows_registry::{CURRENT_USER, LOCAL_MACHINE};
+
+    // 1. Try HKLM App Paths
+    if let Ok(k) = LOCAL_MACHINE.open(app_paths_key) {
+        if let Ok(val) = k.get_string("") {
+            let p = PathBuf::from(val.trim_matches('"'));
+            if p.exists() {
+                return Some(p.to_string_lossy().to_string());
+            }
+        }
+    }
+
+    // 2. Try HKCU App Paths
+    if let Ok(k) = CURRENT_USER.open(app_paths_key) {
+        if let Ok(val) = k.get_string("") {
+            let p = PathBuf::from(val.trim_matches('"'));
+            if p.exists() {
+                return Some(p.to_string_lossy().to_string());
+            }
+        }
+    }
+
+    // 3. Try standard Program Files & LocalAppData paths
+    let prefixes = [
+        std::env::var("ProgramFiles").ok().map(PathBuf::from),
+        std::env::var("ProgramFiles(x86)").ok().map(PathBuf::from),
+        std::env::var("LOCALAPPDATA").ok().map(PathBuf::from),
+    ];
+
+    for prefix in prefixes.iter().flatten() {
+        for sub in common_subpaths {
+            let candidate = prefix.join(sub);
+            if candidate.exists() {
+                return Some(candidate.to_string_lossy().to_string());
+            }
+        }
+    }
+
+    None
+}
+
+#[command]
+async fn detect_installed_browsers(
+    state: State<'_, AppState>,
+) -> Result<Vec<edm_ipc::BrowserSetupInfo>, String> {
+    let mut results = Vec::new();
+
+    #[cfg(windows)]
+    {
+        use windows_registry::CURRENT_USER;
+
+        // 1. Chrome
+        let chrome_path = find_browser_exe(
+            r"Software\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe",
+            &[r"Google\Chrome\Application\chrome.exe"],
+        );
+        let chrome_helper = CURRENT_USER
+            .open(r"Software\Google\Chrome\NativeMessagingHosts\com.edm.nmh")
+            .is_ok();
+        let chrome_connected = state.ws_manager.is_browser_connected("chrome").await;
+
+        results.push(edm_ipc::BrowserSetupInfo {
+            id: "chrome".to_string(),
+            name: "Google Chrome".to_string(),
+            installed: chrome_path.is_some(),
+            exe_path: chrome_path,
+            helper_registered: chrome_helper,
+            extension_connected: chrome_connected,
+            store_url: None,
+            extension_page_url: "chrome://extensions".to_string(),
+        });
+
+        // 2. Edge
+        let edge_path = find_browser_exe(
+            r"Software\Microsoft\Windows\CurrentVersion\App Paths\msedge.exe",
+            &[r"Microsoft\Edge\Application\msedge.exe"],
+        );
+        let edge_helper = CURRENT_USER
+            .open(r"Software\Microsoft\Edge\NativeMessagingHosts\com.edm.nmh")
+            .is_ok();
+        let edge_connected = state.ws_manager.is_browser_connected("edge").await;
+
+        results.push(edm_ipc::BrowserSetupInfo {
+            id: "edge".to_string(),
+            name: "Microsoft Edge".to_string(),
+            installed: edge_path.is_some(),
+            exe_path: edge_path,
+            helper_registered: edge_helper,
+            extension_connected: edge_connected,
+            store_url: None,
+            extension_page_url: "edge://extensions".to_string(),
+        });
+
+        // 3. Brave
+        let brave_path = find_browser_exe(
+            r"Software\Microsoft\Windows\CurrentVersion\App Paths\brave.exe",
+            &[r"BraveSoftware\Brave-Browser\Application\brave.exe"],
+        );
+        let brave_helper = CURRENT_USER
+            .open(r"Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.edm.nmh")
+            .is_ok();
+        let brave_connected = state.ws_manager.is_browser_connected("brave").await;
+
+        results.push(edm_ipc::BrowserSetupInfo {
+            id: "brave".to_string(),
+            name: "Brave Browser".to_string(),
+            installed: brave_path.is_some(),
+            exe_path: brave_path,
+            helper_registered: brave_helper,
+            extension_connected: brave_connected,
+            store_url: None,
+            extension_page_url: "brave://extensions".to_string(),
+        });
+
+        // 4. Firefox
+        let ff_path = find_browser_exe(
+            r"Software\Microsoft\Windows\CurrentVersion\App Paths\firefox.exe",
+            &[r"Mozilla Firefox\firefox.exe"],
+        );
+        let ff_helper = CURRENT_USER
+            .open(r"Software\Mozilla\NativeMessagingHosts\com.edm.nmh")
+            .is_ok();
+        let ff_connected = state.ws_manager.is_browser_connected("firefox").await;
+
+        results.push(edm_ipc::BrowserSetupInfo {
+            id: "firefox".to_string(),
+            name: "Mozilla Firefox".to_string(),
+            installed: ff_path.is_some(),
+            exe_path: ff_path,
+            helper_registered: ff_helper,
+            extension_connected: ff_connected,
+            store_url: Some("http://127.0.0.1:14370/firefox.xpi".to_string()),
+            extension_page_url: "about:addons".to_string(),
+        });
+    }
+
+    Ok(results)
+}
+
+#[command]
+fn prepare_extension_files() -> Result<String, String> {
+    use sha2::{Digest, Sha256};
+
+    let local_appdata = std::env::var("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .map_err(|_| "Failed to determine %LOCALAPPDATA%".to_string())?;
+    let target_dir = local_appdata.join("EDM").join("extension");
+    std::fs::create_dir_all(&target_dir)
+        .map_err(|e| format!("Failed to create target extension directory: {}", e))?;
+
+    let mut source_candidates = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            source_candidates.push(parent.join("extension"));
+            source_candidates.push(parent.join("resources").join("extension"));
+            source_candidates.push(parent.join("resources").join("chromium"));
+        }
+    }
+    source_candidates.push(PathBuf::from("extension/dist/chromium"));
+    source_candidates.push(PathBuf::from("../../extension/dist/chromium"));
+    source_candidates.push(PathBuf::from("../../../extension/dist/chromium"));
+
+    let mut found_source = None;
+    for candidate in &source_candidates {
+        if candidate.join("hashes.json").exists() && candidate.join("manifest.json").exists() {
+            found_source = Some(candidate.clone());
+            break;
+        }
+    }
+
+    let source_dir = found_source.ok_or_else(|| {
+        "Source extension directory not found. Please ensure extension is built.".to_string()
+    })?;
+
+    let hashes_path = source_dir.join("hashes.json");
+    let hashes_content = std::fs::read_to_string(&hashes_path)
+        .map_err(|e| format!("Failed to read hashes.json: {}", e))?;
+    let hashes_json: serde_json::Value = serde_json::from_str(&hashes_content)
+        .map_err(|e| format!("Failed to parse hashes.json: {}", e))?;
+
+    let files_map = hashes_json
+        .get("files")
+        .and_then(|f| f.as_object())
+        .ok_or_else(|| "Invalid hashes.json: missing 'files' object".to_string())?;
+
+    for (filename, expected_hash_val) in files_map {
+        let expected_hash_str = expected_hash_val
+            .as_str()
+            .ok_or_else(|| format!("Invalid hash entry for {}", filename))?;
+        let expected_sha256 = expected_hash_str
+            .strip_prefix("sha256:")
+            .unwrap_or(expected_hash_str);
+
+        let src_file = source_dir.join(filename);
+        if !src_file.exists() {
+            return Err(format!("Source file {} missing in {}", filename, source_dir.display()));
+        }
+
+        let file_bytes = std::fs::read(&src_file)
+            .map_err(|e| format!("Failed to read {}: {}", filename, e))?;
+
+        let mut hasher = Sha256::new();
+        hasher.update(&file_bytes);
+        let actual_sha256 = hex::encode(hasher.finalize());
+
+        if !actual_sha256.eq_ignore_ascii_case(expected_sha256) {
+            return Err(format!(
+                "Integrity check failed for {}: expected {}, got {}",
+                filename, expected_sha256, actual_sha256
+            ));
+        }
+
+        let dest_file = target_dir.join(filename);
+        std::fs::write(&dest_file, &file_bytes)
+            .map_err(|e| format!("Failed to write {}: {}", dest_file.display(), e))?;
+    }
+
+    let _ = std::fs::copy(&hashes_path, target_dir.join("hashes.json"));
+
+    tracing::info!(
+        "Extension files successfully verified and provisioned to {}",
+        target_dir.display()
+    );
+
+    Ok(target_dir.to_string_lossy().to_string())
+}
+
+#[command]
+fn get_extension_folder_path() -> Result<String, String> {
+    let local_appdata = std::env::var("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .map_err(|_| "Failed to determine %LOCALAPPDATA%".to_string())?;
+    let path = local_appdata.join("EDM").join("extension");
+    Ok(path.to_string_lossy().to_string())
+}
+
+#[command]
+fn open_browser_url(browser: String, url: String) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let browser_id = browser.to_lowercase();
+        let exe_path = match browser_id.as_str() {
+            "chrome" => find_browser_exe(r"Software\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe", &[r"Google\Chrome\Application\chrome.exe"]),
+            "edge" => find_browser_exe(r"Software\Microsoft\Windows\CurrentVersion\App Paths\msedge.exe", &[r"Microsoft\Edge\Application\msedge.exe"]),
+            "brave" => find_browser_exe(r"Software\Microsoft\Windows\CurrentVersion\App Paths\brave.exe", &[r"BraveSoftware\Brave-Browser\Application\brave.exe"]),
+            "firefox" => find_browser_exe(r"Software\Microsoft\Windows\CurrentVersion\App Paths\firefox.exe", &[r"Mozilla Firefox\firefox.exe"]),
+            _ => None,
+        };
+
+        if let Some(exe) = exe_path {
+            let mut cmd = std::process::Command::new(&exe);
+            cmd.arg(&url);
+            let _ = cmd.spawn().map_err(|e| format!("Failed to launch browser {}: {}", exe, e))?;
+            return Ok(());
+        }
+    }
+
+    open::that(&url).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[command]
+fn get_firefox_xpi_url() -> String {
+    "http://127.0.0.1:14370/firefox.xpi".to_string()
+}
+
+#[command]
+fn is_wizard_completed(state: State<'_, AppState>) -> Result<bool, String> {
+    match state.store.get_setting("wizard_completed") {
+        Ok(Some(val)) => Ok(val == "true"),
+        _ => Ok(false),
+    }
+}
+
+#[command]
+fn set_wizard_completed(state: State<'_, AppState>, completed: bool) -> Result<(), String> {
+    state
+        .store
+        .set_setting("wizard_completed", if completed { "true" } else { "false" })
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[command]
+fn get_system_downloads_dir() -> String {
+    #[cfg(windows)]
+    {
+        if let Ok(user_profile) = std::env::var("USERPROFILE") {
+            let p = PathBuf::from(user_profile).join("Downloads");
+            if p.exists() {
+                return p.to_string_lossy().to_string();
+            }
+        }
+    }
+    std::env::temp_dir().to_string_lossy().to_string()
+}
+
 fn main() {
+    let t_boot = std::time::Instant::now();
     init_logging();
+    tracing::info!("EDM starting up. Args: {:?}", std::env::args().collect::<Vec<_>>());
 
     #[cfg(windows)]
     set_app_user_model_id();
-
-    register_native_messaging_host();
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(4)
@@ -1530,7 +1975,9 @@ fn main() {
 
     let rt_handle = rt.handle().clone();
 
+    let t_db = std::time::Instant::now();
     let store = open_persistent_store();
+    tracing::info!("[PERF] Persistent store opened in {:?}", t_db.elapsed());
     let engine = Arc::new(AdaptiveEngine::new(store.clone()));
 
     let token = ws_server::get_or_create_token();
@@ -1561,6 +2008,24 @@ fn main() {
         app_handle: Arc::new(Mutex::new(None)),
         lifecycle: lifecycle.clone(),
     };
+
+    // Fast-path: Start WebSocket Server on 127.0.0.1:14370 FIRST
+    let ws_mgr_srv = ws_manager.clone();
+    let t_ws = t_boot;
+    rt_handle.spawn(async move {
+        ws_mgr_srv.sync_from_store().await;
+        tracing::info!("[PERF] Port 14370 ready in {:?}", t_ws.elapsed());
+        ws_server::start_ws_server(ws_mgr_srv).await;
+    });
+
+    spawn_extension_bridge(app_state.clone(), rt_handle.clone());
+
+    // Defer non-essential Native Messaging Host registration repair to background task
+    #[cfg(windows)]
+    rt_handle.spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+        register_native_messaging_host();
+    });
 
     // Background lifecycle monitoring loop (checks every 15 seconds)
     let lc_monitor = lifecycle.clone();
@@ -1810,6 +2275,8 @@ fn main() {
                     );
                     let _ = window.destroy();
                 } else {
+                    let _ = window.show();
+                    let _ = window.set_focus();
                     tracing::info!(
                         "Main desktop window successfully loaded: {:?}",
                         window.url()
@@ -2003,7 +2470,17 @@ fn main() {
             updater::check_for_updates,
             updater::install_update,
             get_lifecycle_status,
-            wake_engine
+            wake_engine,
+            get_browser_diagnostics,
+            repair_native_host_registration,
+            detect_installed_browsers,
+            prepare_extension_files,
+            get_extension_folder_path,
+            open_browser_url,
+            get_firefox_xpi_url,
+            is_wizard_completed,
+            set_wizard_completed,
+            get_system_downloads_dir
         ])
         .build(tauri::generate_context!())
         .expect("error while building EDM desktop application")
@@ -2013,4 +2490,25 @@ fn main() {
                 api.prevent_exit();
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_prepare_extension_files_integrity() {
+        let res = prepare_extension_files();
+        assert!(res.is_ok(), "prepare_extension_files failed: {:?}", res);
+        let path = PathBuf::from(res.unwrap());
+        assert!(path.exists(), "Target folder should exist");
+        assert!(path.join("manifest.json").exists(), "manifest.json should exist");
+        assert!(path.join("hashes.json").exists(), "hashes.json should exist");
+    }
+
+    #[test]
+    fn test_system_downloads_dir() {
+        let dir = get_system_downloads_dir();
+        assert!(!dir.is_empty(), "System downloads directory should not be empty");
+    }
 }

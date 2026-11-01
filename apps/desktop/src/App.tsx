@@ -34,6 +34,7 @@ import {
   RotateCcw,
 } from "lucide-react";
 import SettingsPage from "./components/SettingsPage";
+import SetupWizard from "./components/SetupWizard";
 import { SpeedChartInteractive } from "./components/SpeedChartInteractive";
 import { loadSettings, saveSettings, EdmSettings } from "./types/settings";
 import { formatBytes, formatSpeed, formatEta } from "./utils/format";
@@ -60,6 +61,7 @@ import {
   tauriWindowToggleMaximize,
   tauriWindowClose,
   tauriStartDragging,
+  tauriIsWizardCompleted,
 } from "./services/tauriBridge";
 
 export interface WorkerInfo {
@@ -159,6 +161,15 @@ export default function App() {
     () => (typeof window !== "undefined" && window.location.hash === "#settings" ? "settings" : "downloads")
   );
   const [settings, setSettings] = useState<EdmSettings>(loadSettings);
+  const [isWizardOpen, setIsWizardOpen] = useState(false);
+
+  useEffect(() => {
+    tauriIsWizardCompleted().then((completed) => {
+      if (!completed) {
+        setIsWizardOpen(true);
+      }
+    });
+  }, []);
 
   const mode = settings.general.theme === "system" ? "dark" : settings.general.theme;
   const palette = settings.general.palette;
@@ -855,6 +866,7 @@ export default function App() {
               totalSpeed={totalSpeedDisplay}
               activeThreads={totalActiveThreads}
               totalSessionBytes={totalSessionBytes}
+              onOpenWizard={() => setIsWizardOpen(true)}
             />
           </motion.div>
         ) : (
@@ -2203,6 +2215,13 @@ export default function App() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      <SetupWizard
+        isOpen={isWizardOpen}
+        onClose={() => setIsWizardOpen(false)}
+        settings={settings}
+        onSaveSettings={handleUpdateSettings}
+      />
     </div>
   );
 }

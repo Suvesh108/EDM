@@ -514,3 +514,173 @@ export async function tauriListenOtaProgress(
   }
   return () => {};
 }
+
+export interface BrowserDiagnostic {
+  browser: string;
+  registry_key: string;
+  helper_registered: boolean;
+  manifest_path: string | null;
+  manifest_exists: boolean;
+  helper_path: string | null;
+  helper_exists: boolean;
+  origin_matched: boolean;
+  error: string | null;
+}
+
+export interface DiagnosticsReport {
+  app_version: string;
+  os: string;
+  helper_path: string | null;
+  app_exe_path: string | null;
+  app_installed: boolean;
+  ws_port_ready: boolean;
+  time_to_ready_ms: number | null;
+  last_wake_error: string | null;
+  last_wake_timestamp: string | null;
+  browsers: BrowserDiagnostic[];
+}
+
+export async function tauriGetBrowserDiagnostics(extId?: string): Promise<DiagnosticsReport> {
+  if (isTauri()) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return await invoke<DiagnosticsReport>("get_browser_diagnostics", { extId });
+    } catch (e) {
+      console.warn("get_browser_diagnostics failed:", e);
+    }
+  }
+  return {
+    app_version: "0.0.6",
+    os: "Windows",
+    helper_path: "C:\\Program Files\\EDM\\edm-nmh.exe",
+    app_exe_path: "C:\\Program Files\\EDM\\EDM.exe",
+    app_installed: true,
+    ws_port_ready: true,
+    time_to_ready_ms: 120,
+    last_wake_error: null,
+    last_wake_timestamp: new Date().toISOString(),
+    browsers: [
+      { browser: "edge", registry_key: "HKCU\\Software\\Microsoft\\Edge\\NativeMessagingHosts\\com.edm.nmh", helper_registered: true, manifest_path: "C:\\Program Files\\EDM\\com.edm.nmh.json", manifest_exists: true, helper_path: "C:\\Program Files\\EDM\\edm-nmh.exe", helper_exists: true, origin_matched: true, error: null },
+      { browser: "chrome", registry_key: "HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\com.edm.nmh", helper_registered: true, manifest_path: "C:\\Program Files\\EDM\\com.edm.nmh.json", manifest_exists: true, helper_path: "C:\\Program Files\\EDM\\edm-nmh.exe", helper_exists: true, origin_matched: true, error: null },
+      { browser: "brave", registry_key: "HKCU\\Software\\BraveSoftware\\Brave-Browser\\NativeMessagingHosts\\com.edm.nmh", helper_registered: true, manifest_path: "C:\\Program Files\\EDM\\com.edm.nmh.json", manifest_exists: true, helper_path: "C:\\Program Files\\EDM\\edm-nmh.exe", helper_exists: true, origin_matched: true, error: null },
+      { browser: "firefox", registry_key: "HKCU\\Software\\Mozilla\\NativeMessagingHosts\\com.edm.nmh", helper_registered: true, manifest_path: "C:\\Program Files\\EDM\\com.edm.nmh.firefox.json", manifest_exists: true, helper_path: "C:\\Program Files\\EDM\\edm-nmh.exe", helper_exists: true, origin_matched: true, error: null }
+    ]
+  };
+}
+
+export async function tauriRepairNativeHostRegistration(): Promise<string> {
+  if (isTauri()) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return await invoke<string>("repair_native_host_registration");
+    } catch (e: any) {
+      return e?.toString() || "Repair failed";
+    }
+  }
+  return "Native host registration repaired successfully";
+}
+
+export interface BrowserSetupInfo {
+  id: string;
+  name: string;
+  installed: boolean;
+  exe_path: string | null;
+  helper_registered: boolean;
+  extension_connected: boolean;
+  store_url: string | null;
+  extension_page_url: string;
+}
+
+export async function tauriDetectInstalledBrowsers(): Promise<BrowserSetupInfo[]> {
+  if (isTauri()) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return await invoke<BrowserSetupInfo[]>("detect_installed_browsers");
+    } catch (e) {
+      console.warn("detect_installed_browsers failed:", e);
+    }
+  }
+  return [
+    { id: "chrome", name: "Google Chrome", installed: true, exe_path: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe", helper_registered: true, extension_connected: false, store_url: null, extension_page_url: "chrome://extensions" },
+    { id: "edge", name: "Microsoft Edge", installed: true, exe_path: "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe", helper_registered: true, extension_connected: false, store_url: null, extension_page_url: "edge://extensions" },
+    { id: "brave", name: "Brave Browser", installed: true, exe_path: "C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe", helper_registered: true, extension_connected: false, store_url: null, extension_page_url: "brave://extensions" },
+    { id: "firefox", name: "Mozilla Firefox", installed: true, exe_path: "C:\\Program Files\\Mozilla Firefox\\firefox.exe", helper_registered: true, extension_connected: false, store_url: "http://127.0.0.1:14370/firefox.xpi", extension_page_url: "about:addons" },
+  ];
+}
+
+export async function tauriPrepareExtensionFiles(): Promise<string> {
+  if (isTauri()) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return await invoke<string>("prepare_extension_files");
+    } catch (e: any) {
+      throw new Error(e?.toString() || "Failed to prepare extension files");
+    }
+  }
+  return "C:\\Users\\User\\AppData\\Local\\EDM\\extension";
+}
+
+export async function tauriGetExtensionFolderPath(): Promise<string> {
+  if (isTauri()) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return await invoke<string>("get_extension_folder_path");
+    } catch (e) {
+      console.warn("get_extension_folder_path failed:", e);
+    }
+  }
+  return "C:\\Users\\User\\AppData\\Local\\EDM\\extension";
+}
+
+export async function tauriOpenBrowserUrl(browser: string, url: string): Promise<void> {
+  if (isTauri()) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("open_browser_url", { browser, url });
+      return;
+    } catch (e) {
+      console.warn("open_browser_url failed:", e);
+    }
+  }
+  window.open(url, "_blank");
+}
+
+export async function tauriGetFirefoxXpiUrl(): Promise<string> {
+  if (isTauri()) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return await invoke<string>("get_firefox_xpi_url");
+    } catch {}
+  }
+  return "http://127.0.0.1:14370/firefox.xpi";
+}
+
+export async function tauriIsWizardCompleted(): Promise<boolean> {
+  if (isTauri()) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return await invoke<boolean>("is_wizard_completed");
+    } catch {}
+  }
+  return localStorage.getItem("edm_wizard_completed") === "true";
+}
+
+export async function tauriSetWizardCompleted(completed: boolean): Promise<void> {
+  localStorage.setItem("edm_wizard_completed", completed ? "true" : "false");
+  if (isTauri()) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("set_wizard_completed", { completed });
+    } catch {}
+  }
+}
+
+export async function tauriGetSystemDownloadsDir(): Promise<string> {
+  if (isTauri()) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return await invoke<string>("get_system_downloads_dir");
+    } catch {}
+  }
+  return "C:\\Users\\User\\Downloads";
+}

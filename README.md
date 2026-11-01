@@ -115,6 +115,12 @@ Get the latest installer from the [**Releases Page**](https://github.com/Suvesh1
 
 ---
 
+## 🛠️ Architecture & Contributor Guidelines
+
+All new features and autonomous agent workflows must adhere to our [**Agent Rules**](docs/AGENT_RULES.md) and pass the [**Feature Quality Checklist**](docs/FEATURE_CHECKLIST.md).
+
+---
+
 ## 💬 Community & Feedback
 
 Have ideas, questions, or encountered a bug?

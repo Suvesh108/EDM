@@ -66,14 +66,32 @@ class PopupController {
     __publicField(this, "connectionState", "connecting");
     __publicField(this, "lifecycleState", "active");
     __publicField(this, "nmhHealth", { ok: true });
+    __publicField(this, "diagnosticsReport", null);
+    __publicField(this, "isRepairing", false);
     __publicField(this, "latencyMs", 0);
     __publicField(this, "token", "");
     __publicField(this, "interceptionEnabled", true);
     __publicField(this, "auditLogs", ["Popup initialized"]);
+    __publicField(this, "currentVersion", "0.0.6");
+    __publicField(this, "expectedVersion", "0.0.6");
+    __publicField(this, "updateStatus", "latest");
+    __publicField(this, "detectedBrowser", "browser");
     __publicField(this, "pollInterval", null);
     __publicField(this, "refreshRateMs", 500);
     __publicField(this, "port", null);
     __publicField(this, "deleteModalTarget", null);
+    try {
+      this.currentVersion = chrome.runtime.getManifest().version;
+    } catch {
+    }
+    chrome.storage.local.get(["expected_extension_version", "edm_update_status"], (res) => {
+      if (res && res.expected_extension_version) {
+        this.expectedVersion = res.expected_extension_version;
+      }
+      if (res && res.edm_update_status) {
+        this.updateStatus = res.edm_update_status;
+      }
+    });
     this.init();
   }
   async init() {
@@ -93,6 +111,15 @@ class PopupController {
           }
           if (msg.nmhHealth) {
             this.nmhHealth = msg.nmhHealth;
+          }
+          if (msg.diagnosticsReport) {
+            this.diagnosticsReport = msg.diagnosticsReport;
+          }
+          if (msg.currentVersion) {
+            this.currentVersion = msg.currentVersion;
+          }
+          if (msg.browser) {
+            this.detectedBrowser = msg.browser;
           }
           this.updateConnectionPill();
           if (msg.palette) {
@@ -121,6 +148,24 @@ class PopupController {
             if (this.activeTab === "tasks") {
               this.renderTasksListOnly();
             }
+          }
+          if (this.activeTab === "diagnostics") {
+            this.render();
+          }
+        } else if (msg.type === "diagnostics_report") {
+          if (msg.report) {
+            this.diagnosticsReport = msg.report;
+            if (this.activeTab === "diagnostics") {
+              this.render();
+            }
+          }
+        } else if (msg.type === "repair_result") {
+          this.isRepairing = false;
+          if (msg.report) {
+            this.diagnosticsReport = msg.report;
+          }
+          if (this.activeTab === "diagnostics") {
+            this.render();
           }
         }
       });
@@ -278,11 +323,11 @@ class PopupController {
     const text = document.getElementById("connectionText");
     if (!pill || !dot || !text) return;
     pill.style.cursor = "pointer";
-    pill.title = "Click to configure connection & settings";
+    pill.title = "Click to view Diagnostics & Host status";
     pill.onclick = () => {
-      this.activeTab = "settings";
+      this.activeTab = "diagnostics";
       document.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("active"));
-      document.querySelector('[data-tab="settings"]')?.classList.add("active");
+      document.querySelector('[data-tab="diagnostics"]')?.classList.add("active");
       this.render();
     };
     dot.className = "status-dot";
@@ -296,17 +341,20 @@ class PopupController {
       }
     } else if (this.connectionState === "waking") {
       dot.classList.add("dot-waking");
-      text.innerText = "Waking...";
+      text.innerText = "Waking EDM...";
+      pill.title = "EDM is starting up in the background. Please wait...";
     } else if (this.connectionState === "connecting" || this.connectionState === "reconnecting") {
       dot.classList.add("dot-connecting");
       text.innerText = "Connecting...";
     } else if (!this.nmhHealth.ok) {
       dot.classList.add("dot-failed");
-      text.innerText = "Wake unavailable: Open EDM once";
-      pill.title = `NMH Error: ${this.nmhHealth.reason || "Native host not found"}. Open EDM desktop once to repair registration.`;
+      const err = this.nmhHealth.reason || "Native host not registered";
+      text.innerText = err.length > 25 ? `Wake error: ${err.slice(0, 18)}...` : `Wake error: ${err}`;
+      pill.title = `NMH Error: ${err}. Click to open Diagnostics & Repair.`;
     } else {
       dot.classList.add("dot-asleep");
       text.innerText = "Asleep, wakes automatically";
+      pill.title = "EDM is asleep and wakes automatically on download. Click to view Diagnostics.";
     }
   }
   render() {
@@ -315,6 +363,9 @@ class PopupController {
     if (this.activeTab === "tasks") {
       app.innerHTML = this.renderTasksTab();
       this.attachTasksEvents();
+    } else if (this.activeTab === "diagnostics") {
+      app.innerHTML = this.renderDiagnosticsTab();
+      this.attachDiagnosticsEvents();
     } else {
       app.innerHTML = this.renderSettingsTab();
       this.attachSettingsEvents();
@@ -723,9 +774,17 @@ class PopupController {
 
         <!-- Extension Updates & Hot Reload Card -->
         <div class="settings-group" style="padding: 14px; background: #070e1b; border: 1px solid #1a273e; border-radius: 10px;">
-          <div class="settings-group-title" style="font-size: 13.5px; font-weight: 700; color: #FFFFFF; margin-bottom: 6px;">Extension Updates &amp; Hot Reload</div>
-          <div class="setting-desc" style="font-size: 11px; color: #8fa0be; line-height: 1.5; margin-bottom: 12px;">
-            Directly check for newer extension builds or hot reload the extension worker after updating source files.
+          <div class="settings-group-title" style="font-size: 13.5px; font-weight: 700; color: #FFFFFF; margin-bottom: 6px;">Extension Version &amp; App Sync</div>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; font-size: 11px;">
+            <span style="color: #8fa0be;">Installed Version: <strong style="color: #FFFFFF;">v${this.currentVersion}</strong></span>
+            <span style="color: #8fa0be;">Expected: <strong style="color: #FFFFFF;">v${this.expectedVersion || this.currentVersion}</strong></span>
+          </div>
+          <div style="font-size: 11px; margin-bottom: 12px; display: flex; align-items: center; gap: 6px;">
+            <span style="color: #8fa0be;">Status:</span>
+            <span style="display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 10.5px; font-weight: 600; background: ${this.expectedVersion && this.expectedVersion !== this.currentVersion ? "#B45309" : "#065F46"}; color: #FFFFFF;">
+              ${this.expectedVersion && this.expectedVersion !== this.currentVersion ? `Update Available (v${this.expectedVersion})` : "Up to Date"}
+            </span>
+            <span style="color: #64748B; font-size: 10px; margin-left: auto; text-transform: capitalize;">${escapeHtml(this.detectedBrowser)}</span>
           </div>
           <div style="display: flex; gap: 8px; align-items: center;">
             <button id="popupBtnCheckUpdate" class="btn-3d" style="height: 34px; padding: 0 12px; font-size: 11px;">Check for Updates</button>
@@ -1066,6 +1125,170 @@ class PopupController {
       };
       notifyComp.addEventListener("change", saveNotif);
       notifyFail.addEventListener("change", saveNotif);
+    }
+  }
+  // ─────────────────────────────────────────────────────────────
+  // 3. DIAGNOSTICS TAB
+  // ─────────────────────────────────────────────────────────────
+  renderDiagnosticsTab() {
+    const rep = this.diagnosticsReport;
+    if (!rep) {
+      if (this.port) {
+        this.port.postMessage({ type: "get_diagnostics" });
+      }
+      return `
+        <div class="diag-view">
+          <div class="empty-state">
+            <div class="empty-icon">\u23F3</div>
+            <div style="font-weight:600; font-size:12px;">Querying Native Messaging Host...</div>
+            <div style="font-size:11px; color:var(--text-muted);">Inspecting system registry &amp; helper state</div>
+          </div>
+        </div>
+      `;
+    }
+    const myExtId = typeof chrome !== "undefined" && chrome.runtime?.id ? chrome.runtime.id : "ginpdimhcdbojbhemgjedghkeolbcmgj";
+    const browsers = rep.browsers || [];
+    const helperOk = rep.helper_path && rep.browsers.some((b) => b.helper_registered && b.manifest_exists);
+    const appOk = rep.app_installed;
+    const wsOk = rep.ws_port_ready || this.connectionState === "connected";
+    return `
+      <div class="diag-view">
+        <div class="diag-header">
+          <div style="font-size:12px; font-weight:700;">Host &amp; Wake Diagnostics</div>
+          <div class="diag-actions">
+            <button id="btnCopyDiag" class="btn-3d" style="font-size:10px; padding:3px 8px;">\u{1F4CB} Copy report</button>
+            <button id="btnRepairDiag" class="btn-3d btn-primary" style="font-size:10px; padding:3px 8px;" ${this.isRepairing ? "disabled" : ""}>
+              ${this.isRepairing ? "Repairing..." : "\u{1F527} Repair"}
+            </button>
+          </div>
+        </div>
+
+        <div id="diagToast" style="display:none; padding:4px 8px; border-radius:4px; font-size:10.5px; text-align:center;"></div>
+
+        <!-- 1. System & Engine Overview -->
+        <div class="diag-card">
+          <div class="diag-card-title">
+            <span>Core Components</span>
+            <span class="diag-badge ${appOk && helperOk ? "diag-badge-ok" : "diag-badge-err"}">
+              ${appOk && helperOk ? "HEALTHY" : "ATTENTION NEEDED"}
+            </span>
+          </div>
+
+          <div class="diag-row">
+            <span class="diag-label">EDM Desktop App</span>
+            <span class="diag-badge ${appOk ? "diag-badge-ok" : "diag-badge-err"}">${appOk ? "Installed" : "Not Found"}</span>
+          </div>
+          ${rep.app_exe_path ? `<div class="diag-row"><span class="diag-label">App Executable</span><span class="diag-val" title="${rep.app_exe_path}">${rep.app_exe_path.split(/[\\/]/).pop()}</span></div>` : ""}
+
+          <div class="diag-row">
+            <span class="diag-label">Native Messaging Helper</span>
+            <span class="diag-badge ${helperOk ? "diag-badge-ok" : "diag-badge-err"}">${helperOk ? "Available" : "Missing / Unregistered"}</span>
+          </div>
+          ${rep.helper_path ? `<div class="diag-row"><span class="diag-label">Helper Executable</span><span class="diag-val" title="${rep.helper_path}">${rep.helper_path.split(/[\\/]/).pop()}</span></div>` : ""}
+
+          <div class="diag-row">
+            <span class="diag-label">WebSocket Engine (14370)</span>
+            <span class="diag-badge ${wsOk ? "diag-badge-ok" : "diag-badge-warn"}">${wsOk ? "Listening (Ready)" : "Offline (Asleep)"}</span>
+          </div>
+
+          <div class="diag-row">
+            <span class="diag-label">Cold-Start Wake Time</span>
+            <span class="diag-val">${rep.time_to_ready_ms !== null && rep.time_to_ready_ms !== void 0 ? `${rep.time_to_ready_ms} ms` : "Instant / Sleeping"}</span>
+          </div>
+
+          <div class="diag-row">
+            <span class="diag-label">Last Wake Result</span>
+            <span class="diag-badge ${rep.last_wake_error ? "diag-badge-err" : "diag-badge-ok"}">
+              ${rep.last_wake_error ? `Failed: ${rep.last_wake_error}` : "OK / Ready"}
+            </span>
+          </div>
+          ${rep.last_wake_timestamp ? `<div class="diag-row"><span class="diag-label">Last Wake Attempt</span><span class="diag-val">${new Date(rep.last_wake_timestamp).toLocaleTimeString()}</span></div>` : ""}
+        </div>
+
+        <!-- 2. Browser Registrations -->
+        <div class="diag-card">
+          <div class="diag-card-title">Browser Registrations (HKCU)</div>
+          ${browsers.map((b) => {
+      const browserName = b.browser.toUpperCase();
+      const allOk = b.helper_registered && b.manifest_exists && b.helper_exists;
+      return `
+              <div style="border-bottom: 1px solid var(--border-subtle); padding-bottom: 6px; margin-bottom: 6px;">
+                <div class="diag-row" style="margin-bottom: 4px;">
+                  <strong style="color:var(--text-primary); font-size:11px;">${browserName}</strong>
+                  <span class="diag-badge ${allOk ? "diag-badge-ok" : "diag-badge-err"}">
+                    ${allOk ? "Registered" : "Incomplete"}
+                  </span>
+                </div>
+                <div class="diag-row"><span class="diag-label">Manifest Key:</span><span class="diag-badge ${b.helper_registered ? "diag-badge-ok" : "diag-badge-err"}">${b.helper_registered ? "Present" : "Missing"}</span></div>
+                <div class="diag-row"><span class="diag-label">Manifest File:</span><span class="diag-badge ${b.manifest_exists ? "diag-badge-ok" : "diag-badge-err"}">${b.manifest_exists ? "Exists" : "Missing"}</span></div>
+                <div class="diag-row"><span class="diag-label">Helper Binary:</span><span class="diag-badge ${b.helper_exists ? "diag-badge-ok" : "diag-badge-err"}">${b.helper_exists ? "Exists" : "Missing"}</span></div>
+                <div class="diag-row"><span class="diag-label">Extension Match:</span><span class="diag-badge ${b.origin_matched ? "diag-badge-ok" : "diag-badge-warn"}">${b.origin_matched ? "Matched" : "Unmatched"}</span></div>
+              </div>
+            `;
+    }).join("")}
+        </div>
+
+        <!-- 3. Extension Identity -->
+        <div class="diag-card">
+          <div class="diag-card-title">Extension Environment</div>
+          <div class="diag-row">
+            <span class="diag-label">Active Extension ID</span>
+            <span class="diag-val">${myExtId}</span>
+          </div>
+          <div class="diag-row">
+            <span class="diag-label">Extension Version</span>
+            <span class="diag-val">v0.0.6</span>
+          </div>
+          <div class="diag-row">
+            <span class="diag-label">Operating System</span>
+            <span class="diag-val">${rep.os || "Windows"}</span>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+  attachDiagnosticsEvents() {
+    const btnCopy = document.getElementById("btnCopyDiag");
+    const btnRepair = document.getElementById("btnRepairDiag");
+    const toast = document.getElementById("diagToast");
+    if (btnCopy) {
+      btnCopy.addEventListener("click", () => {
+        const text = JSON.stringify(this.diagnosticsReport, null, 2);
+        navigator.clipboard.writeText(text).then(() => {
+          if (toast) {
+            toast.style.display = "block";
+            toast.style.background = "rgba(16, 185, 129, 0.2)";
+            toast.style.border = "1px solid rgba(16, 185, 129, 0.4)";
+            toast.style.color = "#34D399";
+            toast.innerText = "\u2713 Diagnostics report copied to clipboard!";
+            setTimeout(() => {
+              toast.style.display = "none";
+            }, 2500);
+          }
+        });
+      });
+    }
+    if (btnRepair) {
+      btnRepair.addEventListener("click", () => {
+        this.isRepairing = true;
+        btnRepair.setAttribute("disabled", "true");
+        btnRepair.innerText = "Repairing...";
+        if (this.port) {
+          this.port.postMessage({ type: "repair_registration" });
+        } else {
+          chrome.runtime.sendNativeMessage("com.edm.nmh", { type: "repair_registration" }, (_resp) => {
+            this.isRepairing = false;
+            this.render();
+          });
+        }
+        if (toast) {
+          toast.style.display = "block";
+          toast.style.background = "rgba(37, 99, 235, 0.2)";
+          toast.style.border = "1px solid rgba(37, 99, 235, 0.4)";
+          toast.style.color = "#60A5FA";
+          toast.innerText = "Repairing Native Messaging registration...";
+        }
+      });
     }
   }
 }

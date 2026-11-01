@@ -3,6 +3,7 @@ let socket = null;
 let connectionStatus = "asleep";
 let latestLifecycleState = "active";
 let nmhHealth = { ok: true };
+let latestDiagnosticsReport = null;
 let reconnectTimer = null;
 let pingInterval = null;
 let bypassNextDownload = false;
@@ -13,6 +14,48 @@ let currentTheme = "dark";
 let currentPalette = "blue";
 const pendingAcks = /* @__PURE__ */ new Map();
 const popupPorts = /* @__PURE__ */ new Set();
+let activeHandoffsCount = 0;
+let isWaking = false;
+let pendingReload = false;
+function detectCurrentBrowser() {
+  const ua = navigator.userAgent;
+  if (ua.includes("Edg/")) return "edge";
+  if (ua.includes("Firefox/")) return "firefox";
+  if (navigator.brave && typeof navigator.brave.isBrave === "function") return "brave";
+  return "chrome";
+}
+function checkAndPerformAutoReload(expectedVersion) {
+  if (!expectedVersion) return;
+  const currentVersion = chrome.runtime.getManifest().version;
+  chrome.storage.local.set({ expected_extension_version: expectedVersion });
+  if (expectedVersion === currentVersion) {
+    pendingReload = false;
+    chrome.storage.local.set({ edm_update_status: "latest" });
+    return;
+  }
+  chrome.storage.local.set({ edm_update_status: "update_available" });
+  if (activeHandoffsCount > 0 || isWaking) {
+    pendingReload = true;
+    console.log("[EDM Extension] Update available, deferring reload until active handoff/wake completes");
+    return;
+  }
+  console.log(`[EDM Extension] App update detected (${currentVersion} -> ${expectedVersion}). Reloading extension...`);
+  try {
+    chrome.runtime.reload();
+  } catch (err) {
+    console.warn("[EDM Extension] runtime.reload() invocation:", err);
+  }
+}
+function onHandoffSettle() {
+  if (pendingReload && activeHandoffsCount === 0 && !isWaking) {
+    console.log("[EDM Extension] Active handoff settled. Executing deferred reload...");
+    try {
+      chrome.runtime.reload();
+    } catch (err) {
+      console.warn("[EDM Extension] runtime.reload() invocation:", err);
+    }
+  }
+}
 async function autoDetectAndSetToken() {
   try {
     const nmhToken = await new Promise((resolve) => {
@@ -76,10 +119,13 @@ function notifyPopupPorts() {
     connectionStatus,
     lifecycleState: latestLifecycleState,
     nmhHealth,
+    diagnosticsReport: latestDiagnosticsReport,
     epoch: currentEpoch,
     rev: currentRev,
     theme: currentTheme,
-    palette: currentPalette
+    palette: currentPalette,
+    currentVersion: chrome.runtime.getManifest().version,
+    browser: detectCurrentBrowser()
   };
   for (const port of popupPorts) {
     try {
@@ -102,17 +148,37 @@ function notifyPopupPorts() {
 async function checkNmhHealth() {
   return new Promise((resolve) => {
     try {
-      chrome.runtime.sendNativeMessage("com.edm.nmh", { type: "ping" }, (response) => {
-        if (chrome.runtime.lastError) {
-          const err = chrome.runtime.lastError.message || "Native host not found";
-          nmhHealth = { ok: false, reason: err };
+      const extId = typeof chrome !== "undefined" && chrome.runtime?.id ? chrome.runtime.id : "ginpdimhcdbojbhemgjedghkeolbcmgj";
+      chrome.runtime.sendNativeMessage(
+        "com.edm.nmh",
+        { type: "get_diagnostics", extension_id: extId },
+        (response) => {
+          if (chrome.runtime.lastError) {
+            const err = chrome.runtime.lastError.message || "Native host not found";
+            nmhHealth = { ok: false, reason: err };
+            notifyPopupPorts();
+            return resolve(nmhHealth);
+          }
+          if (response && response.type === "diagnostics" && response.report) {
+            latestDiagnosticsReport = response.report;
+            const rep = response.report;
+            const myBrowser = rep.browsers.find((b) => b.origin_matched) || rep.browsers[0];
+            if (!rep.app_installed) {
+              nmhHealth = { ok: false, reason: "EDM desktop executable not found on disk", report: rep };
+            } else if (myBrowser && !myBrowser.helper_registered) {
+              nmhHealth = { ok: false, reason: `Native host not registered for ${myBrowser.browser}`, report: rep };
+            } else if (myBrowser && !myBrowser.manifest_exists) {
+              nmhHealth = { ok: false, reason: `Manifest file missing for ${myBrowser.browser}`, report: rep };
+            } else {
+              nmhHealth = { ok: true, report: rep };
+            }
+          } else {
+            nmhHealth = { ok: true };
+          }
           notifyPopupPorts();
-          return resolve(nmhHealth);
+          resolve(nmhHealth);
         }
-        nmhHealth = { ok: true };
-        notifyPopupPorts();
-        resolve(nmhHealth);
-      });
+      );
     } catch (e) {
       nmhHealth = { ok: false, reason: e?.message || "Failed to contact host" };
       notifyPopupPorts();
@@ -121,6 +187,7 @@ async function checkNmhHealth() {
   });
 }
 async function wakeDesktop(showWindow = false) {
+  isWaking = true;
   connectionStatus = "waking";
   notifyPopupPorts();
   try {
@@ -144,7 +211,7 @@ async function wakeDesktop(showWindow = false) {
       if (res.token && typeof res.token === "string" && res.token.length >= 32) {
         await chrome.storage.local.set({ edm_ws_token: res.token });
       }
-      const connected = await connectWebSocketPromise(8e3);
+      const connected = await connectWebSocketPromise(2e4);
       if (connected) {
         connectionStatus = "connected";
         notifyPopupPorts();
@@ -152,7 +219,7 @@ async function wakeDesktop(showWindow = false) {
       } else {
         connectionStatus = "asleep";
         notifyPopupPorts();
-        return { ok: false, error: "Wake succeeded but WebSocket failed to connect" };
+        return { ok: false, error: "Wake succeeded but WebSocket failed to connect within timeout" };
       }
     } else {
       connectionStatus = "asleep";
@@ -167,6 +234,9 @@ async function wakeDesktop(showWindow = false) {
     nmhHealth = { ok: false, reason: err?.message || String(err) };
     notifyPopupPorts();
     return { ok: false, error: err?.message || String(err) };
+  } finally {
+    isWaking = false;
+    onHandoffSettle();
   }
 }
 async function connectWebSocketPromise(timeoutMs = 8e3) {
@@ -199,7 +269,17 @@ async function connectWebSocket() {
   }
   socket.onopen = () => {
     if (socket && socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({ type: "hello", token }));
+      const manifest = chrome.runtime.getManifest();
+      const browser = detectCurrentBrowser();
+      socket.send(
+        JSON.stringify({
+          type: "hello",
+          token,
+          browser,
+          version: manifest.version,
+          extension_id: chrome.runtime.id
+        })
+      );
     }
   };
   socket.onmessage = (event) => {
@@ -208,6 +288,9 @@ async function connectWebSocket() {
       switch (data.type) {
         case "ready": {
           connectionStatus = "connected";
+          if (data.extension_version) {
+            checkAndPerformAutoReload(data.extension_version);
+          }
           if (socket && socket.readyState === WebSocket.OPEN) {
             socket.send(JSON.stringify({ type: "subscribe" }));
           }
@@ -219,6 +302,9 @@ async function connectWebSocket() {
           break;
         }
         case "snapshot": {
+          if (data.extension_version) {
+            checkAndPerformAutoReload(data.extension_version);
+          }
           const epoch = data.epoch || "";
           const rev = typeof data.rev === "number" ? data.rev : 0;
           if (epoch !== currentEpoch) {
@@ -389,6 +475,27 @@ chrome.runtime.onConnect.addListener((port) => {
         connectWebSocket();
       } else if (msg.type === "wake_desktop") {
         wakeDesktop(!!msg.show_window);
+      } else if (msg.type === "get_diagnostics") {
+        checkNmhHealth().then((h) => {
+          try {
+            port.postMessage({ type: "diagnostics_report", report: h.report || latestDiagnosticsReport });
+          } catch {
+          }
+        });
+      } else if (msg.type === "repair_registration") {
+        chrome.runtime.sendNativeMessage("com.edm.nmh", { type: "repair_registration" }, (resp) => {
+          checkNmhHealth().then((h) => {
+            try {
+              port.postMessage({
+                type: "repair_result",
+                ok: !!resp?.ok,
+                message: resp?.message || "Repair completed",
+                report: h.report || latestDiagnosticsReport
+              });
+            } catch {
+            }
+          });
+        });
       }
     });
     port.onDisconnect.addListener(() => {
@@ -402,6 +509,8 @@ chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
   const safeSuggest = (options) => {
     if (!suggested) {
       suggested = true;
+      activeHandoffsCount = Math.max(0, activeHandoffsCount - 1);
+      onHandoffSettle();
       try {
         if (options && options.filename) {
           suggest(options);
@@ -417,6 +526,7 @@ chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
     safeSuggest();
     return false;
   }
+  activeHandoffsCount++;
   (async () => {
     const store = await chrome.storage.local.get("edm_interception_enabled");
     if (store && store.edm_interception_enabled === false) {
@@ -484,6 +594,16 @@ chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
         } catch {
         }
         safeSuggest();
+        try {
+          chrome.notifications.create("edm-wake-fail", {
+            type: "basic",
+            iconUrl: "logo.png",
+            title: "EDM Wake Failed \u2014 Download Handled by Browser",
+            message: `${wakeRes.error || "EDM could not be woken"}. Browser download resumed. Click to view Diagnostics.`,
+            priority: 2
+          });
+        } catch {
+        }
         return;
       }
     }
@@ -708,6 +828,13 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       title: "EDM \u2014 Task Added",
       message: `Started: ${targetUrl.split("/").pop()?.split("?")[0] || "Download"}`
     });
+  }
+});
+chrome.notifications.onClicked.addListener((notifId) => {
+  if (notifId === "edm-wake-fail") {
+    if (chrome.runtime.openOptionsPage) {
+      chrome.runtime.openOptionsPage();
+    }
   }
 });
 connectWebSocket();

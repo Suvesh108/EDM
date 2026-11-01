@@ -1,6 +1,6 @@
 [package]
 name = "edm-desktop-app"
-version = "0.0.5"
+version = "0.0.6"
 edition = "2021"
 
 [build-dependencies]
@@ -31,3 +31,6 @@ subtle = "2.6"
 tokio-tungstenite = "0.26"
 open = "5.3"
 tauri-plugin-autostart = "2.7.0"
+windows-registry.workspace = true
+sha2.workspace = true
+hex.workspace = true

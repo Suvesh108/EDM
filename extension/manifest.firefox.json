@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "EDM — Edge Download Manager",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "description": "High-performance live download dashboard and acceleration integration for EDM",
   "permissions": [
     "downloads",
@@ -31,7 +31,8 @@
   },
   "browser_specific_settings": {
     "gecko": {
-      "id": "edm@suvesh.dev"
+      "id": "edm@suvesh.dev",
+      "update_url": "https://raw.githubusercontent.com/suveshmohandas/EDM/main/extension/dist/firefox/updates.json"
     }
   }
 }

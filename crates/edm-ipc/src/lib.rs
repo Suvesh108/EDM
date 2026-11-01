@@ -97,6 +97,11 @@ pub enum ExtensionMessage {
         #[serde(default)]
         show_window: bool,
     },
+    GetDiagnostics {
+        #[serde(default)]
+        extension_id: Option<String>,
+    },
+    RepairRegistration,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -152,6 +157,40 @@ pub enum AppReply {
         action: String,
         id: Option<Uuid>,
     },
+    Diagnostics {
+        report: DiagnosticsReport,
+    },
+    RepairResult {
+        ok: bool,
+        message: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BrowserDiagnostic {
+    pub browser: String,
+    pub registry_key: String,
+    pub helper_registered: bool,
+    pub manifest_path: Option<String>,
+    pub manifest_exists: bool,
+    pub helper_path: Option<String>,
+    pub helper_exists: bool,
+    pub origin_matched: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DiagnosticsReport {
+    pub app_version: String,
+    pub os: String,
+    pub helper_path: Option<String>,
+    pub app_exe_path: Option<String>,
+    pub app_installed: bool,
+    pub ws_port_ready: bool,
+    pub time_to_ready_ms: Option<u64>,
+    pub last_wake_error: Option<String>,
+    pub last_wake_timestamp: Option<String>,
+    pub browsers: Vec<BrowserDiagnostic>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -229,6 +268,18 @@ pub struct DownloadOverview {
     pub created_at: DateTime<Utc>,
     pub completed_at: Option<DateTime<Utc>>,
     pub error_msg: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BrowserSetupInfo {
+    pub id: String, // "chrome", "edge", "brave", "firefox"
+    pub name: String,
+    pub installed: bool,
+    pub exe_path: Option<String>,
+    pub helper_registered: bool,
+    pub extension_connected: bool,
+    pub store_url: Option<String>,
+    pub extension_page_url: String,
 }
 
 #[cfg(test)]

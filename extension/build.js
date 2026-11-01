@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { execSync } = require('child_process');
 
 const root = __dirname;
@@ -108,7 +109,43 @@ if (fs.existsSync(path.join(tempDir, 'popup.js'))) {
 if (fs.existsSync(path.join(tempDir, 'options.js'))) {
   fs.copyFileSync(path.join(tempDir, 'options.js'), path.join(distFirefox, 'options.js'));
 }
+if (fs.existsSync(path.join(root, 'updates.json'))) {
+  fs.copyFileSync(path.join(root, 'updates.json'), path.join(distFirefox, 'updates.json'));
+}
+
+// 4. Generate SHA-256 integrity hash list (shipped in installer for verification)
+const manifestData = JSON.parse(fs.readFileSync(path.join(distChromium, 'manifest.json'), 'utf8'));
+const filesToHash = [
+  'manifest.json',
+  'background.js',
+  'content.js',
+  'popup.html',
+  'popup.css',
+  'popup.js',
+  'options.html',
+  'options.js',
+  'logo.png'
+];
+
+const hashes = {
+  version: manifestData.version || '0.0.6',
+  generated_at: new Date().toISOString(),
+  files: {}
+};
+
+for (const file of filesToHash) {
+  const filePath = path.join(distChromium, file);
+  if (fs.existsSync(filePath)) {
+    const fileBuf = fs.readFileSync(filePath);
+    const hashHex = crypto.createHash('sha256').update(fileBuf).digest('hex');
+    hashes.files[file] = `sha256:${hashHex}`;
+  }
+}
+
+const hashesJson = JSON.stringify(hashes, null, 2);
+fs.writeFileSync(path.join(distChromium, 'hashes.json'), hashesJson);
+fs.writeFileSync(path.join(root, 'hashes.json'), hashesJson);
 
 // Clean up temp
 fs.rmSync(tempDir, { recursive: true, force: true });
-console.log('[EDM] Extension built successfully for root extension/, dist/chromium, and dist/firefox!');
+console.log(`[EDM] Extension built successfully! Computed hashes for ${Object.keys(hashes.files).length} files.`);

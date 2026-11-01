@@ -57,6 +57,12 @@ pub struct WsCookie {
 pub enum InboundWsMessage {
     Hello {
         token: String,
+        #[serde(default)]
+        browser: Option<String>,
+        #[serde(default)]
+        version: Option<String>,
+        #[serde(default)]
+        extension_id: Option<String>,
     },
     Ping,
     Subscribe,
@@ -82,10 +88,34 @@ pub enum InboundWsMessage {
     },
 }
 
+impl InboundWsMessage {
+    #[cfg(test)]
+    pub fn hello(token: impl Into<String>) -> Self {
+        Self::Hello {
+            token: token.into(),
+            browser: None,
+            version: None,
+            extension_id: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConnectedClientInfo {
+    pub client_id: String,
+    pub browser: String,
+    pub version: String,
+    pub extension_id: Option<String>,
+    pub connected_at_secs: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum OutboundWsMessage {
-    Ready,
+    Ready {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        extension_version: Option<String>,
+    },
     Pong,
     Ack {
         req_id: String,
@@ -107,6 +137,8 @@ pub enum OutboundWsMessage {
         palette: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         lifecycle_state: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        extension_version: Option<String>,
     },
     TaskRemoved {
         id: String,
@@ -147,6 +179,7 @@ pub struct WsManager {
     pub theme: Arc<RwLock<Option<String>>>,
     pub palette: Arc<RwLock<Option<String>>>,
     pub lifecycle_state: Arc<RwLock<Option<String>>>,
+    pub connected_clients: Arc<RwLock<HashMap<String, ConnectedClientInfo>>>,
     pub tx_broadcast: broadcast::Sender<String>,
     pub tx_create_task: mpsc::Sender<CreateTaskCommand>,
     pub tx_action: mpsc::Sender<ActionCommand>,
@@ -171,10 +204,22 @@ impl WsManager {
             theme: Arc::new(RwLock::new(None)),
             palette: Arc::new(RwLock::new(None)),
             lifecycle_state: Arc::new(RwLock::new(Some("active".to_string()))),
+            connected_clients: Arc::new(RwLock::new(HashMap::new())),
             tx_broadcast,
             tx_create_task,
             tx_action,
         }
+    }
+
+    #[allow(dead_code)]
+    pub async fn get_connected_browsers(&self) -> Vec<String> {
+        let clients = self.connected_clients.read().await;
+        clients.values().map(|c| c.browser.clone()).collect()
+    }
+
+    pub async fn is_browser_connected(&self, browser: &str) -> bool {
+        let clients = self.connected_clients.read().await;
+        clients.values().any(|c| c.browser.eq_ignore_ascii_case(browser))
     }
 
     pub fn bump_rev(&self) -> u64 {
@@ -211,6 +256,7 @@ impl WsManager {
             theme,
             palette,
             lifecycle_state,
+            extension_version: Some(env!("CARGO_PKG_VERSION").to_string()),
         }
     }
 
@@ -436,7 +482,7 @@ pub async fn start_ws_server(manager: Arc<WsManager>) {
                 }
                 let peek_str = String::from_utf8_lossy(&peek_buf[..peek_len]);
 
-                if peek_str.starts_with("GET /token") || peek_str.starts_with("OPTIONS /token") {
+                if peek_str.starts_with("GET /token") || peek_str.starts_with("OPTIONS /token") || peek_str.starts_with("GET /firefox.xpi") {
                     handle_http_token_request(stream, peer_addr, mgr).await;
                 } else {
                     handle_ws_connection(stream, peer_addr, mgr).await;
@@ -477,7 +523,7 @@ pub async fn start_ws_server_on(
                 }
                 let peek_str = String::from_utf8_lossy(&peek_buf[..peek_len]);
 
-                if peek_str.starts_with("GET /token") || peek_str.starts_with("OPTIONS /token") {
+                if peek_str.starts_with("GET /token") || peek_str.starts_with("OPTIONS /token") || peek_str.starts_with("GET /firefox.xpi") {
                     handle_http_token_request(stream, peer_addr, mgr).await;
                 } else {
                     handle_ws_connection(stream, peer_addr, mgr).await;
@@ -523,6 +569,38 @@ async fn handle_http_token_request(
             peer_addr, host
         );
         let resp = "HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nInvalid Host Header";
+        let _ = stream.write_all(resp.as_bytes()).await;
+        return;
+    }
+
+    // Handle Firefox XPI direct install endpoint
+    if request_str.starts_with("GET /firefox.xpi") {
+        let xpi_candidates = [
+            std::path::PathBuf::from("extension/dist/firefox/edm-firefox.xpi"),
+            std::path::PathBuf::from("resources/firefox.xpi"),
+            std::env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(|d| d.join("resources").join("firefox.xpi")))
+                .unwrap_or_default(),
+        ];
+        for candidate in &xpi_candidates {
+            if candidate.exists() {
+                if let Ok(bytes) = tokio::fs::read(candidate).await {
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/x-xpinstall\r\nContent-Disposition: attachment; filename=\"edm-firefox.xpi\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        bytes.len()
+                    );
+                    let _ = stream.write_all(resp.as_bytes()).await;
+                    let _ = stream.write_all(&bytes).await;
+                    return;
+                }
+            }
+        }
+        let redirect_url = "https://github.com/suveshmohandas/EDM/releases/latest/download/edm-firefox.xpi";
+        let resp = format!(
+            "HTTP/1.1 302 Found\r\nLocation: {}\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nRedirecting to Firefox XPI",
+            redirect_url
+        );
         let _ = stream.write_all(resp.as_bytes()).await;
         return;
     }
@@ -641,19 +719,24 @@ async fn handle_ws_connection(stream: TcpStream, peer_addr: SocketAddr, manager:
 
     // Enforce first message MUST be: hello {token} within 5 seconds
     let hello_result = tokio::time::timeout(Duration::from_secs(5), ws_rx.next()).await;
-    let authenticated = match hello_result {
+    let (authenticated, client_browser, client_version, client_ext_id) = match hello_result {
         Ok(Some(Ok(Message::Text(text)))) => {
             if text.len() > MAX_WS_MESSAGE_SIZE {
-                false
-            } else if let Ok(InboundWsMessage::Hello { token }) =
-                serde_json::from_str::<InboundWsMessage>(&text)
+                (false, None, None, None)
+            } else if let Ok(InboundWsMessage::Hello {
+                token,
+                browser,
+                version,
+                extension_id,
+            }) = serde_json::from_str::<InboundWsMessage>(&text)
             {
-                manager.verify_token_constant_time(&token)
+                let ok = manager.verify_token_constant_time(&token);
+                (ok, browser, version, extension_id)
             } else {
-                false
+                (false, None, None, None)
             }
         }
-        _ => false,
+        _ => (false, None, None, None),
     };
 
     if !authenticated {
@@ -669,9 +752,36 @@ async fn handle_ws_connection(stream: TcpStream, peer_addr: SocketAddr, manager:
 
     debug!("WebSocket authenticated successfully from {}", peer_addr);
 
-    // Reply with ready
-    let ready_json = serde_json::to_string(&OutboundWsMessage::Ready).unwrap();
+    let client_id = Uuid::new_v4().to_string();
+    let norm_browser = match client_browser.as_deref() {
+        Some(b) if b.to_lowercase().contains("edge") || b.to_lowercase().contains("edg") => "edge",
+        Some(b) if b.to_lowercase().contains("brave") => "brave",
+        Some(b) if b.to_lowercase().contains("firefox") => "firefox",
+        Some(b) if b.to_lowercase().contains("chrome") => "chrome",
+        Some(b) => b,
+        None => "chrome",
+    }
+    .to_string();
+
+    let client_info = ConnectedClientInfo {
+        client_id: client_id.clone(),
+        browser: norm_browser,
+        version: client_version.unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string()),
+        extension_id: client_ext_id,
+        connected_at_secs: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs(),
+    };
+    manager.connected_clients.write().await.insert(client_id.clone(), client_info);
+
+    // Reply with ready containing current app/extension version
+    let ready_json = serde_json::to_string(&OutboundWsMessage::Ready {
+        extension_version: Some(env!("CARGO_PKG_VERSION").to_string()),
+    })
+    .unwrap();
     if ws_tx.send(Message::Text(ready_json.into())).await.is_err() {
+        manager.connected_clients.write().await.remove(&client_id);
         return;
     }
 
@@ -842,6 +952,7 @@ async fn handle_ws_connection(stream: TcpStream, peer_addr: SocketAddr, manager:
         }
     }
 
+    manager.connected_clients.write().await.remove(&client_id);
     debug!("WebSocket connection closed for {}", peer_addr);
 }
 
@@ -1017,10 +1128,7 @@ mod tests {
             .await
             .expect("Handshake should succeed");
 
-        let hello = serde_json::to_string(&InboundWsMessage::Hello {
-            token: "wrong_token_here".into(),
-        })
-        .unwrap();
+        let hello = serde_json::to_string(&InboundWsMessage::hello("wrong_token_here")).unwrap();
         ws_stream.send(Message::Text(hello.into())).await.unwrap();
 
         let next_msg = ws_stream.next().await;
@@ -1179,10 +1287,7 @@ mod tests {
         let (mut ws_stream, _) = tokio_tungstenite::connect_async(request).await.unwrap();
 
         // Authenticate
-        let hello = serde_json::to_string(&InboundWsMessage::Hello {
-            token: token.into(),
-        })
-        .unwrap();
+        let hello = serde_json::to_string(&InboundWsMessage::hello(token)).unwrap();
         ws_stream.send(Message::Text(hello.into())).await.unwrap();
         let _ = ws_stream.next().await.unwrap().unwrap(); // Ready
 
@@ -1225,10 +1330,7 @@ mod tests {
 
         let (mut ws_stream, _) = tokio_tungstenite::connect_async(request).await.unwrap();
 
-        let hello = serde_json::to_string(&InboundWsMessage::Hello {
-            token: token.into(),
-        })
-        .unwrap();
+        let hello = serde_json::to_string(&InboundWsMessage::hello(token)).unwrap();
         ws_stream.send(Message::Text(hello.into())).await.unwrap();
         let _ = ws_stream.next().await.unwrap().unwrap();
 
@@ -1300,10 +1402,7 @@ mod tests {
 
         let (mut ws_stream, _) = tokio_tungstenite::connect_async(request).await.unwrap();
 
-        let hello = serde_json::to_string(&InboundWsMessage::Hello {
-            token: token.into(),
-        })
-        .unwrap();
+        let hello = serde_json::to_string(&InboundWsMessage::hello(token)).unwrap();
         ws_stream.send(Message::Text(hello.into())).await.unwrap();
         let _ = ws_stream.next().await.unwrap().unwrap();
 

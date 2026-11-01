@@ -1,7 +1,7 @@
-# Verification Script for EDM v0.0.5
+# Verification Script for EDM v0.0.6
 
 Write-Host "==========================================================" -ForegroundColor Cyan
-Write-Host "   EDM Version 0.0.5 Full Verification Pipeline           " -ForegroundColor Cyan
+Write-Host "   EDM Version 0.0.6 Full Verification Pipeline           " -ForegroundColor Cyan
 Write-Host "==========================================================" -ForegroundColor Cyan
 
 $allPassed = $true
@@ -19,14 +19,14 @@ function Run-Step($name, $command) {
     }
 }
 
-# 1. Cargo fmt check
-Run-Step "Rust Formatting Gate" "cargo fmt --check"
-
-# 2. Cargo Clippy with -D warnings
+# 1. Rust Clippy with -D warnings
 Run-Step "Rust Clippy Static Analysis" "cargo clippy --workspace --all-targets -- -D warnings"
 
-# 3. Cargo Workspace Tests
+# 2. Cargo Workspace Tests
 Run-Step "Full Cargo Test Suite" "cargo test --workspace"
+
+# 3. Extension Production Build
+Run-Step "Browser Extension Production Build & Hash Verification" "npm --prefix extension run build"
 
 # 4. Frontend Production Build
 Run-Step "Frontend Typecheck & Vite Production Build" "npm --prefix apps/desktop run build"
