@@ -1879,6 +1879,9 @@ fn prepare_extension_files() -> Result<String, String> {
             source_candidates.push(parent.join("resources").join("chromium"));
         }
     }
+    source_candidates.push(PathBuf::from("extension"));
+    source_candidates.push(PathBuf::from("../../extension"));
+    source_candidates.push(PathBuf::from("../../../extension"));
     source_candidates.push(PathBuf::from("extension/dist/chromium"));
     source_candidates.push(PathBuf::from("../../extension/dist/chromium"));
     source_candidates.push(PathBuf::from("../../../extension/dist/chromium"));
