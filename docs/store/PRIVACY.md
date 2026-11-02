@@ -2,7 +2,7 @@
 
 **Last Updated:** November 2026  
 **Effective Date:** November 2026  
-**Hosted URL:** `https://suveshmohandas.github.io/EDM/store/PRIVACY.html`
+**Hosted URL:** `https://suvesh108.github.io/EDM/store/PRIVACY.html`
 
 ---
 
@@ -50,5 +50,5 @@ External web origins and unauthenticated external entities are strictly rejected
 
 ## 5. Contact
 If you have any questions or feedback regarding this Privacy Policy, please open an issue on the official GitHub repository:
-- **Repository:** [https://github.com/suveshmohandas/EDM](https://github.com/suveshmohandas/EDM)
-- **Author:** Suvesh Mohandas
+- **Repository:** [https://github.com/Suvesh108/EDM](https://github.com/Suvesh108/EDM)
+- **Author:** Suvesh (Suvesh108)

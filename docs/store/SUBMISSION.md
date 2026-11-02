@@ -32,7 +32,7 @@ Running `node extension/build.js` generates:
    - **Single Purpose Description:** Enter the single-purpose statement from `docs/store/LISTING.md`.
    - **Permission Justifications:** Copy the exact 1-line justification for each permission from `docs/store/PERMISSIONS.md`.
    - **Data Usage:** Select "No" for collection of user personal data or analytics.
-   - **Privacy Policy Link:** Paste `https://suveshmohandas.github.io/EDM/store/PRIVACY.html`.
+   - **Privacy Policy Link:** Paste `https://suvesh108.github.io/EDM/store/PRIVACY.html`.
 5. **Submit for Review:**
    - Click **Submit for review**. Review typically takes 24–48 hours.
 
@@ -50,8 +50,8 @@ Running `node extension/build.js` generates:
    - Upload screenshots and 128x128 icon.
 4. **Properties & Certification Notes:**
    - Category: "Productivity"
-   - Support URL: `https://github.com/suveshmohandas/EDM`
-   - Privacy Policy URL: `https://suveshmohandas.github.io/EDM/store/PRIVACY.html`
+   - Support URL: `https://github.com/Suvesh108/EDM`
+   - Privacy Policy URL: `https://suvesh108.github.io/EDM/store/PRIVACY.html`
    - **Notes for Certification:** Mention that the extension requires the EDM Windows desktop application (link to GitHub Releases) to establish local loopback WebSocket communication.
 5. **Publish:**
    - Click **Publish**. Review typically takes 1–3 business days.
