@@ -525,6 +525,7 @@ export interface BrowserDiagnostic {
   helper_exists: boolean;
   origin_matched: boolean;
   error: string | null;
+  connected_extension_id?: string | null;
 }
 
 export interface DiagnosticsReport {
@@ -538,6 +539,7 @@ export interface DiagnosticsReport {
   last_wake_error: string | null;
   last_wake_timestamp: string | null;
   browsers: BrowserDiagnostic[];
+  connected_extension_id?: string | null;
 }
 
 export async function tauriGetBrowserDiagnostics(extId?: string): Promise<DiagnosticsReport> {

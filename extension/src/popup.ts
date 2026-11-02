@@ -1821,6 +1821,7 @@ class PopupController {
                 <div class="diag-row"><span class="diag-label">Manifest File:</span><span class="diag-badge ${b.manifest_exists ? "diag-badge-ok" : "diag-badge-err"}">${b.manifest_exists ? "Exists" : "Missing"}</span></div>
                 <div class="diag-row"><span class="diag-label">Helper Binary:</span><span class="diag-badge ${b.helper_exists ? "diag-badge-ok" : "diag-badge-err"}">${b.helper_exists ? "Exists" : "Missing"}</span></div>
                 <div class="diag-row"><span class="diag-label">Extension Match:</span><span class="diag-badge ${b.origin_matched ? "diag-badge-ok" : "diag-badge-warn"}">${b.origin_matched ? "Matched" : "Unmatched"}</span></div>
+                ${b.connected_extension_id ? `<div class="diag-row"><span class="diag-label">Connected ID:</span><span class="diag-val" style="font-size:10px;">${b.connected_extension_id}</span></div>` : ""}
               </div>
             `;
           }).join("")}
@@ -1831,11 +1832,17 @@ class PopupController {
           <div class="diag-card-title">Extension Environment</div>
           <div class="diag-row">
             <span class="diag-label">Active Extension ID</span>
-            <span class="diag-val">${myExtId}</span>
+            <span class="diag-val" title="${myExtId}">${myExtId}</span>
           </div>
+          ${rep.connected_extension_id ? `
+          <div class="diag-row">
+            <span class="diag-label">Connected Extension ID</span>
+            <span class="diag-val" style="color:var(--accent);" title="${rep.connected_extension_id}">${rep.connected_extension_id}</span>
+          </div>
+          ` : ""}
           <div class="diag-row">
             <span class="diag-label">Extension Version</span>
-            <span class="diag-val">v0.0.6</span>
+            <span class="diag-val">v${this.currentVersion || "0.0.7"}</span>
           </div>
           <div class="diag-row">
             <span class="diag-label">Operating System</span>

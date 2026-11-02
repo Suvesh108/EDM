@@ -1686,33 +1686,61 @@ export default function SettingsPage({
                   </code>
                 </div>
 
-                {/* Quick Browser Launch Shortcuts */}
-                <div className="flex items-center gap-2 pt-1 flex-wrap">
-                  <span className="text-[11px] text-[var(--text-muted)]">Open Extensions in:</span>
-                  <button
-                    onClick={() => tauriOpenBrowserUrl("chrome", "chrome://extensions")}
-                    className="px-2 py-1 rounded bg-[var(--bg-chassis)] hover:bg-[var(--bg-card)] border border-[var(--border-subtle)] text-[10.5px] font-medium cursor-pointer"
-                  >
-                    Google Chrome
-                  </button>
-                  <button
-                    onClick={() => tauriOpenBrowserUrl("edge", "edge://extensions")}
-                    className="px-2 py-1 rounded bg-[var(--bg-chassis)] hover:bg-[var(--bg-card)] border border-[var(--border-subtle)] text-[10.5px] font-medium cursor-pointer"
-                  >
-                    Microsoft Edge
-                  </button>
-                  <button
-                    onClick={() => tauriOpenBrowserUrl("brave", "brave://extensions")}
-                    className="px-2 py-1 rounded bg-[var(--bg-chassis)] hover:bg-[var(--bg-card)] border border-[var(--border-subtle)] text-[10.5px] font-medium cursor-pointer"
-                  >
-                    Brave
-                  </button>
-                  <button
-                    onClick={() => tauriOpenBrowserUrl("firefox", "http://127.0.0.1:14370/firefox.xpi")}
-                    className="px-2 py-1 rounded bg-[var(--bg-chassis)] hover:bg-[var(--bg-card)] border border-[var(--border-subtle)] text-[10.5px] font-medium cursor-pointer text-orange-400"
-                  >
-                    Firefox Add-on
-                  </button>
+                {/* Quick Browser Launch & One-Click Install */}
+                <div className="space-y-2 pt-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-semibold text-[var(--text-secondary)]">One-Click Browser Install:</span>
+                    <span className="text-[10px] text-[var(--text-muted)]">Opens store prompt in browser exe</span>
+                  </div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <button
+                      onClick={() => tauriOpenBrowserUrl("chrome", "https://chromewebstore.google.com/detail/edm-edge-download-manager/ebdcbpghekpbgjiclaclbgmdnimeheci")}
+                      className="px-2.5 py-1 rounded bg-[var(--bg-chassis)] hover:bg-[var(--bg-card)] border border-[var(--border-subtle)] text-[11px] font-medium cursor-pointer"
+                    >
+                      Add to Chrome
+                    </button>
+                    <button
+                      onClick={() => tauriOpenBrowserUrl("edge", "https://microsoftedge.microsoft.com/addons/detail/edm-edge-download-manager/knldjmfmopnpolahpmmgbagdohdnhkik")}
+                      className="px-2.5 py-1 rounded bg-[var(--bg-chassis)] hover:bg-[var(--bg-card)] border border-[var(--border-subtle)] text-[11px] font-medium cursor-pointer"
+                    >
+                      Add to Edge
+                    </button>
+                    <button
+                      onClick={() => tauriOpenBrowserUrl("brave", "https://chromewebstore.google.com/detail/edm-edge-download-manager/ebdcbpghekpbgjiclaclbgmdnimeheci")}
+                      className="px-2.5 py-1 rounded bg-[var(--bg-chassis)] hover:bg-[var(--bg-card)] border border-[var(--border-subtle)] text-[11px] font-medium cursor-pointer"
+                    >
+                      Add to Brave
+                    </button>
+                    <button
+                      onClick={() => tauriOpenBrowserUrl("firefox", "http://127.0.0.1:14370/firefox.xpi")}
+                      className="px-2.5 py-1 rounded bg-[var(--bg-chassis)] hover:bg-[var(--bg-card)] border border-[var(--border-subtle)] text-[11px] font-medium cursor-pointer text-orange-400"
+                    >
+                      Add to Firefox (.xpi)
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-2 pt-1 flex-wrap text-[10.5px] text-[var(--text-muted)]">
+                    <span>Manage Unpacked Extensions:</span>
+                    <button
+                      onClick={() => tauriOpenBrowserUrl("chrome", "chrome://extensions")}
+                      className="hover:text-[var(--text-primary)] underline cursor-pointer"
+                    >
+                      chrome://extensions
+                    </button>
+                    <span>&bull;</span>
+                    <button
+                      onClick={() => tauriOpenBrowserUrl("edge", "edge://extensions")}
+                      className="hover:text-[var(--text-primary)] underline cursor-pointer"
+                    >
+                      edge://extensions
+                    </button>
+                    <span>&bull;</span>
+                    <button
+                      onClick={() => tauriOpenBrowserUrl("brave", "brave://extensions")}
+                      className="hover:text-[var(--text-primary)] underline cursor-pointer"
+                    >
+                      brave://extensions
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -1767,7 +1795,7 @@ export default function SettingsPage({
                 )}
 
                 {/* Core Status Summary */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 pt-1">
                   <div className="p-2.5 rounded-lg bg-[var(--bg-chassis)] border border-[var(--border-subtle)] space-y-1">
                     <span className="text-[10px] text-[var(--text-muted)] block">Helper Binary</span>
                     <span className={`text-[11px] font-mono font-semibold ${diagReport?.helper_path ? "text-emerald-400" : "text-rose-400"}`}>
@@ -1790,6 +1818,12 @@ export default function SettingsPage({
                     <span className="text-[10px] text-[var(--text-muted)] block">Last Wake Status</span>
                     <span className={`text-[11px] font-mono font-semibold ${diagReport?.last_wake_error ? "text-rose-400" : "text-emerald-400"}`}>
                       {diagReport?.last_wake_error ? "Failed" : "Healthy (ACK)"}
+                    </span>
+                  </div>
+                  <div className="p-2.5 rounded-lg bg-[var(--bg-chassis)] border border-[var(--border-subtle)] space-y-1 col-span-2 sm:col-span-1">
+                    <span className="text-[10px] text-[var(--text-muted)] block">Connected Ext ID</span>
+                    <span className={`text-[11px] font-mono font-semibold truncate block ${diagReport?.connected_extension_id ? "text-cyan-400" : "text-[var(--text-muted)]"}`} title={diagReport?.connected_extension_id || "None"}>
+                      {diagReport?.connected_extension_id || "None (Waiting)"}
                     </span>
                   </div>
                 </div>
@@ -1832,6 +1866,12 @@ export default function SettingsPage({
                               <span>Origin ID:</span>
                               <span className={b.origin_matched ? "text-emerald-400" : "text-amber-400"}>{b.origin_matched ? "Matched" : "Unmatched"}</span>
                             </div>
+                            {b.connected_extension_id && (
+                              <div className="flex justify-between">
+                                <span>Connected ID:</span>
+                                <span className="text-cyan-400 truncate max-w-[150px]" title={b.connected_extension_id}>{b.connected_extension_id}</span>
+                              </div>
+                            )}
                           </div>
                         </div>
                       );

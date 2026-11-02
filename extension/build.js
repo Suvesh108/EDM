@@ -128,7 +128,7 @@ const filesToHash = [
 ];
 
 const hashes = {
-  version: manifestData.version || '0.0.6',
+  version: manifestData.version || '0.0.7',
   generated_at: new Date().toISOString(),
   files: {}
 };
@@ -144,7 +144,51 @@ for (const file of filesToHash) {
 
 const hashesJson = JSON.stringify(hashes, null, 2);
 fs.writeFileSync(path.join(distChromium, 'hashes.json'), hashesJson);
+fs.writeFileSync(path.join(distFirefox, 'hashes.json'), hashesJson);
 fs.writeFileSync(path.join(root, 'hashes.json'), hashesJson);
+
+// 5. Package Chromium store zip (for Chrome Web Store & Edge Add-ons)
+const zipPath = path.join(root, 'dist', 'edm-extension-chromium.zip');
+const xpiPath = path.join(distFirefox, 'edm-firefox.xpi');
+
+try {
+  if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
+  if (process.platform === 'win32') {
+    execSync(`powershell -NoProfile -Command "Compress-Archive -Path '${distChromium}\\*' -DestinationPath '${zipPath}' -Force"`, { stdio: 'ignore' });
+  } else {
+    execSync(`cd "${distChromium}" && zip -r "${zipPath}" ./*`, { stdio: 'ignore' });
+  }
+  console.log(`[EDM] Packaged Chromium store zip: ${path.relative(root, zipPath)}`);
+} catch (e) {
+  console.warn(`[EDM] Chromium store zip creation warning: ${e.message}`);
+}
+
+// 6. Package Firefox baseline XPI (for web-ext sign or direct local serving)
+const xpiZipPath = path.join(root, 'dist', 'edm-firefox.zip');
+const xpiDistPath = path.join(root, 'dist', 'edm-firefox.xpi');
+const xpiTargetInFirefox = path.join(distFirefox, 'edm-firefox.xpi');
+
+try {
+  if (fs.existsSync(xpiZipPath)) fs.unlinkSync(xpiZipPath);
+  if (fs.existsSync(xpiDistPath)) fs.unlinkSync(xpiDistPath);
+  if (fs.existsSync(xpiTargetInFirefox)) fs.unlinkSync(xpiTargetInFirefox);
+
+  if (process.platform === 'win32') {
+    execSync(`powershell -NoProfile -Command "Compress-Archive -Path '${distFirefox}\\*' -DestinationPath '${xpiZipPath}' -Force"`, { stdio: 'ignore' });
+    if (fs.existsSync(xpiZipPath)) {
+      fs.renameSync(xpiZipPath, xpiDistPath);
+    }
+  } else {
+    execSync(`cd "${distFirefox}" && zip -r "${xpiDistPath}" ./*`, { stdio: 'ignore' });
+  }
+
+  if (fs.existsSync(xpiDistPath)) {
+    fs.copyFileSync(xpiDistPath, xpiTargetInFirefox);
+  }
+  console.log(`[EDM] Packaged Firefox XPI: ${path.relative(root, xpiDistPath)}`);
+} catch (e) {
+  console.warn(`[EDM] Firefox XPI creation warning: ${e.message}`);
+}
 
 // Clean up temp
 fs.rmSync(tempDir, { recursive: true, force: true });

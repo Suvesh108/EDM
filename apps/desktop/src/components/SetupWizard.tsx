@@ -6,7 +6,6 @@ import {
   tauriPrepareExtensionFiles,
   tauriGetExtensionFolderPath,
   tauriOpenBrowserUrl,
-  tauriGetFirefoxXpiUrl,
   tauriSetWizardCompleted,
   tauriGetBrowserDiagnostics,
 } from "../services/tauriBridge";
@@ -50,6 +49,14 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({
       }).catch(() => {});
     }
   }, [isOpen, scanBrowsers]);
+
+  // Continuously poll connection status while on browser screen
+  useEffect(() => {
+    if (isOpen && screen === 2) {
+      const interval = setInterval(scanBrowsers, 1500);
+      return () => clearInterval(interval);
+    }
+  }, [isOpen, screen, scanBrowsers]);
 
   // Run diagnostics when entering screen 3
   useEffect(() => {
@@ -104,20 +111,19 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({
       // ignore
     }
 
-    if (b.id === "firefox") {
+    if (b.store_url) {
       try {
-        const url = await tauriGetFirefoxXpiUrl();
-        await tauriOpenBrowserUrl("firefox", url);
-      } catch {
-        // fallback
+        await tauriOpenBrowserUrl(b.id, b.store_url);
+      } catch (e) {
+        console.warn("Failed to open store URL:", e);
       }
     } else {
-      // Copy path if unpacked
+      // Guided unpacked install fallback
       if (extensionFolderPath) {
         try {
           await navigator.clipboard.writeText(extensionFolderPath);
           setCopiedFolder(true);
-          setTimeout(() => setCopiedFolder(false), 3000);
+          setTimeout(() => setCopiedFolder(false), 5000);
         } catch {
           // ignore
         }
@@ -129,7 +135,7 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({
       }
     }
     // Refresh browser status after a short delay
-    setTimeout(scanBrowsers, 2000);
+    setTimeout(scanBrowsers, 1500);
   };
 
   return (
@@ -197,44 +203,53 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({
                   No supported browsers detected.
                 </div>
               ) : (
-                browsers.map((b) => (
-                  <div
-                    key={b.id}
-                    className="flex items-center justify-between px-4 py-3 rounded-lg border border-[#1B1C20] bg-[#0A0B0E]
-                               [box-shadow:inset_0_1px_0_rgba(255,255,255,0.04),0_1px_3px_rgba(0,0,0,0.3)] text-left"
-                  >
-                    <div>
-                      <div className="text-sm font-medium text-[#E4E6EA]">{b.name}</div>
-                      <div className="text-[11px] text-[#7C818A]">
-                        {b.extension_connected
-                          ? "Connected"
-                          : b.installed
-                          ? "Extension not connected"
-                          : "Not installed"}
+                browsers.map((b) => {
+                  const shortName = b.name.replace("Google ", "").replace("Microsoft ", "").replace(" Browser", "");
+                  return (
+                    <div
+                      key={b.id}
+                      className="flex items-center justify-between px-4 py-3 rounded-lg border border-[#1B1C20] bg-[#0A0B0E]
+                                 [box-shadow:inset_0_1px_0_rgba(255,255,255,0.04),0_1px_3px_rgba(0,0,0,0.3)] text-left"
+                    >
+                      <div>
+                        <div className="text-sm font-medium text-[#E4E6EA]">{b.name}</div>
+                        <div className="text-[11px] text-[#7C818A]">
+                          {b.extension_connected ? (
+                            <span className="text-emerald-400 font-medium">Connected ✓</span>
+                          ) : b.installed ? (
+                            b.store_url ? "Ready to add" : "Unpacked ready"
+                          ) : (
+                            "Not installed"
+                          )}
+                        </div>
                       </div>
-                    </div>
 
-                    {b.installed && (
-                      <button
-                        onClick={() => handleConnectBrowser(b)}
-                        className={`h-8 px-3 rounded text-xs font-medium transition-all duration-150 cursor-pointer ${
-                          b.extension_connected
-                            ? "border border-[#1B1C20] text-[#7C818A] bg-transparent"
-                            : "bg-gradient-to-b from-[#EDEDED] to-[#D6D8DC] text-[#111215] shadow-sm hover:from-[#F5F5F5] hover:to-[#DEE0E4] active:translate-y-[0.5px]"
-                        }`}
-                      >
-                        {b.extension_connected ? "Reinstall" : "Connect"}
-                      </button>
-                    )}
-                  </div>
-                ))
+                      {b.installed && (
+                        <button
+                          onClick={() => handleConnectBrowser(b)}
+                          className={`h-8 px-3 rounded text-xs font-medium transition-all duration-150 cursor-pointer ${
+                            b.extension_connected
+                              ? "border border-[#1B1C20] text-[#7C818A] bg-transparent hover:text-[#B8BCC4]"
+                              : "bg-gradient-to-b from-[#EDEDED] to-[#D6D8DC] text-[#111215] shadow-sm hover:from-[#F5F5F5] hover:to-[#DEE0E4] active:translate-y-[0.5px]"
+                          }`}
+                        >
+                          {b.extension_connected
+                            ? "Reinstall"
+                            : b.store_url
+                            ? `Add to ${shortName}`
+                            : "Install Unpacked"}
+                        </button>
+                      )}
+                    </div>
+                  );
+                })
               )}
             </div>
 
             {copiedFolder && (
-              <p className="text-[11px] text-[#B8BCC4] text-center mb-4">
-                Extension folder path copied to clipboard.
-              </p>
+              <div className="text-[11px] text-[#B8BCC4] text-center mb-4 p-2.5 rounded border border-[#1B1C20] bg-[#0A0B0E] leading-relaxed">
+                Extension folder path copied! In your browser: 1. Turn on Developer mode &rarr; 2. Click "Load unpacked" &rarr; 3. Paste folder path.
+              </div>
             )}
 
             {/* Navigation buttons */}

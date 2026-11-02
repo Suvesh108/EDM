@@ -73,9 +73,28 @@ jobs:
           .\scripts\build-release.ps1
       - name: Package Release
         shell: bash
+        env:
+          AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
+          AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
         run: |
           mkdir -p release-dist
           find target -type f -name "EDM_*_x64-setup.exe" -exec cp {} release-dist/ \;
+          # Chromium store package for Chrome Web Store & Edge Add-ons
+          if [ -f extension/dist/edm-extension-chromium.zip ]; then
+            cp extension/dist/edm-extension-chromium.zip release-dist/
+          fi
+          # Sign Firefox add-on via web-ext if AMO keys are provided
+          if [ -n "$AMO_JWT_ISSUER" ] && [ -n "$AMO_JWT_SECRET" ]; then
+            echo "[CI] Signing Firefox unlisted XPI via web-ext..."
+            npx web-ext sign --source-dir extension/dist/firefox --api-key "$AMO_JWT_ISSUER" --api-secret "$AMO_JWT_SECRET" --channel unlisted --artifacts-dir extension/dist/firefox-signed || echo "web-ext signing fallback to baseline xpi"
+            if ls extension/dist/firefox-signed/*.xpi 1> /dev/null 2>&1; then
+              cp extension/dist/firefox-signed/*.xpi release-dist/edm-firefox.xpi
+            fi
+          fi
+          # Fallback to local built Firefox XPI if signing wasn't performed or failed
+          if [ ! -f release-dist/edm-firefox.xpi ] && [ -f extension/dist/edm-firefox.xpi ]; then
+            cp extension/dist/edm-firefox.xpi release-dist/
+          fi
           tar -czvf release-dist/edm-extension.tar.gz -C extension/dist/chromium .
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4

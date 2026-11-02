@@ -13,14 +13,6 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
-const ALLOWED_EXTENSION_IDS: &[&str] = &[
-    "ginpdimhcdbojbhemgjedghkeolbcmgj",
-    "ebdcbpghekpbgjiclaclbgmdnimeheci",
-    "knldjmfmopnpolahpmmgbagdohdnhkik",
-    "cphjfljhggknldkppchfobogknclmblg",
-    "edm@suvesh.dev",
-];
-
 fn init_nmh_logging() {
     let log_dir = match env::var("LOCALAPPDATA") {
         Ok(dir) => PathBuf::from(dir).join("EDM").join("logs"),
@@ -88,25 +80,27 @@ fn verify_caller_origin() -> bool {
         return true;
     }
     for arg in &args[1..] {
-        if arg.starts_with("chrome-extension://") || arg.starts_with("moz-extension://") {
-            for id in ALLOWED_EXTENSION_IDS {
-                if arg.contains(id) {
-                    tracing::info!("Origin verified: matched allowed extension id {} (elapsed: {:?})", id, start.elapsed());
-                    return true;
-                }
-            }
-            tracing::warn!("Origin verification rejected: arg {} not in allowed list (elapsed: {:?})", arg, start.elapsed());
-            return false;
+        if edm_ipc::extensions::is_allowed_origin(arg) {
+            tracing::info!("Origin verified: matched allowed extension origin {} (elapsed: {:?})", arg, start.elapsed());
+            return true;
         }
-        for id in ALLOWED_EXTENSION_IDS {
-            if arg == id {
-                tracing::info!("Origin verified: matched allowed extension id directly {} (elapsed: {:?})", id, start.elapsed());
+        if edm_ipc::extensions::is_allowed_extension_id(arg) {
+            tracing::info!("Origin verified: matched allowed extension id directly {} (elapsed: {:?})", arg, start.elapsed());
+            return true;
+        }
+        for id in edm_ipc::extensions::CHROMIUM_ALLOWED_IDS {
+            if arg.contains(id) {
+                tracing::info!("Origin verified: matched allowed extension id {} (elapsed: {:?})", id, start.elapsed());
                 return true;
             }
         }
+        if arg.contains(edm_ipc::extensions::FIREFOX_GECKO_ID) {
+            tracing::info!("Origin verified: matched allowed firefox gecko id (elapsed: {:?})", start.elapsed());
+            return true;
+        }
     }
-    tracing::info!("Origin verified by default (elapsed: {:?})", start.elapsed());
-    true
+    tracing::warn!("Origin verification rejected: args {:?} not in allowed list (elapsed: {:?})", &args[1..], start.elapsed());
+    false
 }
 
 #[cfg(windows)]
@@ -360,12 +354,7 @@ fn repair_registration() -> Result<String, String> {
         "description": "EDM Native Messaging Host for Edge, Chrome and Brave",
         "path": nmh_path.to_string_lossy(),
         "type": "stdio",
-        "allowed_origins": [
-            "chrome-extension://ginpdimhcdbojbhemgjedghkeolbcmgj/",
-            "chrome-extension://ebdcbpghekpbgjiclaclbgmdnimeheci/",
-            "chrome-extension://knldjmfmopnpolahpmmgbagdohdnhkik/",
-            "chrome-extension://cphjfljhggknldkppchfobogknclmblg/"
-        ]
+        "allowed_origins": edm_ipc::extensions::allowed_chromium_origins()
     });
     let content = serde_json::to_string_pretty(&manifest_json).map_err(|e| e.to_string())?;
     fs::write(&manifest_path, content).map_err(|e| e.to_string())?;
@@ -376,9 +365,7 @@ fn repair_registration() -> Result<String, String> {
         "description": "EDM Native Messaging Host for Mozilla Firefox",
         "path": nmh_path.to_string_lossy(),
         "type": "stdio",
-        "allowed_extensions": [
-            "edm@suvesh.dev"
-        ]
+        "allowed_extensions": edm_ipc::extensions::allowed_firefox_ids()
     });
     let ff_content = serde_json::to_string_pretty(&ff_manifest_json).map_err(|e| e.to_string())?;
     fs::write(&ff_manifest_path, ff_content).map_err(|e| e.to_string())?;
@@ -430,7 +417,7 @@ fn repair_registration() -> Result<String, String> {
 fn collect_diagnostics(ext_id: Option<String>) -> DiagnosticsReport {
     use windows_registry::CURRENT_USER;
 
-    let target_ext_id = ext_id.unwrap_or_else(|| "ginpdimhcdbojbhemgjedghkeolbcmgj".to_string());
+    let target_ext_id = ext_id.unwrap_or_else(|| edm_ipc::extensions::CHROMIUM_UNPACKED_ID.to_string());
 
     let browsers_meta = [
         ("edge", r"Software\Microsoft\Edge\NativeMessagingHosts\com.edm.nmh", false),
@@ -452,6 +439,7 @@ fn collect_diagnostics(ext_id: Option<String>) -> DiagnosticsReport {
             helper_exists: false,
             origin_matched: false,
             error: None,
+            connected_extension_id: None,
         };
 
         match CURRENT_USER.open(subkey) {
@@ -479,14 +467,13 @@ fn collect_diagnostics(ext_id: Option<String>) -> DiagnosticsReport {
                                     if *is_firefox {
                                         if let Some(exts) = json.get("allowed_extensions").and_then(|v| v.as_array()) {
                                             diag.origin_matched = exts.iter().any(|e| {
-                                                e.as_str() == Some("edm@suvesh.dev")
-                                                    || e.as_str() == Some(&target_ext_id)
+                                                e.as_str().map(|s| edm_ipc::extensions::FIREFOX_ALLOWED_IDS.contains(&s) || s == target_ext_id).unwrap_or(false)
                                             });
                                         }
                                     } else if let Some(origins) = json.get("allowed_origins").and_then(|v| v.as_array()) {
                                         diag.origin_matched = origins.iter().any(|o| {
                                             if let Some(s) = o.as_str() {
-                                                s.contains(&target_ext_id)
+                                                edm_ipc::extensions::is_allowed_origin(s) || s.contains(&target_ext_id)
                                             } else {
                                                 false
                                             }
@@ -522,6 +509,12 @@ fn collect_diagnostics(ext_id: Option<String>) -> DiagnosticsReport {
 
     let (last_err, last_ts, ready_ms) = get_last_wake_stats();
 
+    let connected_ext = if ws_port_ready {
+        Some(target_ext_id.clone())
+    } else {
+        None
+    };
+
     DiagnosticsReport {
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         os: "Windows".to_string(),
@@ -533,6 +526,7 @@ fn collect_diagnostics(ext_id: Option<String>) -> DiagnosticsReport {
         last_wake_error: last_err,
         last_wake_timestamp: last_ts,
         browsers: browser_diagnostics,
+        connected_extension_id: connected_ext,
     }
 }
 
@@ -549,6 +543,7 @@ fn collect_diagnostics(_ext_id: Option<String>) -> DiagnosticsReport {
         last_wake_error: None,
         last_wake_timestamp: None,
         browsers: vec![],
+        connected_extension_id: None,
     }
 }
 

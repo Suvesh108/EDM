@@ -4,6 +4,26 @@ All notable changes to Edge Download Manager (EDM) are documented in this file.
 
 ## [v0.0.7] - 2026-11-02
 
+### 🚀 Store-Ready Extension & One-Click "Add to <browser>" Flow
+
+#### 1. Multiple Extension IDs & Centralized Configuration
+- **Single Source of Truth (`crates/edm-ipc/src/extensions.rs`)**: Unified all allowed extension IDs across Chromium Unpacked (`ginpdimhcdbojbhemgjedghkeolbcmgj`), Chrome Web Store (`ebdcbpghekpbgjiclaclbgmdnimeheci`), Edge Add-ons (`knldjmfmopnpolahpmmgbagdohdnhkik`), Brave Secondary (`cphjfljhggknldkppchfobogknclmblg`), and Firefox Gecko (`edm@suvesh.dev`).
+- **Unified Validation**: Shared helper methods `allowed_chromium_origins()`, `allowed_firefox_ids()`, `is_allowed_origin()`, and `is_allowed_extension_id()` govern Native Messaging manifests, WebSocket connection origin checks, HTTP `/token` requests, installer hooks (`hooks.nsh`), repair routines, and diagnostics.
+- **Diagnostics Extension ID Visibility**: Diagnostics reports and UI now explicitly display `connected_extension_id` across both desktop Settings and the extension popup. Unit tests verify every allowed ID is accepted and unauthorized IDs/origins are rejected.
+
+#### 2. Store-Ready Package & Documentation
+- **Permissions Audit**: Pruned unnecessary permissions (verified `tabs` is omitted; `activeTab` provides scoped access); wrote [`docs/store/PERMISSIONS.md`](docs/store/PERMISSIONS.md) with strict one-line justifications for every retained permission.
+- **Zero-Telemetry Privacy Policy**: Authored [`docs/store/PRIVACY.md`](docs/store/PRIVACY.md) ready for GitHub Pages hosting, explicitly documenting zero telemetry, local loopback data boundaries, and cookie handling invariants.
+- **Store Listings & Submissions**: Documented official store listing copy, required notices, and screenshot checklists in [`docs/store/LISTING.md`](docs/store/LISTING.md), plus step-by-step submission checklists in [`docs/store/SUBMISSION.md`](docs/store/SUBMISSION.md).
+- **Architectural Policy Compliance**: Documented the strict prohibition against registry external extension keys (`HKCU/HKLM\...\Extensions`) in [`docs/store/NO_REGISTRY_POLICY.md`](docs/store/NO_REGISTRY_POLICY.md).
+- **CI / Build Packaging**: `extension/build.js` automatically produces `extension/dist/edm-extension-chromium.zip` for Chrome/Edge stores and `extension/dist/edm-firefox.xpi` for Firefox AMO signing via `web-ext sign`.
+
+#### 3. One-Click Flow in Setup Wizard & Settings
+- **Configurable Per-Browser Install URLs**: Chrome Web Store URL (Chrome/Brave), Edge Add-ons URL (Edge), and Firefox XPI URL (Firefox) configured with sensible defaults and settings overrides.
+- **Direct Browser Exe Launch**: Primary action reads `"Add to <browser>"` and opens the official store URL directly in that browser's own executable (`open_browser_url`), prompting native browser confirmation.
+- **Guided Fallback**: If store URLs are unconfigured, smoothly falls back to the guided unpacked flow with automatic folder copying.
+- **Live Handshake & Prompt Resiliency**: The wizard actively polls and transitions to "Connected ✓" upon receiving the extension's loopback `hello`. Prompt cancellation leaves the button enabled without error. Firefox is presented only when installed and a signed `.xpi` package exists.
+
 ### 🛠️ Hotfixes & Refinements (from v0.0.6 testing)
 
 #### 1. Setup Wizard Persistence & Relaunch Prevention

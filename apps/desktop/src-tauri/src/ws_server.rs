@@ -288,6 +288,19 @@ impl WsManager {
         clients.values().any(|c| c.browser.eq_ignore_ascii_case(browser))
     }
 
+    pub async fn get_browser_connected_id(&self, browser: &str) -> Option<String> {
+        let clients = self.connected_clients.read().await;
+        clients
+            .values()
+            .find(|c| c.browser.eq_ignore_ascii_case(browser))
+            .and_then(|c| c.extension_id.clone())
+    }
+
+    pub async fn get_any_connected_extension_id(&self) -> Option<String> {
+        let clients = self.connected_clients.read().await;
+        clients.values().find_map(|c| c.extension_id.clone())
+    }
+
     pub fn bump_rev(&self) -> u64 {
         self.rev.fetch_add(1, Ordering::SeqCst) + 1
     }
@@ -700,13 +713,10 @@ async fn handle_http_token_request(
     }
 
     // Guard 2: Origin requirement
-    // Allow Origin chrome-extension:// and moz-extension://, or direct loopback callers (no Origin header).
-    // External web origins (http://, https://) are strictly forbidden!
+    // Only allowed extension origins or direct local loopback callers (no Origin header).
+    // External web origins (http://, https://) or unauthorized extension IDs are strictly forbidden!
     let is_forbidden = if let Some(ref o) = origin {
-        let lower = o.to_ascii_lowercase();
-        let is_chrome = lower.starts_with("chrome-extension://");
-        let is_firefox = lower.starts_with("moz-extension://");
-        !is_chrome && !is_firefox
+        !edm_ipc::extensions::is_allowed_origin(o)
     } else {
         // Direct local loopback request: no Origin header sent (e.g. extension worker fetch or local tool)
         // Browsers NEVER omit Origin on cross-origin web requests, so any web page has an Origin header.
@@ -714,8 +724,7 @@ async fn handle_http_token_request(
     };
 
     let ac_origin = if let Some(ref o) = origin {
-        let lower = o.to_ascii_lowercase();
-        if lower.starts_with("chrome-extension://") || lower.starts_with("moz-extension://") {
+        if edm_ipc::extensions::is_allowed_origin(o) {
             o.as_str()
         } else {
             "null"
@@ -780,10 +789,7 @@ async fn handle_ws_connection(stream: TcpStream, peer_addr: SocketAddr, manager:
         // Guard 2: Origin header validation
         if let Some(origin) = req.headers().get("Origin") {
             if let Ok(origin_str) = origin.to_str() {
-                let trimmed = origin_str.trim_end_matches('/');
-                let is_chrome = trimmed.starts_with("chrome-extension://");
-                let is_firefox = trimmed.starts_with("moz-extension://");
-                if is_chrome || is_firefox {
+                if edm_ipc::extensions::is_allowed_origin(origin_str) {
                     origin_valid = true;
                     return Ok(resp);
                 }
@@ -824,7 +830,12 @@ async fn handle_ws_connection(stream: TcpStream, peer_addr: SocketAddr, manager:
                 extension_id,
             }) = serde_json::from_str::<InboundWsMessage>(&text)
             {
-                let ok = manager.verify_token_constant_time(&token);
+                let token_ok = manager.verify_token_constant_time(&token);
+                let ext_ok = match extension_id.as_deref() {
+                    Some(id) => edm_ipc::extensions::is_allowed_extension_id(id),
+                    None => true, // backward compatible for legacy extension builds
+                };
+                let ok = token_ok && ext_ok;
                 (ok, browser, version, extension_id)
             } else {
                 (false, None, None, None)
@@ -1452,6 +1463,86 @@ mod tests {
             "Direct loopback without origin must succeed"
         );
         assert!(resp_str.contains(token));
+    }
+
+    #[tokio::test]
+    async fn test_multiple_extension_ids_accepted_and_rejected() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let token = "test_multi_id_token_1234567890abcdef123";
+        let (addr, _mgr, _create_rx, _act_rx) = setup_test_server(token).await;
+
+        // 1. Verify every allowed Chromium ID origin succeeds on /token
+        for id in edm_ipc::extensions::CHROMIUM_ALLOWED_IDS {
+            let mut stream = TcpStream::connect(addr).await.unwrap();
+            let origin = format!("chrome-extension://{}", id);
+            stream
+                .write_all(
+                    format!(
+                        "GET /token HTTP/1.1\r\nHost: {}\r\nOrigin: {}\r\n\r\n",
+                        addr, origin
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+            let mut resp = [0u8; 1024];
+            let n = stream.read(&mut resp).await.unwrap();
+            let resp_str = String::from_utf8_lossy(&resp[..n]);
+            assert!(
+                resp_str.contains("200 OK"),
+                "Allowed Chromium ID origin {} must succeed",
+                id
+            );
+            assert!(resp_str.contains(token));
+        }
+
+        // 2. Verify Firefox moz-extension origin succeeds on /token
+        {
+            let mut stream = TcpStream::connect(addr).await.unwrap();
+            let origin = "moz-extension://b4b5e6fc-5231-419b-a010-86b2496a3fc4";
+            stream
+                .write_all(
+                    format!(
+                        "GET /token HTTP/1.1\r\nHost: {}\r\nOrigin: {}\r\n\r\n",
+                        addr, origin
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+            let mut resp = [0u8; 1024];
+            let n = stream.read(&mut resp).await.unwrap();
+            let resp_str = String::from_utf8_lossy(&resp[..n]);
+            assert!(
+                resp_str.contains("200 OK"),
+                "Firefox moz-extension origin must succeed"
+            );
+            assert!(resp_str.contains(token));
+        }
+
+        // 3. Verify unknown/fake extension origin is rejected with 403 Forbidden
+        {
+            let mut stream = TcpStream::connect(addr).await.unwrap();
+            let origin = "chrome-extension://unknownfakeextensionid123456";
+            stream
+                .write_all(
+                    format!(
+                        "GET /token HTTP/1.1\r\nHost: {}\r\nOrigin: {}\r\n\r\n",
+                        addr, origin
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+            let mut resp = [0u8; 512];
+            let n = stream.read(&mut resp).await.unwrap();
+            let resp_str = String::from_utf8_lossy(&resp[..n]);
+            assert!(
+                resp_str.contains("403 Forbidden"),
+                "Unknown extension origin must be rejected with 403 Forbidden"
+            );
+        }
     }
 
     #[tokio::test]

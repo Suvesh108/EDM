@@ -2,6 +2,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub mod extensions;
+
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const DEFAULT_PIPE_NAME: &str = r"\\.\pipe\edm_ipc_service";
 
@@ -183,6 +185,8 @@ pub struct BrowserDiagnostic {
     pub helper_exists: bool,
     pub origin_matched: bool,
     pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connected_extension_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -197,6 +201,8 @@ pub struct DiagnosticsReport {
     pub last_wake_error: Option<String>,
     pub last_wake_timestamp: Option<String>,
     pub browsers: Vec<BrowserDiagnostic>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connected_extension_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

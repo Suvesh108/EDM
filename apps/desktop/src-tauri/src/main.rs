@@ -132,12 +132,7 @@ fn register_native_messaging_host() {
         "description": "EDM Native Messaging Host for Edge, Chrome and Brave",
         "path": nmh_path.to_string_lossy(),
         "type": "stdio",
-        "allowed_origins": [
-            "chrome-extension://ginpdimhcdbojbhemgjedghkeolbcmgj/",
-            "chrome-extension://ebdcbpghekpbgjiclaclbgmdnimeheci/",
-            "chrome-extension://knldjmfmopnpolahpmmgbagdohdnhkik/",
-            "chrome-extension://cphjfljhggknldkppchfobogknclmblg/"
-        ]
+        "allowed_origins": edm_ipc::extensions::allowed_chromium_origins()
     });
 
     if let Ok(content) = serde_json::to_string_pretty(&manifest_json) {
@@ -151,9 +146,7 @@ fn register_native_messaging_host() {
         "description": "EDM Native Messaging Host for Mozilla Firefox",
         "path": nmh_path.to_string_lossy(),
         "type": "stdio",
-        "allowed_extensions": [
-            "edm@suvesh.dev"
-        ]
+        "allowed_extensions": edm_ipc::extensions::allowed_firefox_ids()
     });
     if let Ok(content) = serde_json::to_string_pretty(&ff_manifest_json) {
         let _ = std::fs::write(&ff_manifest_path, content);
@@ -191,10 +184,13 @@ fn register_native_messaging_host() {
 fn register_native_messaging_host() {}
 
 #[cfg(windows)]
-fn collect_browser_diagnostics(ext_id: Option<String>) -> edm_ipc::DiagnosticsReport {
+async fn collect_browser_diagnostics(
+    ext_id: Option<String>,
+    ws_manager: Option<&Arc<ws_server::WsManager>>,
+) -> edm_ipc::DiagnosticsReport {
     use windows_registry::CURRENT_USER;
 
-    let target_ext_id = ext_id.unwrap_or_else(|| "ginpdimhcdbojbhemgjedghkeolbcmgj".to_string());
+    let target_ext_id = ext_id.unwrap_or_else(|| edm_ipc::extensions::CHROMIUM_UNPACKED_ID.to_string());
 
     let browsers_meta = [
         ("edge", r"Software\Microsoft\Edge\NativeMessagingHosts\com.edm.nmh", false),
@@ -216,7 +212,14 @@ fn collect_browser_diagnostics(ext_id: Option<String>) -> edm_ipc::DiagnosticsRe
             helper_exists: false,
             origin_matched: false,
             error: None,
+            connected_extension_id: None,
         };
+
+        if let Some(mgr) = ws_manager {
+            if let Some(conn_id) = mgr.get_browser_connected_id(name).await {
+                diag.connected_extension_id = Some(conn_id);
+            }
+        }
 
         match CURRENT_USER.open(subkey) {
             Ok(key) => {
@@ -243,14 +246,13 @@ fn collect_browser_diagnostics(ext_id: Option<String>) -> edm_ipc::DiagnosticsRe
                                     if *is_firefox {
                                         if let Some(exts) = json.get("allowed_extensions").and_then(|v| v.as_array()) {
                                             diag.origin_matched = exts.iter().any(|e| {
-                                                e.as_str() == Some("edm@suvesh.dev")
-                                                    || e.as_str() == Some(&target_ext_id)
+                                                e.as_str().map(|s| edm_ipc::extensions::FIREFOX_ALLOWED_IDS.contains(&s) || s == target_ext_id).unwrap_or(false)
                                             });
                                         }
                                     } else if let Some(origins) = json.get("allowed_origins").and_then(|v| v.as_array()) {
                                         diag.origin_matched = origins.iter().any(|o| {
                                             if let Some(s) = o.as_str() {
-                                                s.contains(&target_ext_id)
+                                                edm_ipc::extensions::is_allowed_origin(s) || s.contains(&target_ext_id)
                                             } else {
                                                 false
                                             }
@@ -305,6 +307,12 @@ fn collect_browser_diagnostics(ext_id: Option<String>) -> edm_ipc::DiagnosticsRe
         }
     };
 
+    let any_connected = if let Some(mgr) = ws_manager {
+        mgr.get_any_connected_extension_id().await
+    } else {
+        None
+    };
+
     edm_ipc::DiagnosticsReport {
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         os: "Windows".to_string(),
@@ -316,6 +324,7 @@ fn collect_browser_diagnostics(ext_id: Option<String>) -> edm_ipc::DiagnosticsRe
         last_wake_error: last_err,
         last_wake_timestamp: last_ts,
         browsers: browser_diagnostics,
+        connected_extension_id: any_connected,
     }
 }
 
@@ -1695,13 +1704,18 @@ fn get_extension_token(state: State<'_, AppState>) -> String {
 }
 
 #[command]
-fn get_browser_diagnostics(ext_id: Option<String>) -> Result<edm_ipc::DiagnosticsReport, String> {
+async fn get_browser_diagnostics(
+    state: State<'_, AppState>,
+    ext_id: Option<String>,
+) -> Result<edm_ipc::DiagnosticsReport, String> {
     #[cfg(windows)]
     {
-        Ok(collect_browser_diagnostics(ext_id))
+        Ok(collect_browser_diagnostics(ext_id, Some(&state.ws_manager)).await)
     }
     #[cfg(not(windows))]
     {
+        let _ = state;
+        let _ = ext_id;
         Err("Windows only".into())
     }
 }
@@ -1775,6 +1789,33 @@ async fn detect_installed_browsers(
     {
         use windows_registry::CURRENT_USER;
 
+        let (chrome_store_url, edge_store_url, brave_store_url, firefox_xpi_url) = {
+            let mut c_url = Some(edm_ipc::extensions::DEFAULT_CHROME_STORE_URL.to_string());
+            let mut e_url = Some(edm_ipc::extensions::DEFAULT_EDGE_STORE_URL.to_string());
+            let mut b_url = Some(edm_ipc::extensions::DEFAULT_CHROME_STORE_URL.to_string());
+            let mut f_url = Some(edm_ipc::extensions::DEFAULT_FIREFOX_XPI_URL.to_string());
+
+            if let Ok(Some(json_str)) = state.store.get_setting("app_settings") {
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&json_str) {
+                    if let Some(urls) = val.get("extension_store_urls") {
+                        if let Some(u) = urls.get("chrome").and_then(|v| v.as_str()) {
+                            c_url = if u.trim().is_empty() { None } else { Some(u.trim().to_string()) };
+                        }
+                        if let Some(u) = urls.get("edge").and_then(|v| v.as_str()) {
+                            e_url = if u.trim().is_empty() { None } else { Some(u.trim().to_string()) };
+                        }
+                        if let Some(u) = urls.get("brave").and_then(|v| v.as_str()) {
+                            b_url = if u.trim().is_empty() { None } else { Some(u.trim().to_string()) };
+                        }
+                        if let Some(u) = urls.get("firefox").and_then(|v| v.as_str()) {
+                            f_url = if u.trim().is_empty() { None } else { Some(u.trim().to_string()) };
+                        }
+                    }
+                }
+            }
+            (c_url, e_url, b_url, f_url)
+        };
+
         // 1. Chrome
         let chrome_path = find_browser_exe(
             r"Software\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe",
@@ -1792,7 +1833,7 @@ async fn detect_installed_browsers(
             exe_path: chrome_path,
             helper_registered: chrome_helper,
             extension_connected: chrome_connected,
-            store_url: None,
+            store_url: chrome_store_url,
             extension_page_url: "chrome://extensions".to_string(),
         });
 
@@ -1813,7 +1854,7 @@ async fn detect_installed_browsers(
             exe_path: edge_path,
             helper_registered: edge_helper,
             extension_connected: edge_connected,
-            store_url: None,
+            store_url: edge_store_url,
             extension_page_url: "edge://extensions".to_string(),
         });
 
@@ -1834,30 +1875,47 @@ async fn detect_installed_browsers(
             exe_path: brave_path,
             helper_registered: brave_helper,
             extension_connected: brave_connected,
-            store_url: None,
+            store_url: brave_store_url,
             extension_page_url: "brave://extensions".to_string(),
         });
 
-        // 4. Firefox
+        // 4. Firefox (only shown if Firefox is installed and signed .xpi exists)
         let ff_path = find_browser_exe(
             r"Software\Microsoft\Windows\CurrentVersion\App Paths\firefox.exe",
             &[r"Mozilla Firefox\firefox.exe"],
         );
-        let ff_helper = CURRENT_USER
-            .open(r"Software\Mozilla\NativeMessagingHosts\com.edm.nmh")
-            .is_ok();
-        let ff_connected = state.ws_manager.is_browser_connected("firefox").await;
+        let firefox_xpi_exists = {
+            let local_candidates = [
+                std::path::PathBuf::from("extension/dist/firefox/edm-firefox.xpi"),
+                std::path::PathBuf::from("extension/dist/firefox/firefox.xpi"),
+                std::path::PathBuf::from("resources/firefox.xpi"),
+                std::path::PathBuf::from("resources/edm-firefox.xpi"),
+            ];
+            let has_local = local_candidates.iter().any(|p| p.exists());
+            let has_parent = std::env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(|d| d.join("resources").join("firefox.xpi").exists() || d.join("firefox.xpi").exists()))
+                .unwrap_or(false);
+            has_local || has_parent || firefox_xpi_url.as_ref().map(|u| u.starts_with("http")).unwrap_or(false)
+        };
 
-        results.push(edm_ipc::BrowserSetupInfo {
-            id: "firefox".to_string(),
-            name: "Mozilla Firefox".to_string(),
-            installed: ff_path.is_some(),
-            exe_path: ff_path,
-            helper_registered: ff_helper,
-            extension_connected: ff_connected,
-            store_url: Some("http://127.0.0.1:14370/firefox.xpi".to_string()),
-            extension_page_url: "about:addons".to_string(),
-        });
+        if ff_path.is_some() && firefox_xpi_exists {
+            let ff_helper = CURRENT_USER
+                .open(r"Software\Mozilla\NativeMessagingHosts\com.edm.nmh")
+                .is_ok();
+            let ff_connected = state.ws_manager.is_browser_connected("firefox").await;
+
+            results.push(edm_ipc::BrowserSetupInfo {
+                id: "firefox".to_string(),
+                name: "Mozilla Firefox".to_string(),
+                installed: true,
+                exe_path: ff_path,
+                helper_registered: ff_helper,
+                extension_connected: ff_connected,
+                store_url: firefox_xpi_url,
+                extension_page_url: "about:addons".to_string(),
+            });
+        }
     }
 
     Ok(results)
