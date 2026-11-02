@@ -11,8 +11,6 @@
     "contextMenus",
     "notifications",
     "nativeMessaging",
-    "webRequest",
-    "scripting",
     "activeTab"
   ],
   "host_permissions": [

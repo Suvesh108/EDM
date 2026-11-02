@@ -40,6 +40,7 @@ import { HistoryView } from "./components/HistoryView";
 import { BatchDownloadModal } from "./components/BatchDownloadModal";
 import { RefreshLinkModal } from "./components/RefreshLinkModal";
 import { PowerCountdownModal } from "./components/PowerCountdownModal";
+import { ExtensionInstallModal } from "./components/ExtensionInstallModal";
 import { SpeedChartInteractive } from "./components/SpeedChartInteractive";
 import { loadSettings, saveSettings, EdmSettings } from "./types/settings";
 import { formatBytes, formatSpeed, formatEta } from "./utils/format";
@@ -175,6 +176,7 @@ export default function App() {
   const [settings, setSettings] = useState<EdmSettings>(loadSettings);
   const [isWizardOpen, setIsWizardOpen] = useState(false);
   const [isBatchModalOpen, setIsBatchModalOpen] = useState(false);
+  const [isExtModalOpen, setIsExtModalOpen] = useState(false);
   const [refreshModalTask, setRefreshModalTask] = useState<DownloadItem | null>(null);
 
   useEffect(() => {
@@ -1109,8 +1111,17 @@ export default function App() {
               </div>
             </div>
 
-            {/* Right: Unified Integrated Window Controls */}
-            <div className="flex items-center gap-0.5 shrink-0 z-10 ml-auto" data-tauri-drag-region="false">
+            {/* Right: Unified Integrated Window Controls & Quick Actions */}
+            <div className="flex items-center gap-1 shrink-0 z-10 ml-auto" data-tauri-drag-region="false">
+              <button
+                onClick={() => setIsExtModalOpen(true)}
+                className="btn-3d h-7 px-2 sm:px-2.5 rounded-lg flex items-center gap-1.5 text-xs font-medium text-[var(--text-secondary)] hover:text-white cursor-pointer mr-1"
+                title="Add Bundled Browser Extension (Chrome & Edge)"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                <span className="hidden sm:inline">Add extension</span>
+              </button>
+
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -1235,22 +1246,8 @@ export default function App() {
 
             <div className="w-5 h-[1px] bg-[var(--border-subtle)] my-0.5" />
 
-            {/* Specialized Views (Queues, History) */}
+            {/* Specialized Views (History) */}
             <div className="space-y-0.5">
-              <button
-                onClick={() => {
-                  setActiveView("settings");
-                  window.location.hash = "#section-queues";
-                }}
-                title="Queues & Schedule"
-                className={`w-8 h-8 mx-auto flex items-center justify-center rounded-lg text-xs font-medium transition-all duration-150 cursor-pointer ${
-                  (activeView as string) === "settings" && typeof window !== "undefined" && (window.location.hash === "#section-queues" || window.location.hash === "#queues")
-                    ? "sidebar-item-active-3d text-[var(--accent)] font-semibold shadow-sm"
-                    : "sidebar-item-inactive-3d text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
-                }`}
-              >
-                <Layers className="w-3.5 h-3.5" />
-              </button>
               <button
                 onClick={() => {
                   setActiveView("history");
@@ -2387,6 +2384,11 @@ export default function App() {
             )
           );
         }}
+      />
+
+      <ExtensionInstallModal
+        isOpen={isExtModalOpen}
+        onClose={() => setIsExtModalOpen(false)}
       />
 
       <PowerCountdownModal />

@@ -1921,14 +1921,45 @@ async fn detect_installed_browsers(
     Ok(results)
 }
 
+fn get_user_extension_dir() -> Result<PathBuf, String> {
+    #[cfg(windows)]
+    {
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            return Ok(PathBuf::from(appdata).join("EDM").join("extension"));
+        }
+        if let Ok(local) = std::env::var("LOCALAPPDATA") {
+            return Ok(PathBuf::from(local).join("EDM").join("extension"));
+        }
+        Err("Failed to determine %APPDATA% or %LOCALAPPDATA%".to_string())
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(home) = std::env::var("HOME") {
+            return Ok(PathBuf::from(home)
+                .join("Library")
+                .join("Application Support")
+                .join("EDM")
+                .join("extension"));
+        }
+        Err("Failed to determine $HOME".to_string())
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        if let Ok(config) = std::env::var("XDG_CONFIG_HOME") {
+            return Ok(PathBuf::from(config).join("EDM").join("extension"));
+        }
+        if let Ok(home) = std::env::var("HOME") {
+            return Ok(PathBuf::from(home).join(".config").join("EDM").join("extension"));
+        }
+        Err("Failed to determine config folder".to_string())
+    }
+}
+
 #[command]
 fn prepare_extension_files() -> Result<String, String> {
     use sha2::{Digest, Sha256};
 
-    let local_appdata = std::env::var("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .map_err(|_| "Failed to determine %LOCALAPPDATA%".to_string())?;
-    let target_dir = local_appdata.join("EDM").join("extension");
+    let target_dir = get_user_extension_dir()?;
     std::fs::create_dir_all(&target_dir)
         .map_err(|e| format!("Failed to create target extension directory: {}", e))?;
 
@@ -1955,54 +1986,101 @@ fn prepare_extension_files() -> Result<String, String> {
         }
     }
 
+    if found_source.is_none() {
+        for candidate in &source_candidates {
+            if candidate.join("manifest.json").exists() {
+                found_source = Some(candidate.clone());
+                break;
+            }
+        }
+    }
+
     let source_dir = found_source.ok_or_else(|| {
         "Source extension directory not found. Please ensure extension is built.".to_string()
     })?;
 
     let hashes_path = source_dir.join("hashes.json");
-    let hashes_content = std::fs::read_to_string(&hashes_path)
-        .map_err(|e| format!("Failed to read hashes.json: {}", e))?;
-    let hashes_json: serde_json::Value = serde_json::from_str(&hashes_content)
-        .map_err(|e| format!("Failed to parse hashes.json: {}", e))?;
+    if hashes_path.exists() {
+        let hashes_content = std::fs::read_to_string(&hashes_path)
+            .map_err(|e| format!("Failed to read hashes.json: {}", e))?;
+        let hashes_json: serde_json::Value = serde_json::from_str(&hashes_content)
+            .map_err(|e| format!("Failed to parse hashes.json: {}", e))?;
 
-    let files_map = hashes_json
-        .get("files")
-        .and_then(|f| f.as_object())
-        .ok_or_else(|| "Invalid hashes.json: missing 'files' object".to_string())?;
+        let files_map = hashes_json
+            .get("files")
+            .and_then(|f| f.as_object())
+            .ok_or_else(|| "Invalid hashes.json: missing 'files' object".to_string())?;
 
-    for (filename, expected_hash_val) in files_map {
-        let expected_hash_str = expected_hash_val
-            .as_str()
-            .ok_or_else(|| format!("Invalid hash entry for {}", filename))?;
-        let expected_sha256 = expected_hash_str
-            .strip_prefix("sha256:")
-            .unwrap_or(expected_hash_str);
+        for (filename, expected_hash_val) in files_map {
+            let expected_hash_str = expected_hash_val
+                .as_str()
+                .ok_or_else(|| format!("Invalid hash entry for {}", filename))?;
+            let expected_sha256 = expected_hash_str
+                .strip_prefix("sha256:")
+                .unwrap_or(expected_hash_str);
 
-        let src_file = source_dir.join(filename);
-        if !src_file.exists() {
-            return Err(format!("Source file {} missing in {}", filename, source_dir.display()));
+            let src_file = source_dir.join(filename);
+            if !src_file.exists() {
+                return Err(format!("Source file {} missing in {}", filename, source_dir.display()));
+            }
+
+            let file_bytes = std::fs::read(&src_file)
+                .map_err(|e| format!("Failed to read {}: {}", filename, e))?;
+
+            let mut hasher = Sha256::new();
+            hasher.update(&file_bytes);
+            let actual_sha256 = hex::encode(hasher.finalize());
+
+            if !actual_sha256.eq_ignore_ascii_case(expected_sha256) {
+                return Err(format!(
+                    "Integrity check failed for {}: expected {}, got {}",
+                    filename, expected_sha256, actual_sha256
+                ));
+            }
+
+            let dest_file = target_dir.join(filename);
+            std::fs::write(&dest_file, &file_bytes)
+                .map_err(|e| format!("Failed to write {}: {}", dest_file.display(), e))?;
         }
 
-        let file_bytes = std::fs::read(&src_file)
-            .map_err(|e| format!("Failed to read {}: {}", filename, e))?;
-
-        let mut hasher = Sha256::new();
-        hasher.update(&file_bytes);
-        let actual_sha256 = hex::encode(hasher.finalize());
-
-        if !actual_sha256.eq_ignore_ascii_case(expected_sha256) {
-            return Err(format!(
-                "Integrity check failed for {}: expected {}, got {}",
-                filename, expected_sha256, actual_sha256
-            ));
+        let _ = std::fs::copy(&hashes_path, target_dir.join("hashes.json"));
+    } else {
+        // Fallback: copy standard extension files directly
+        let entries = std::fs::read_dir(&source_dir)
+            .map_err(|e| format!("Failed to read source directory: {}", e))?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(name) = path.file_name() {
+                    let dest = target_dir.join(name);
+                    let _ = std::fs::copy(&path, &dest);
+                }
+            }
         }
-
-        let dest_file = target_dir.join(filename);
-        std::fs::write(&dest_file, &file_bytes)
-            .map_err(|e| format!("Failed to write {}: {}", dest_file.display(), e))?;
     }
 
-    let _ = std::fs::copy(&hashes_path, target_dir.join("hashes.json"));
+    if !target_dir.join("manifest.json").exists() {
+        return Err("Verification failed: manifest.json does not exist in target directory".to_string());
+    }
+
+    // Keep LocalAppData in sync if APPDATA was different, so native host manifests are satisfied
+    #[cfg(windows)]
+    if let Ok(local) = std::env::var("LOCALAPPDATA") {
+        let local_dir = PathBuf::from(local).join("EDM").join("extension");
+        if local_dir != target_dir {
+            let _ = std::fs::create_dir_all(&local_dir);
+            if let Ok(entries) = std::fs::read_dir(&target_dir) {
+                for entry in entries.flatten() {
+                    let src = entry.path();
+                    if src.is_file() {
+                        if let Some(name) = src.file_name() {
+                            let _ = std::fs::copy(&src, local_dir.join(name));
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     tracing::info!(
         "Extension files successfully verified and provisioned to {}",
@@ -2014,11 +2092,29 @@ fn prepare_extension_files() -> Result<String, String> {
 
 #[command]
 fn get_extension_folder_path() -> Result<String, String> {
-    let local_appdata = std::env::var("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .map_err(|_| "Failed to determine %LOCALAPPDATA%".to_string())?;
-    let path = local_appdata.join("EDM").join("extension");
-    Ok(path.to_string_lossy().to_string())
+    let target_dir = get_user_extension_dir()?;
+    Ok(target_dir.to_string_lossy().to_string())
+}
+
+#[command]
+fn remove_extension_folder() -> Result<bool, String> {
+    let target_dir = get_user_extension_dir()?;
+    let mut removed = false;
+    if target_dir.exists() {
+        std::fs::remove_dir_all(&target_dir)
+            .map_err(|e| format!("Failed to remove extension directory: {}", e))?;
+        removed = true;
+    }
+    #[cfg(windows)]
+    if let Ok(local) = std::env::var("LOCALAPPDATA") {
+        let local_dir = PathBuf::from(local).join("EDM").join("extension");
+        if local_dir.exists() {
+            let _ = std::fs::remove_dir_all(&local_dir);
+            removed = true;
+        }
+    }
+    tracing::info!("Extension folder cleanup result: removed={}", removed);
+    Ok(removed)
 }
 
 #[command]
@@ -2803,6 +2899,7 @@ fn main() {
             detect_installed_browsers,
             prepare_extension_files,
             get_extension_folder_path,
+            remove_extension_folder,
             open_browser_url,
             get_firefox_xpi_url,
             is_wizard_completed,

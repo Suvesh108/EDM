@@ -26,82 +26,6 @@ let reconnectAttempts = 0;
 let pingInterval: any = null;
 let bypassNextDownload = false;
 
-// 0. Top-Level Synchronous Sniffer via webRequest (Stored per-tab in session)
-if (typeof chrome !== "undefined" && chrome.webRequest && chrome.webRequest.onResponseStarted) {
-  chrome.webRequest.onResponseStarted.addListener(
-    async (details) => {
-      if (details.tabId < 0) return;
-      const url = details.url;
-      if (!url.startsWith("http://") && !url.startsWith("https://")) return;
-
-      const headers = details.responseHeaders || [];
-      const contentTypeHeader = headers.find((h) => h.name.toLowerCase() === "content-type");
-      const contentType = (contentTypeHeader?.value || "").toLowerCase();
-      const contentLengthHeader = headers.find((h) => h.name.toLowerCase() === "content-length");
-      const contentLength = contentLengthHeader?.value ? parseInt(contentLengthHeader.value, 10) : undefined;
-
-      const isMediaMime =
-        contentType.startsWith("video/") ||
-        contentType.startsWith("audio/") ||
-        contentType.includes("application/vnd.apple.mpegurl") ||
-        contentType.includes("application/x-mpegurl") ||
-        contentType.includes("application/dash+xml");
-
-      const isMediaExt = /\.(m3u8|mpd|mp4|m4v|webm|m4a|mp3|flv|ts|ogg|wav|aac)(\?.*)?$/i.test(url);
-
-      if (isMediaMime || isMediaExt) {
-        try {
-          if (chrome.storage && chrome.storage.session) {
-            const key = `tab_media_${details.tabId}`;
-            const existing = await chrome.storage.session.get(key);
-            const list: any[] = existing[key] || [];
-
-            if (!list.some((item) => item.url === url)) {
-              let mediaType = "video";
-              if (contentType.startsWith("audio/") || /\.(mp3|m4a|aac|flac|wav|ogg)(\?.*)?$/i.test(url)) {
-                mediaType = "audio";
-              } else if (contentType.includes("mpegurl") || contentType.includes("dash") || /\.(m3u8|mpd)(\?.*)?$/i.test(url)) {
-                mediaType = "stream";
-              }
-
-              let title = "Media Stream";
-              try {
-                const pathname = new URL(url).pathname;
-                const name = pathname.substring(pathname.lastIndexOf("/") + 1);
-                if (name && name.length > 2) title = decodeURIComponent(name);
-              } catch {}
-
-              list.push({
-                url,
-                title,
-                type: mediaType,
-                size: contentLength,
-                contentType,
-                timestamp: Date.now(),
-              });
-
-              if (list.length > 60) list.shift();
-              await chrome.storage.session.set({ [key]: list });
-            }
-          }
-        } catch {
-          // ignore session storage error
-        }
-      }
-    },
-    { urls: ["<all_urls>"] },
-    ["responseHeaders"]
-  );
-
-  chrome.tabs.onRemoved.addListener((tabId) => {
-    try {
-      if (chrome.storage && chrome.storage.session) {
-        chrome.storage.session.remove(`tab_media_${tabId}`);
-      }
-    } catch {}
-  });
-}
-
 // Shared state
 let latestTasks: WsTaskItem[] = [];
 let currentEpoch: string = "";
@@ -913,45 +837,6 @@ chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
 
 // 8. Runtime Messages from Content Script & Options Page
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  if (msg.action === "get_sniffed_media") {
-    const tabId = msg.tabId;
-    if (tabId && chrome.storage && chrome.storage.session) {
-      chrome.storage.session.get(`tab_media_${tabId}`).then((res) => {
-        sendResponse({ ok: true, media: res[`tab_media_${tabId}`] || [] });
-      }).catch(() => sendResponse({ ok: true, media: [] }));
-      return true;
-    }
-    sendResponse({ ok: true, media: [] });
-    return false;
-  }
-
-  if (msg.action === "probe_page_media") {
-    const pageUrl = msg.url;
-    if (socket && socket.readyState === WebSocket.OPEN && connectionStatus === "connected") {
-      const reqId = crypto.randomUUID();
-      const timer = setTimeout(() => {
-        sendResponse({ ok: false, error: "Probe timed out" });
-      }, 10000);
-
-      const listener = (event: MessageEvent) => {
-        try {
-          const data = JSON.parse(event.data);
-          if (data.type === "media_variants" && data.req_id === reqId) {
-            clearTimeout(timer);
-            socket?.removeEventListener("message", listener);
-            sendResponse({ ok: true, variants: data.variants || [], is_drm: data.is_drm });
-          }
-        } catch {}
-      };
-      socket.addEventListener("message", listener);
-      socket.send(JSON.stringify({ type: "probe_media", req_id: reqId, media_url: pageUrl }));
-      return true;
-    } else {
-      sendResponse({ ok: false, error: "EDM is not connected" });
-      return false;
-    }
-  }
-
   if (msg.action === "wake_desktop") {
     wakeDesktop(!!msg.show_window).then((res) => {
       sendResponse(res);

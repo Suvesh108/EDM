@@ -631,7 +631,19 @@ export async function tauriGetExtensionFolderPath(): Promise<string> {
       console.warn("get_extension_folder_path failed:", e);
     }
   }
-  return "C:\\Users\\User\\AppData\\Local\\EDM\\extension";
+  return "C:\\Users\\User\\AppData\\Roaming\\EDM\\extension";
+}
+
+export async function tauriRemoveExtensionFolder(): Promise<boolean> {
+  if (isTauri()) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return await invoke<boolean>("remove_extension_folder");
+    } catch (e: any) {
+      throw new Error(e?.toString() || "Failed to remove extension folder");
+    }
+  }
+  return true;
 }
 
 export async function tauriOpenBrowserUrl(browser: string, url: string): Promise<void> {

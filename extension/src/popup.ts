@@ -84,15 +84,12 @@ function sanitizeUrl(rawUrl: string | null | undefined): string {
 }
 
 class PopupController {
-  private activeTab: "tasks" | "media" | "grabber" | "settings" = "tasks";
+  private activeTab: "tasks" | "settings" = "tasks";
   private taskFilter: "all" | "active" | "completed" | "failed" = "all";
   private searchQuery: string = "";
   private isAddFormOpen: boolean = false;
   private newUrlInput: string = "";
   private newFileNameInput: string = "";
-  private pageResources: any[] = [];
-  private selectedGrabberUrls: Set<string> = new Set();
-  private grabberFilter: string = "all";
 
   private downloads: DownloadItem[] = [];
   private connectionState: string = "connecting";
@@ -103,10 +100,6 @@ class PopupController {
   private latencyMs: number = 0;
   private token: string = "";
   private interceptionEnabled: boolean = true;
-  private mediaMaster: boolean = true;
-  private mediaYouTube: boolean = true;
-  private mediaOtherSites: boolean = true;
-  private hiddenSites: string[] = [];
   private auditLogs: string[] = ["Popup initialized"];
   private currentVersion: string = "0.0.7";
   private expectedVersion: string = "0.0.7";
@@ -137,129 +130,7 @@ class PopupController {
     this.bindHeaderNav();
     this.connectPort();
     await this.loadSettings();
-    await this.loadActiveTabResources();
     this.render();
-  }
-
-  private async loadActiveTabResources() {
-    try {
-      chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
-        if (!tabs || !tabs[0] || !tabs[0].id) return;
-        const tab = tabs[0];
-        const tabId = tab.id!;
-        const tabUrl = tab.url || "";
-
-        // 1. Fetch sniffed media from session storage
-        let sniffedMedia: any[] = [];
-        try {
-          const res = await new Promise<any>((resolve) => {
-            chrome.runtime.sendMessage({ action: "get_sniffed_media", tabId }, resolve);
-          });
-          if (res && res.ok && Array.isArray(res.media)) {
-            sniffedMedia = res.media;
-          }
-        } catch {}
-
-        // 2. Fetch page links with scripting fallback
-        const pageLinks = await this.grabLinksWithFallback(tabId);
-
-        // 3. Extractor probe if video site
-        let probedMedia: any[] = [];
-        if (tabUrl.includes("youtube.com") || tabUrl.includes("youtu.be") || tabUrl.includes("vimeo.com")) {
-          try {
-            const probeRes = await new Promise<any>((resolve) => {
-              chrome.runtime.sendMessage({ action: "probe_page_media", url: tabUrl }, resolve);
-            });
-            if (probeRes && probeRes.ok && Array.isArray(probeRes.variants)) {
-              const cleanTitle = (tab.title || "Video Stream").replace(" - YouTube", "").trim();
-              probedMedia = probeRes.variants.map((v: any) => ({
-                url: v.url,
-                title: `${cleanTitle} (${v.quality || v.resolution || 'Best'})`,
-                type: v.media_type === "audio" ? "audio" : "video",
-                size: v.bitrate ? Math.round(v.bitrate / 8) : 0,
-                format: v.media_type || "mp4",
-              }));
-            }
-          } catch {}
-        }
-
-        const combined = [...probedMedia, ...sniffedMedia, ...pageLinks];
-        const seen = new Set<string>();
-        this.pageResources = combined.filter((r) => {
-          if (!r.url || seen.has(r.url)) return false;
-          seen.add(r.url);
-          return true;
-        });
-
-        if (this.activeTab === "media" || this.activeTab === "grabber") {
-          this.render();
-        }
-      });
-    } catch {}
-  }
-
-  private async grabLinksWithFallback(tabId: number): Promise<any[]> {
-    try {
-      const res = await new Promise<any>((resolve) => {
-        chrome.tabs.sendMessage(tabId, { action: "grab_page_links" }, (resp) => {
-          if (chrome.runtime.lastError || !resp) {
-            resolve(null);
-          } else {
-            resolve(resp);
-          }
-        });
-      });
-      if (res && Array.isArray(res.resources) && res.resources.length > 0) {
-        return res.resources;
-      }
-    } catch {}
-
-    try {
-      if (chrome.scripting && chrome.scripting.executeScript) {
-        const injected = await chrome.scripting.executeScript({
-          target: { tabId },
-          func: () => {
-            const items: any[] = [];
-            const seen = new Set<string>();
-
-            // 1. Anchors
-            document.querySelectorAll("a[href]").forEach((el) => {
-              const a = el as HTMLAnchorElement;
-              const href = a.href;
-              if (href && !href.startsWith("javascript:") && !href.startsWith("#") && !seen.has(href)) {
-                seen.add(href);
-                const text = (a.innerText || a.title || href).trim().slice(0, 100);
-                const ext = href.split(".").pop()?.split(/[?#]/)[0]?.toLowerCase() || "";
-                let type = "link";
-                if (["zip", "rar", "7z", "tar", "gz", "iso"].includes(ext)) type = "archive";
-                else if (["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt"].includes(ext)) type = "document";
-                else if (["exe", "msi", "dmg", "pkg", "deb", "rpm", "apk"].includes(ext)) type = "executable";
-                else if (["mp4", "mkv", "webm", "avi", "mov", "mp3", "m4a", "flac"].includes(ext)) type = "video";
-                items.push({ url: href, title: text || href, type, size: 0, format: ext.toUpperCase() });
-              }
-            });
-
-            // 2. Media
-            document.querySelectorAll("video, audio, source").forEach((el) => {
-              const src = (el as HTMLMediaElement | HTMLSourceElement).src;
-              if (src && !src.startsWith("blob:") && !seen.has(src)) {
-                seen.add(src);
-                items.push({ url: src, title: document.title || "Media File", type: "video", size: 0, format: "MEDIA" });
-              }
-            });
-
-            return items.slice(0, 150);
-          },
-        });
-        if (injected && injected[0] && Array.isArray(injected[0].result)) {
-          return injected[0].result;
-        }
-      }
-    } catch (err) {
-      console.debug("[EDM Popup] Fallback script execution:", err);
-    }
-
-    return [];
   }
 
   private connectPort() {
@@ -402,10 +273,6 @@ class PopupController {
       "edm_palette",
       "edm_ws_token",
       "edm_interception_enabled",
-      "media_button_master",
-      "media_button_youtube",
-      "media_button_other_sites",
-      "hidden_sites",
     ]);
     if (data.edm_refresh_rate) {
       this.refreshRateMs = parseInt(data.edm_refresh_rate, 10);
@@ -417,10 +284,6 @@ class PopupController {
       document.documentElement.setAttribute("data-theme", data.edm_theme);
     }
     this.interceptionEnabled = data.edm_interception_enabled !== false;
-    this.mediaMaster = data.media_button_master !== false;
-    this.mediaYouTube = data.media_button_youtube !== false;
-    this.mediaOtherSites = data.media_button_other_sites !== false;
-    this.hiddenSites = data.hidden_sites || [];
 
     if (data.edm_ws_token && data.edm_ws_token.length >= 32 && !data.edm_ws_token.startsWith("ed0000000000")) {
       this.token = data.edm_ws_token;
@@ -560,12 +423,6 @@ class PopupController {
     if (this.activeTab === "tasks") {
       app.innerHTML = this.renderTasksTab();
       this.attachTasksEvents();
-    } else if (this.activeTab === "media") {
-      app.innerHTML = this.renderMediaTab();
-      this.attachMediaEvents();
-    } else if (this.activeTab === "grabber") {
-      app.innerHTML = this.renderGrabberTab();
-      this.attachGrabberEvents();
     } else {
       app.innerHTML = this.renderSettingsTab();
       this.attachSettingsEvents();
@@ -1047,252 +904,6 @@ class PopupController {
   }
 
   // ─────────────────────────────────────────────────────────────
-  // MEDIA SNIFFER TAB
-  // ─────────────────────────────────────────────────────────────
-  private renderMediaTab(): string {
-    const mediaResources = this.pageResources.filter((r) => r.type === "video" || r.type === "audio" || r.type === "stream");
-
-    return `
-      <div class="tasks-toolbar" style="display:flex; justify-content:space-between; align-items:center;">
-        <div>
-          <div style="font-weight: 600; font-size: 12px; margin-bottom: 2px;">Media Detected on Active Tab</div>
-          <div style="font-size: 11px; color: #94A3B8;">Direct streams and audio tracks sniffed on this web page.</div>
-        </div>
-        <button id="btnRescanMedia" class="btn-3d" style="font-size:10.5px; padding:3px 8px;">Refresh</button>
-      </div>
-      <div class="downloads-list">
-        ${
-          mediaResources.length === 0
-            ? `
-          <div class="empty-state">
-            <div class="empty-icon">🎬</div>
-            <div style="font-weight: 600;">No media detected on this page</div>
-            <div style="font-size: 11px; max-width: 280px;">Play a video or audio file on the current tab, then click Refresh.</div>
-          </div>
-        `
-            : mediaResources
-                .map(
-                  (m, idx) => `
-          <div class="download-item">
-            <div class="file-icon-box tile-video" style="margin-right: 10px;">
-              ${CATEGORY_SVGS.video}
-            </div>
-            <div class="item-main">
-              <div class="file-title" title="${escapeHtml(m.url)}">${escapeHtml(m.title)}</div>
-              <div class="item-meta">
-                <span>${escapeHtml(m.format || m.quality || (m.type === "audio" ? "Audio" : "Video"))}</span>
-                <span>•</span>
-                <span style="max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(m.url)}</span>
-              </div>
-            </div>
-            <button class="btn-3d btn-primary download-media-btn" data-idx="${idx}" style="padding: 4px 10px; font-size: 11px;">
-              Download
-            </button>
-          </div>
-        `
-                )
-                .join("")
-        }
-      </div>
-    `;
-  }
-
-  private attachMediaEvents() {
-    const rescanBtn = document.getElementById("btnRescanMedia");
-    if (rescanBtn) {
-      rescanBtn.addEventListener("click", () => {
-        rescanBtn.innerText = "Scanning...";
-        this.loadActiveTabResources().then(() => {
-          setTimeout(() => {
-            if (rescanBtn) rescanBtn.innerText = "Refresh";
-          }, 800);
-        });
-      });
-    }
-
-    const mediaResources = this.pageResources.filter((r) => r.type === "video" || r.type === "audio" || r.type === "stream");
-    document.querySelectorAll(".download-media-btn").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const idx = parseInt(btn.getAttribute("data-idx") || "0", 10);
-        const item = mediaResources[idx];
-        if (item) {
-          chrome.runtime.sendMessage({
-            action: "add_download",
-            url: item.url,
-            filename: item.title + (item.format ? `.${item.format.toLowerCase()}` : ""),
-          });
-          this.activeTab = "tasks";
-          document.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("active"));
-          document.querySelector('[data-tab="tasks"]')?.classList.add("active");
-          this.render();
-        }
-      });
-    });
-  }
-
-  // ─────────────────────────────────────────────────────────────
-  // GRAB LINKS TAB
-  // ─────────────────────────────────────────────────────────────
-  private renderGrabberTab(): string {
-    const filtered = this.pageResources.filter((r) => {
-      if (this.grabberFilter === "all") return true;
-      if (this.grabberFilter === "media") return r.type === "video" || r.type === "audio" || r.type === "stream";
-      if (this.grabberFilter === "archive") return r.type === "archive";
-      if (this.grabberFilter === "document") return r.type === "document";
-      if (this.grabberFilter === "executable") return r.type === "executable";
-      return true;
-    });
-
-    const isAllSelected = filtered.length > 0 && filtered.every((r) => this.selectedGrabberUrls.has(r.url));
-
-    return `
-      <div class="tasks-toolbar">
-        <div class="toolbar-row" style="margin-bottom: 6px;">
-          <div class="filter-pills">
-            <button class="filter-pill ${this.grabberFilter === "all" ? "active" : ""}" data-grab-filter="all">All (${this.pageResources.length})</button>
-            <button class="filter-pill ${this.grabberFilter === "media" ? "active" : ""}" data-grab-filter="media">Media</button>
-            <button class="filter-pill ${this.grabberFilter === "archive" ? "active" : ""}" data-grab-filter="archive">Archives</button>
-            <button class="filter-pill ${this.grabberFilter === "document" ? "active" : ""}" data-grab-filter="document">Docs</button>
-            <button class="filter-pill ${this.grabberFilter === "executable" ? "active" : ""}" data-grab-filter="executable">Software</button>
-          </div>
-          <button id="selectAllGrabberBtn" class="btn-3d" style="font-size: 11px;">
-            ${isAllSelected ? "Deselect All" : "Select All"}
-          </button>
-        </div>
-        <div style="display: flex; justify-content: space-between; align-items: center; font-size: 11px;">
-          <span>Selected: <strong style="color: #60A5FA;">${this.selectedGrabberUrls.size}</strong> link(s)</span>
-          <button id="sendBatchBtn" class="btn-3d btn-primary" ${this.selectedGrabberUrls.size === 0 ? "disabled style='opacity:0.4;'" : ""}>
-            Download Selected (${this.selectedGrabberUrls.size})
-          </button>
-        </div>
-      </div>
-      <div class="downloads-list">
-        ${
-          filtered.length === 0
-            ? `
-          <div class="empty-state">
-            <div class="empty-icon">🔗</div>
-            <div style="font-weight: 600;">No matching links on this page</div>
-            <div style="font-size: 11px;">Try another category filter or browse to a page with downloadable content.</div>
-          </div>
-        `
-            : filtered
-                .map((r) => {
-                  const checked = this.selectedGrabberUrls.has(r.url) ? "checked" : "";
-                  return `
-            <div class="download-item" style="padding: 6px 10px;">
-              <input type="checkbox" class="grabber-check" data-url="${escapeHtml(r.url)}" ${checked} style="margin-right: 8px; cursor: pointer;">
-              <div class="item-main">
-                <div class="file-title" style="font-size: 11.5px;" title="${escapeHtml(r.url)}">${escapeHtml(r.title)}</div>
-                <div class="item-meta">
-                  <span>${escapeHtml(r.type.toUpperCase())}</span>
-                  <span>•</span>
-                  <span>${escapeHtml(r.format || r.type.toUpperCase())}</span>
-                  <span>•</span>
-                  <span style="max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(r.url)}</span>
-                </div>
-              </div>
-            </div>
-          `;
-                })
-                .join("")
-        }
-      </div>
-    `;
-  }
-
-  private attachGrabberEvents() {
-    document.querySelectorAll("[data-grab-filter]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        this.grabberFilter = btn.getAttribute("data-grab-filter") || "all";
-        this.render();
-      });
-    });
-
-    const selectAllBtn = document.getElementById("selectAllGrabberBtn");
-    if (selectAllBtn) {
-      selectAllBtn.addEventListener("click", () => {
-        const filtered = this.pageResources.filter((r) => {
-          if (this.grabberFilter === "all") return true;
-          if (this.grabberFilter === "media") return r.type === "video" || r.type === "audio" || r.type === "stream";
-          if (this.grabberFilter === "archive") return r.type === "archive";
-          if (this.grabberFilter === "document") return r.type === "document";
-          if (this.grabberFilter === "executable") return r.type === "executable";
-          return true;
-        });
-        const isAllSelected = filtered.length > 0 && filtered.every((r) => this.selectedGrabberUrls.has(r.url));
-        if (isAllSelected) {
-          filtered.forEach((r) => this.selectedGrabberUrls.delete(r.url));
-        } else {
-          filtered.forEach((r) => this.selectedGrabberUrls.add(r.url));
-        }
-        this.render();
-      });
-    }
-
-    document.querySelectorAll(".grabber-check").forEach((cb) => {
-      cb.addEventListener("change", (e) => {
-        const target = e.target as HTMLInputElement;
-        const url = target.getAttribute("data-url");
-        if (url) {
-          if (target.checked) {
-            this.selectedGrabberUrls.add(url);
-          } else {
-            this.selectedGrabberUrls.delete(url);
-          }
-        }
-        const sendBtn = document.getElementById("sendBatchBtn") as HTMLButtonElement;
-        if (sendBtn) {
-          sendBtn.textContent = `Download Selected (${this.selectedGrabberUrls.size})`;
-          if (this.selectedGrabberUrls.size > 0) {
-            sendBtn.removeAttribute("disabled");
-            sendBtn.removeAttribute("style");
-          } else {
-            sendBtn.setAttribute("disabled", "true");
-            sendBtn.setAttribute("style", "opacity: 0.4;");
-          }
-        }
-      });
-    });
-
-    const sendBatchBtn = document.getElementById("sendBatchBtn");
-    if (sendBatchBtn) {
-      sendBatchBtn.addEventListener("click", () => {
-        if (this.selectedGrabberUrls.size === 0) return;
-        const items = Array.from(this.selectedGrabberUrls).map((url) => {
-          const res = this.pageResources.find((r) => r.url === url);
-          return {
-            url,
-            filename: res ? res.title : undefined,
-          };
-        });
-
-        if (items.length > 1000) {
-          alert("Cannot queue more than 1,000 items in a single batch.");
-          return;
-        }
-
-        if (items.length > 200) {
-          if (!confirm(`You are about to start ${items.length} downloads. Continue?`)) {
-            return;
-          }
-        }
-
-        chrome.runtime.sendMessage({
-          action: "batch_add",
-          items,
-        });
-
-        this.selectedGrabberUrls.clear();
-        this.activeTab = "tasks";
-        document.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("active"));
-        document.querySelector('[data-tab="tasks"]')?.classList.add("active");
-        this.render();
-      });
-    }
-  }
-
-  // ─────────────────────────────────────────────────────────────
   // 2. UNIFIED SETTINGS TAB
   // ─────────────────────────────────────────────────────────────
   private renderSettingsTab(): string {
@@ -1422,45 +1033,6 @@ class PopupController {
               <input type="checkbox" id="notifyFailToggle" checked>
               <span class="slider"></span>
             </label>
-          </div>
-        </div>
-
-        <!-- Media Download Buttons (Master, YouTube, Other Sites, Hidden Sites) -->
-        <div class="settings-group" style="padding: 14px; background: #070e1b; border: 1px solid #1a273e; border-radius: 10px;">
-          <div class="settings-group-title" style="font-size: 13.5px; font-weight: 700; color: #FFFFFF; margin-bottom: 6px;">Media Download Buttons</div>
-          <div class="setting-row" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-            <div>
-              <div class="setting-label" style="font-size: 12px; font-weight: 600;">Enable Download Buttons</div>
-              <div class="setting-desc" style="font-size: 11px; color: #8fa0be;">Master switch for in-page download buttons</div>
-            </div>
-            <label class="switch">
-              <input type="checkbox" id="mediaMasterToggle" ${this.mediaMaster ? "checked" : ""}>
-              <span class="slider"></span>
-            </label>
-          </div>
-          <div class="setting-row" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-            <div>
-              <div class="setting-label" style="font-size: 12px; font-weight: 600;">YouTube Action Row Pill</div>
-              <div class="setting-desc" style="font-size: 11px; color: #8fa0be;">Show EDM pill button next to Subscribe on YouTube</div>
-            </div>
-            <label class="switch">
-              <input type="checkbox" id="mediaYouTubeToggle" ${this.mediaYouTube ? "checked" : ""}>
-              <span class="slider"></span>
-            </label>
-          </div>
-          <div class="setting-row" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-            <div>
-              <div class="setting-label" style="font-size: 12px; font-weight: 600;">Other Sites Floating Button</div>
-              <div class="setting-desc" style="font-size: 11px; color: #8fa0be;">Show bottom-right floating button on other video sites</div>
-            </div>
-            <label class="switch">
-              <input type="checkbox" id="mediaOtherSitesToggle" ${this.mediaOtherSites ? "checked" : ""}>
-              <span class="slider"></span>
-            </label>
-          </div>
-          <div style="font-size: 11px; color: #8fa0be; margin-top: 8px; display: flex; justify-content: space-between; align-items: center;">
-            <span>Hidden Sites: <strong>${this.hiddenSites.length}</strong> site(s)</span>
-            ${this.hiddenSites.length > 0 ? `<button id="btnClearHiddenSites" class="btn-3d" style="font-size: 10.5px; padding: 2px 8px;">Clear Hidden Sites</button>` : ''}
           </div>
         </div>
 
@@ -1681,40 +1253,6 @@ class PopupController {
         const val = themeSelect.value;
         document.documentElement.setAttribute("data-theme", val);
         await chrome.storage.local.set({ edm_theme: val });
-      });
-    }
-
-    // Media Button Toggles
-    const masterToggle = document.getElementById("mediaMasterToggle") as HTMLInputElement;
-    if (masterToggle) {
-      masterToggle.addEventListener("change", async () => {
-        this.mediaMaster = masterToggle.checked;
-        await chrome.storage.local.set({ media_button_master: this.mediaMaster });
-      });
-    }
-
-    const ytToggle = document.getElementById("mediaYouTubeToggle") as HTMLInputElement;
-    if (ytToggle) {
-      ytToggle.addEventListener("change", async () => {
-        this.mediaYouTube = ytToggle.checked;
-        await chrome.storage.local.set({ media_button_youtube: this.mediaYouTube });
-      });
-    }
-
-    const otherToggle = document.getElementById("mediaOtherSitesToggle") as HTMLInputElement;
-    if (otherToggle) {
-      otherToggle.addEventListener("change", async () => {
-        this.mediaOtherSites = otherToggle.checked;
-        await chrome.storage.local.set({ media_button_other_sites: this.mediaOtherSites });
-      });
-    }
-
-    const clearHiddenBtn = document.getElementById("btnClearHiddenSites");
-    if (clearHiddenBtn) {
-      clearHiddenBtn.addEventListener("click", async () => {
-        this.hiddenSites = [];
-        await chrome.storage.local.set({ hidden_sites: [], disabled_video_domains: [] });
-        this.render();
       });
     }
 

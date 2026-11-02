@@ -64,6 +64,8 @@ import {
 import { EdmSettings, defaultSettings, saveSettings } from "../types/settings";
 import { FEATURE_PACKS } from "../types/featurePacks";
 import { QueuesView } from "./QueuesView";
+import { ExtensionInstallModal } from "./ExtensionInstallModal";
+import { cleanupExtensionFolder } from "../services/extensionInstaller";
 import { formatBytes } from "../utils/format";
 import { motion, AnimatePresence } from "motion/react";
 import { springs, popoverVariants } from "../utils/motion";
@@ -152,6 +154,8 @@ export default function SettingsPage({
   const [copiedExtPath, setCopiedExtPath] = useState<boolean>(false);
   const [isProvisioningExt, setIsProvisioningExt] = useState<boolean>(false);
   const [extFeedback, setExtFeedback] = useState<string | null>(null);
+  const [isExtModalOpen, setIsExtModalOpen] = useState<boolean>(false);
+  const [extModalBrowser, setExtModalBrowser] = useState<"chrome" | "edge" | "brave">("chrome");
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const isProgrammaticScrollRef = useRef(false);
 
@@ -250,9 +254,9 @@ export default function SettingsPage({
     },
     {
       id: "automation" as const,
-      label: "Automation & Alerts",
+      label: "Alerts & Notifications",
       icon: Clock,
-      desc: "Off-peak scheduler, power actions, desktop notifications",
+      desc: "Desktop toast notifications and completed task audio alerts",
     },
     {
       id: "engine" as const,
@@ -487,12 +491,29 @@ export default function SettingsPage({
     try {
       const p = await tauriPrepareExtensionFiles();
       setExtFolderPath(p);
-      setExtFeedback("Extension successfully verified and provisioned to %LOCALAPPDATA%\\EDM\\extension! Connected extensions will reload automatically.");
+      setExtFeedback("Extension successfully verified and provisioned to user folder! Connected extensions will reload automatically.");
       setTimeout(() => setExtFeedback(null), 5000);
     } catch (err: any) {
       setExtFeedback(`Failed: ${err?.message || String(err)}`);
     } finally {
       setIsProvisioningExt(false);
+    }
+  };
+
+  const handleRemoveExtensionFolder = async () => {
+    if (
+      confirm(
+        "Are you sure you want to remove the permanent extension folder from disk? EDM's bundled extension files will be deleted from your user AppData directory. You can recreate them at any time by clicking 'Add Extension'."
+      )
+    ) {
+      try {
+        await cleanupExtensionFolder();
+        setExtFolderPath("");
+        setExtFeedback("Extension folder successfully removed from disk.");
+        setTimeout(() => setExtFeedback(null), 4000);
+      } catch (err: any) {
+        setExtFeedback(`Failed to remove folder: ${err?.message || String(err)}`);
+      }
     }
   };
 
@@ -1640,7 +1661,17 @@ export default function SettingsPage({
                       Extension code is integrity-checked against shipped SHA-256 hashes and kept in your user folder. The extension auto-reloads safely when idle.
                     </p>
                   </div>
-                  <div className="flex items-center gap-2 shrink-0">
+                  <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                    <button
+                      onClick={() => {
+                        setExtModalBrowser("chrome");
+                        setIsExtModalOpen(true);
+                      }}
+                      className="h-7 px-3 rounded-lg text-[11px] font-semibold bg-gradient-to-b from-[#FFFFFF] to-[#D8DBE0] text-[#0A0B0E] hover:from-[#FFFFFF] hover:to-[#EBEEF3] shadow-[0_1px_3px_rgba(0,0,0,0.4),inset_0_1px_0_rgba(255,255,255,0.9)] inline-flex items-center gap-1.5 cursor-pointer transition-all"
+                    >
+                      <Sparkles className="w-3 h-3 text-[#0A0B0E]" />
+                      <span>Add Extension</span>
+                    </button>
                     <motion.button
                       whileTap={{ scale: 0.95 }}
                       onClick={handleCopyExtPath}
@@ -1654,7 +1685,7 @@ export default function SettingsPage({
                       ) : (
                         <>
                           <Copy className="w-3 h-3" />
-                          <span>Copy Folder Path</span>
+                          <span>Copy Path</span>
                         </>
                       )}
                     </motion.button>
@@ -1662,16 +1693,24 @@ export default function SettingsPage({
                       whileTap={{ scale: 0.95 }}
                       onClick={handleReinstallExtension}
                       disabled={isProvisioningExt}
-                      className="btn-3d btn-primary h-7 px-2.5 rounded-lg text-[11px] font-semibold inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                      className="btn-3d h-7 px-2.5 rounded-lg text-[11px] font-semibold inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
                     >
                       <RefreshCw className={`w-3 h-3 ${isProvisioningExt ? "animate-spin" : ""}`} />
-                      <span>{isProvisioningExt ? "Verifying..." : "Reinstall / Verify"}</span>
+                      <span>{isProvisioningExt ? "Verifying..." : "Verify / Sync"}</span>
                     </motion.button>
+                    <button
+                      onClick={handleRemoveExtensionFolder}
+                      className="h-7 px-2.5 rounded-lg text-[11px] font-semibold text-rose-400 hover:text-rose-300 hover:bg-rose-500/10 border border-rose-500/20 inline-flex items-center gap-1.5 cursor-pointer transition-colors"
+                      title="Remove extension folder from user AppData"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                      <span>Remove Extension Folder</span>
+                    </button>
                   </div>
                 </div>
 
                 {extFeedback && (
-                  <div className="px-3 py-2 rounded-lg text-[11px] font-medium bg-blue-500/15 text-blue-300 border border-blue-500/30">
+                  <div className="px-3 py-2 rounded-lg text-[11px] font-medium bg-white/[0.04] text-white border border-white/10">
                     {extFeedback}
                   </div>
                 )}
@@ -1682,44 +1721,53 @@ export default function SettingsPage({
                     <span className="text-emerald-400 font-medium">User Protected</span>
                   </div>
                   <code className="text-xs font-mono text-[var(--accent)] block truncate">
-                    {extFolderPath || "%LOCALAPPDATA%\\EDM\\extension"}
+                    {extFolderPath || "%AppData%\\EDM\\extension"}
                   </code>
                 </div>
 
-                {/* Quick Browser Launch & One-Click Install */}
+                {/* Direct Unpacked Extensions Page Launches */}
                 <div className="space-y-2 pt-1">
                   <div className="flex items-center justify-between">
-                    <span className="text-[11px] font-semibold text-[var(--text-secondary)]">One-Click Browser Install:</span>
-                    <span className="text-[10px] text-[var(--text-muted)]">Opens store prompt in browser exe</span>
+                    <span className="text-[11px] font-semibold text-[var(--text-secondary)]">Offline Bundled Extension:</span>
+                    <span className="text-[10px] text-[var(--text-muted)]">No external servers or Chrome Web Store required</span>
                   </div>
                   <div className="flex items-center gap-2 flex-wrap">
                     <button
-                      onClick={() => tauriOpenBrowserUrl("chrome", "https://chromewebstore.google.com/detail/edm-edge-download-manager/ebdcbpghekpbgjiclaclbgmdnimeheci")}
-                      className="px-2.5 py-1 rounded bg-[var(--bg-chassis)] hover:bg-[var(--bg-card)] border border-[var(--border-subtle)] text-[11px] font-medium cursor-pointer"
+                      onClick={() => {
+                        setExtModalBrowser("chrome");
+                        setIsExtModalOpen(true);
+                      }}
+                      className="px-2.5 py-1 rounded bg-[var(--bg-chassis)] hover:bg-[var(--bg-card)] border border-[var(--border-subtle)] text-[11px] font-medium cursor-pointer inline-flex items-center gap-1.5"
                     >
-                      Add to Chrome
+                      <span>Install in Chrome</span>
                     </button>
                     <button
-                      onClick={() => tauriOpenBrowserUrl("edge", "https://microsoftedge.microsoft.com/addons/detail/edm-edge-download-manager/knldjmfmopnpolahpmmgbagdohdnhkik")}
-                      className="px-2.5 py-1 rounded bg-[var(--bg-chassis)] hover:bg-[var(--bg-card)] border border-[var(--border-subtle)] text-[11px] font-medium cursor-pointer"
+                      onClick={() => {
+                        setExtModalBrowser("edge");
+                        setIsExtModalOpen(true);
+                      }}
+                      className="px-2.5 py-1 rounded bg-[var(--bg-chassis)] hover:bg-[var(--bg-card)] border border-[var(--border-subtle)] text-[11px] font-medium cursor-pointer inline-flex items-center gap-1.5"
                     >
-                      Add to Edge
+                      <span>Install in Edge</span>
                     </button>
                     <button
-                      onClick={() => tauriOpenBrowserUrl("brave", "https://chromewebstore.google.com/detail/edm-edge-download-manager/ebdcbpghekpbgjiclaclbgmdnimeheci")}
-                      className="px-2.5 py-1 rounded bg-[var(--bg-chassis)] hover:bg-[var(--bg-card)] border border-[var(--border-subtle)] text-[11px] font-medium cursor-pointer"
+                      onClick={() => {
+                        setExtModalBrowser("brave");
+                        setIsExtModalOpen(true);
+                      }}
+                      className="px-2.5 py-1 rounded bg-[var(--bg-chassis)] hover:bg-[var(--bg-card)] border border-[var(--border-subtle)] text-[11px] font-medium cursor-pointer inline-flex items-center gap-1.5"
                     >
-                      Add to Brave
+                      <span>Install in Brave</span>
                     </button>
                     <button
                       onClick={() => tauriOpenBrowserUrl("firefox", "http://127.0.0.1:14370/firefox.xpi")}
-                      className="px-2.5 py-1 rounded bg-[var(--bg-chassis)] hover:bg-[var(--bg-card)] border border-[var(--border-subtle)] text-[11px] font-medium cursor-pointer text-orange-400"
+                      className="px-2.5 py-1 rounded bg-[var(--bg-chassis)] hover:bg-[var(--bg-card)] border border-[var(--border-subtle)] text-[11px] font-medium cursor-pointer text-orange-400 inline-flex items-center gap-1.5"
                     >
-                      Add to Firefox (.xpi)
+                      <span>Firefox (.xpi)</span>
                     </button>
                   </div>
                   <div className="flex items-center gap-2 pt-1 flex-wrap text-[10.5px] text-[var(--text-muted)]">
-                    <span>Manage Unpacked Extensions:</span>
+                    <span>Manage browser extensions page directly:</span>
                     <button
                       onClick={() => tauriOpenBrowserUrl("chrome", "chrome://extensions")}
                       className="hover:text-[var(--text-primary)] underline cursor-pointer"
@@ -1953,105 +2001,36 @@ export default function SettingsPage({
               SECTION: QUEUES & SCHEDULE
           ══════════════════════════════════════════════════════════ */}
           {isSectionVisible("queues") && (
-            <section id="section-queues" className="space-y-6 pt-1 pb-8 border-b border-[var(--border-subtle)]">
+            <section id="section-queues" className="space-y-4 pt-1 pb-8 border-b border-[var(--border-subtle)]">
               <div>
                 <div className="flex items-center gap-2">
-                  <Layers className="w-5 h-5 text-[var(--accent)]" />
-                  <h2 className="text-base font-bold text-[var(--text-primary)]">Queues &amp; Schedule</h2>
+                  <Layers className="w-5 h-5 text-[#A0A5B0]" />
+                  <h2 className="text-base font-bold text-[#FFFFFF]">Queue Scheduler &amp; Rules</h2>
                 </div>
                 <p className="text-xs text-[var(--text-muted)] mt-1">
-                  Automate download windows, bandwidth caps, and post-task actions.
+                  Automate download windows, bandwidth caps, and post-task actions per queue.
                 </p>
               </div>
 
-              <div className="rounded-xl overflow-hidden border border-[var(--border-subtle)] h-[580px] flex flex-col">
-                <QueuesView />
+              <div className="rounded-xl overflow-hidden border border-white/10 h-[580px] flex flex-col shadow-[0_2px_12px_rgba(0,0,0,0.5)]">
+                <QueuesView embedded={true} />
               </div>
             </section>
           )}
 
           {/* ═════════════════════════════════════════════════════════
-              SECTION 4: AUTOMATION & QUEUES
+              SECTION 4: ALERTS & NOTIFICATIONS
           ══════════════════════════════════════════════════════════ */}
           {isSectionVisible("automation") && (
             <section id="section-automation" className="space-y-6 pt-1 pb-8 border-b border-[var(--border-subtle)]">
               <div>
                 <div className="flex items-center gap-2">
-                  <Clock className="w-5 h-5 text-[var(--accent)]" />
-                  <h2 className="text-base font-bold text-[var(--text-primary)]">Automation, Queues & Alerts</h2>
+                  <Clock className="w-5 h-5 text-[#A0A5B0]" />
+                  <h2 className="text-base font-bold text-[#FFFFFF]">Alerts &amp; Notifications</h2>
                 </div>
                 <p className="text-xs text-[var(--text-muted)] mt-1">
-                  Schedule off-peak downloads, trigger automated power events on completion, and customize desktop notifications.
+                  Configure desktop toast alerts and audio cues upon download completion.
                 </p>
-              </div>
-
-              {/* Download Scheduler Card */}
-              <div className="card-3d p-4 rounded-xl space-y-3">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <label className="text-xs font-semibold text-[var(--text-primary)] block">
-                      Scheduled Downloads & Off-Peak Bandwidth
-                    </label>
-                    <span className="text-[11px] text-[var(--text-muted)]">
-                      Automatically start queue during designated low-cost hours.
-                    </span>
-                  </div>
-                  <input
-                    type="checkbox"
-                    checked={settings.queues.schedulerEnabled}
-                    onChange={(e) => update("queues", { schedulerEnabled: e.target.checked })}
-                    className="w-[18px] h-[18px] rounded accent-[var(--accent)] cursor-pointer"
-                  />
-                </div>
-
-                {settings.queues.schedulerEnabled && (
-                  <div className="p-3 rounded-lg bg-[var(--bg-chassis)] border border-[var(--border-subtle)] grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="text-[10px] font-semibold text-[var(--text-muted)] uppercase block mb-1">
-                        Start Time
-                      </label>
-                      <input
-                        type="time"
-                        value={settings.queues.offPeakStart}
-                        onChange={(e) => update("queues", { offPeakStart: e.target.value })}
-                        className="w-full h-8 px-2 rounded-lg bg-[var(--bg-card)] border border-[var(--border-subtle)] text-xs font-mono text-[var(--text-primary)]"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-semibold text-[var(--text-muted)] uppercase block mb-1">
-                        End Time
-                      </label>
-                      <input
-                        type="time"
-                        value={settings.queues.offPeakEnd}
-                        onChange={(e) => update("queues", { offPeakEnd: e.target.value })}
-                        className="w-full h-8 px-2 rounded-lg bg-[var(--bg-card)] border border-[var(--border-subtle)] text-xs font-mono text-[var(--text-primary)]"
-                      />
-                    </div>
-                  </div>
-                )}
-
-                {/* Post Completion Action */}
-                <div className="pt-2 border-t border-[var(--border-subtle)] flex items-center justify-between">
-                  <div>
-                    <label className="text-xs font-semibold text-[var(--text-primary)] block">
-                      Action When All Downloads Complete
-                    </label>
-                    <span className="text-[11px] text-[var(--text-muted)]">
-                      Execute automated OS power action upon queue drain.
-                    </span>
-                  </div>
-                  <select
-                    value={settings.queues.postCompletionAction}
-                    onChange={(e) => update("queues", { postCompletionAction: e.target.value as any })}
-                    className="h-8 px-2.5 rounded-lg bg-[var(--bg-chassis)] border border-[var(--border-subtle)] text-xs text-[var(--text-primary)]"
-                  >
-                    <option value="none">Do Nothing</option>
-                    <option value="sleep">Sleep Computer</option>
-                    <option value="hibernate">Hibernate</option>
-                    <option value="shutdown">Shut Down PC</option>
-                  </select>
-                </div>
               </div>
 
               {/* Desktop Notifications Card */}
@@ -2607,6 +2586,12 @@ export default function SettingsPage({
           </div>
         </div>
       </footer>
+
+      <ExtensionInstallModal
+        isOpen={isExtModalOpen}
+        onClose={() => setIsExtModalOpen(false)}
+        initialBrowserId={extModalBrowser}
+      />
     </div>
   );
 }
