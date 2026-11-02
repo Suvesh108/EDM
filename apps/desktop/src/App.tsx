@@ -36,11 +36,9 @@ import {
 } from "lucide-react";
 import SettingsPage from "./components/SettingsPage";
 import SetupWizard from "./components/SetupWizard";
-import { HistoryView } from "./components/HistoryView";
 import { BatchDownloadModal } from "./components/BatchDownloadModal";
 import { RefreshLinkModal } from "./components/RefreshLinkModal";
 import { PowerCountdownModal } from "./components/PowerCountdownModal";
-import { ExtensionInstallModal } from "./components/ExtensionInstallModal";
 import { SpeedChartInteractive } from "./components/SpeedChartInteractive";
 import { loadSettings, saveSettings, EdmSettings } from "./types/settings";
 import { formatBytes, formatSpeed, formatEta } from "./utils/format";
@@ -164,11 +162,10 @@ export const generateSpeedSvgPath = (history: number[] = [], peakBps: number = 0
 };
 
 export default function App() {
-  const [activeView, setActiveView] = useState<"downloads" | "settings" | "history">(
+  const [activeView, setActiveView] = useState<"downloads" | "settings">(
     () => {
       if (typeof window !== "undefined") {
         if (window.location.hash === "#settings" || window.location.hash === "#queues" || window.location.hash === "#section-queues") return "settings";
-        if (window.location.hash === "#history") return "history";
       }
       return "downloads";
     }
@@ -176,7 +173,6 @@ export default function App() {
   const [settings, setSettings] = useState<EdmSettings>(loadSettings);
   const [isWizardOpen, setIsWizardOpen] = useState(false);
   const [isBatchModalOpen, setIsBatchModalOpen] = useState(false);
-  const [isExtModalOpen, setIsExtModalOpen] = useState(false);
   const [refreshModalTask, setRefreshModalTask] = useState<DownloadItem | null>(null);
 
   useEffect(() => {
@@ -202,7 +198,6 @@ export default function App() {
   useEffect(() => {
     const handleHash = () => {
       if (window.location.hash === "#settings" || window.location.hash === "#queues" || window.location.hash === "#section-queues") setActiveView("settings");
-      else if (window.location.hash === "#history") setActiveView("history");
       else setActiveView("downloads");
     };
     window.addEventListener("hashchange", handleHash);
@@ -912,22 +907,6 @@ export default function App() {
               onOpenWizard={() => setIsWizardOpen(true)}
             />
           </motion.div>
-        ) : activeView === "history" ? (
-          <motion.div
-            key="history-view"
-            variants={viewVariants}
-            initial="initial"
-            animate="animate"
-            exit="exit"
-            className="flex-1 flex flex-col min-h-0 overflow-hidden w-full h-full"
-          >
-            <HistoryView
-              onBack={() => {
-                setActiveView("downloads");
-                window.location.hash = "";
-              }}
-            />
-          </motion.div>
         ) : (
           <motion.div
             key="downloads-view"
@@ -1114,15 +1093,6 @@ export default function App() {
             {/* Right: Unified Integrated Window Controls & Quick Actions */}
             <div className="flex items-center gap-1 shrink-0 z-10 ml-auto" data-tauri-drag-region="false">
               <button
-                onClick={() => setIsExtModalOpen(true)}
-                className="btn-3d h-7 px-2 sm:px-2.5 rounded-lg flex items-center gap-1.5 text-xs font-medium text-[var(--text-secondary)] hover:text-white cursor-pointer mr-1"
-                title="Add Bundled Browser Extension (Chrome & Edge)"
-              >
-                <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-                <span className="hidden sm:inline">Add extension</span>
-              </button>
-
-              <button
                 onClick={(e) => {
                   e.stopPropagation();
                   tauriWindowMinimize();
@@ -1242,26 +1212,6 @@ export default function App() {
                   </button>
                 );
               })}
-            </div>
-
-            <div className="w-5 h-[1px] bg-[var(--border-subtle)] my-0.5" />
-
-            {/* Specialized Views (History) */}
-            <div className="space-y-0.5">
-              <button
-                onClick={() => {
-                  setActiveView("history");
-                  window.location.hash = "#history";
-                }}
-                title="Download History & Logs"
-                className={`w-8 h-8 mx-auto flex items-center justify-center rounded-lg text-xs font-medium transition-all duration-150 cursor-pointer ${
-                  (activeView as string) === "history"
-                    ? "sidebar-item-active-3d text-[var(--accent)] font-semibold shadow-sm"
-                    : "sidebar-item-inactive-3d text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
-                }`}
-              >
-                <RotateCcw className="w-3.5 h-3.5" />
-              </button>
             </div>
           </div>
         </aside>
@@ -1715,23 +1665,6 @@ export default function App() {
           >
             <Settings className="w-3.5 h-3.5 text-[var(--accent)] shrink-0 icon-3d" />
             <span className="hidden xs:inline">Settings</span>
-          </button>
-
-          {/* History Trigger */}
-          <button
-            onClick={() => {
-              setActiveView("history");
-              window.location.hash = "#history";
-            }}
-            className={`h-7 px-2.5 rounded-md text-[11px] sm:text-xs font-medium btn-3d inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer ${
-              (activeView as string) === "history"
-                ? "text-[var(--accent)] font-semibold shadow-sm"
-                : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
-            }`}
-            title="Download History & Logs"
-          >
-            <RotateCcw className="w-3.5 h-3.5 text-[var(--accent)] shrink-0 icon-3d" />
-            <span className="hidden xs:inline">History</span>
           </button>
 
           {/* Speed Limiter Dial (Opens upward from status bar) */}
@@ -2384,11 +2317,6 @@ export default function App() {
             )
           );
         }}
-      />
-
-      <ExtensionInstallModal
-        isOpen={isExtModalOpen}
-        onClose={() => setIsExtModalOpen(false)}
       />
 
       <PowerCountdownModal />
