@@ -161,50 +161,50 @@ export const QueuesView: React.FC<QueuesViewProps> = ({ onBack, embedded = false
     .filter(Boolean);
 
   return (
-    <div className="flex-1 flex flex-col min-h-0 bg-[#090A0D] text-[#E4E6EA]">
+    <div className={`flex flex-col ${embedded ? "w-full" : "flex-1 min-h-0 bg-[var(--bg-chassis)]"} text-[var(--text-primary)]`}>
       {/* Top Header - Shown when not embedded or when standalone */}
       {!embedded && (
-        <div className="h-12 border-b border-white/10 px-4 flex items-center justify-between shrink-0 bg-[#0D0E12]">
+        <div className="h-12 border-b border-[var(--border-subtle)] px-4 flex items-center justify-between shrink-0 bg-[var(--bg-header)]">
           <div className="flex items-center gap-2">
             {onBack && (
               <button
                 onClick={onBack}
-                className="p-1.5 rounded-lg text-[#8E939E] hover:text-white hover:bg-white/5 transition-colors cursor-pointer mr-1"
+                className="p-1.5 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-white/5 transition-colors cursor-pointer mr-1"
                 title="Back to Downloads"
               >
                 <ArrowLeft className="w-4 h-4" />
               </button>
             )}
-            <Layers className="w-4 h-4 text-[#A0A5B0]" />
-            <h2 className="text-sm font-semibold tracking-tight text-[#FFFFFF]">Queue Scheduler & Rules</h2>
-            <span className="text-xs text-[#7C818A] ml-2 hidden sm:inline">
+            <Layers className="w-4 h-4 text-[var(--accent)]" />
+            <h2 className="text-sm font-semibold tracking-tight text-[var(--text-primary)]">Queue Scheduler & Rules</h2>
+            <span className="text-xs text-[var(--text-muted)] ml-2 hidden sm:inline">
               Automate download windows, bandwidth caps, and post-task actions
             </span>
           </div>
           <button
             onClick={handleCreateQueue}
-            className="h-7 px-3 rounded-lg text-xs font-medium bg-white/10 hover:bg-white/15 text-white border border-white/10 inline-flex items-center gap-1.5 cursor-pointer shadow-sm transition-colors"
+            className="btn-3d h-7 px-3 rounded-lg text-xs font-medium text-[var(--text-primary)] inline-flex items-center gap-1.5 cursor-pointer shadow-sm transition-colors"
           >
-            <Plus className="w-3.5 h-3.5" />
+            <Plus className="w-3.5 h-3.5 text-[var(--accent)]" />
             <span>New Queue</span>
           </button>
         </div>
       )}
 
       {/* Main Content Area: Split 2-Column Chassis */}
-      <div className="flex-1 flex min-h-0 overflow-hidden">
+      <div className={`flex flex-col md:flex-row ${embedded ? "min-h-[460px]" : "flex-1 min-h-0 overflow-hidden"}`}>
         {/* Left: Queue List Sidebar */}
-        <div className="w-56 border-r border-white/10 bg-[#0D0E12] p-3 flex flex-col gap-2 shrink-0 overflow-y-auto">
-          <div className="flex items-center justify-between px-1 mb-1">
-            <span className="text-[11px] font-semibold uppercase tracking-wider text-[#7C818A]">
+        <div className="w-full md:w-60 border-b md:border-b-0 md:border-r border-[var(--border-subtle)] bg-[var(--bg-sidebar)] p-3.5 flex flex-col shrink-0">
+          <div className="flex items-center justify-between px-1 mb-2">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-[var(--text-muted)]">
               Queues
             </span>
-            <span className="text-[10px] font-mono font-medium px-1.5 py-0.5 rounded bg-white/5 text-[#8E939E] border border-white/5">
+            <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded-full bg-[var(--bg-chassis)] text-[var(--text-secondary)] border border-[var(--border-subtle)]">
               {queues.length}
             </span>
           </div>
 
-          <div className="space-y-1">
+          <div className="space-y-1 mb-3">
             {queues.map((q) => {
               const isSelected = q.id === selectedQueueId;
               return (
@@ -213,12 +213,12 @@ export const QueuesView: React.FC<QueuesViewProps> = ({ onBack, embedded = false
                   onClick={() => handleSelectQueue(q)}
                   className={`w-full text-left px-3 py-2 rounded-xl text-xs flex items-center justify-between cursor-pointer transition-all ${
                     isSelected
-                      ? "bg-white/[0.08] text-[#FFFFFF] font-semibold border border-white/15 shadow-[0_1px_3px_rgba(0,0,0,0.5),inset_0_1px_0_rgba(255,255,255,0.08)]"
-                      : "text-[#8E939E] hover:text-[#FFFFFF] hover:bg-white/[0.03] border border-transparent"
+                      ? "sidebar-item-active-3d text-[var(--text-primary)] font-semibold shadow-sm"
+                      : "sidebar-item-inactive-3d text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
                   }`}
                 >
                   <div className="flex items-center gap-2 truncate">
-                    <Layers className={`w-3.5 h-3.5 shrink-0 ${isSelected ? "text-white" : "text-[#7C818A]"}`} />
+                    <Layers className={`w-3.5 h-3.5 shrink-0 ${isSelected ? "text-[var(--accent)]" : "text-[var(--text-muted)]"}`} />
                     <span className="truncate">{q.name}</span>
                   </div>
                   {q.id !== "main" && (
@@ -227,7 +227,7 @@ export const QueuesView: React.FC<QueuesViewProps> = ({ onBack, embedded = false
                         e.stopPropagation();
                         handleDelete(q.id);
                       }}
-                      className="p-1 rounded text-[#7C818A] hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
+                      className="p-1 rounded text-[var(--text-muted)] hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
                       title="Delete Queue"
                     >
                       <Trash2 className="w-3 h-3" />
@@ -238,48 +238,46 @@ export const QueuesView: React.FC<QueuesViewProps> = ({ onBack, embedded = false
             })}
           </div>
 
-          {/* New Queue Trigger for Embedded View */}
-          {embedded && (
-            <button
-              onClick={handleCreateQueue}
-              className="mt-auto h-8 px-3 rounded-lg text-xs font-medium bg-white/[0.04] hover:bg-white/[0.08] text-[#B8BCC4] hover:text-white border border-white/10 inline-flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              <span>New Queue</span>
-            </button>
-          )}
+          {/* New Queue Trigger */}
+          <button
+            onClick={handleCreateQueue}
+            className="w-full h-8 px-3 rounded-lg text-xs font-semibold btn-3d inline-flex items-center justify-center gap-1.5 cursor-pointer text-[var(--text-secondary)] hover:text-[var(--text-primary)] border border-dashed border-[var(--border-strong)] hover:border-[var(--accent)] transition-all"
+          >
+            <Plus className="w-3.5 h-3.5 text-[var(--accent)]" />
+            <span>New Queue</span>
+          </button>
         </div>
 
         {/* Right: Queue Config Inspector */}
         {editingQueue ? (
-          <div className="flex-1 p-5 sm:p-6 overflow-y-auto space-y-5 max-w-3xl">
+          <div className={`flex-1 p-5 sm:p-6 space-y-5 max-w-3xl ${embedded ? "" : "overflow-y-auto"}`}>
             {/* 1. General Configuration Card */}
-            <div className="rounded-xl border border-white/10 bg-white/[0.02] p-5 space-y-4 shadow-[0_1px_2px_rgba(0,0,0,0.3)]">
+            <div className="card-3d p-5 rounded-xl space-y-4">
               <div className="flex items-center gap-2">
-                <Sliders className="w-3.5 h-3.5 text-[#A0A5B0]" />
-                <h3 className="text-xs font-semibold uppercase tracking-wider text-[#E4E6EA]">
+                <Sliders className="w-3.5 h-3.5 text-[var(--accent)]" />
+                <h3 className="text-xs font-bold uppercase tracking-wider text-[var(--text-primary)]">
                   General Configuration
                 </h3>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <label className="text-xs font-medium text-[#8E939E] block mb-1.5">
+                  <label className="text-xs font-medium text-[var(--text-secondary)] block mb-1.5">
                     Queue Name
                   </label>
                   <input
                     type="text"
                     value={editingQueue.name}
                     onChange={(e) => setEditingQueue({ ...editingQueue, name: e.target.value })}
-                    className="w-full h-8 px-3 rounded-lg text-xs bg-black/40 border border-white/10 text-[#FFFFFF] focus:outline-none focus:border-white/30 transition-colors"
+                    className="w-full h-8 px-3 rounded-lg text-xs bg-[var(--bg-chassis)] border border-[var(--border-subtle)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)] transition-colors"
                   />
                 </div>
                 <div>
                   <div className="flex items-center justify-between mb-1.5">
-                    <label className="text-xs font-medium text-[#8E939E]">
+                    <label className="text-xs font-medium text-[var(--text-secondary)]">
                       Max Concurrent Downloads
                     </label>
-                    <span className="font-mono text-xs font-semibold px-2 py-0.5 rounded bg-white/10 text-white border border-white/10">
+                    <span className="font-mono text-xs font-semibold px-2 py-0.5 rounded bg-[var(--bg-chassis)] text-[var(--accent)] border border-[var(--border-subtle)]">
                       {editingQueue.max_concurrent}
                     </span>
                   </div>
@@ -291,15 +289,15 @@ export const QueuesView: React.FC<QueuesViewProps> = ({ onBack, embedded = false
                     onChange={(e) =>
                       setEditingQueue({ ...editingQueue, max_concurrent: parseInt(e.target.value) || 1 })
                     }
-                    className="w-full accent-white cursor-pointer h-1.5 bg-white/10 rounded-lg"
+                    className="w-full accent-[var(--accent)] cursor-pointer h-1.5 bg-[var(--bg-chassis)] rounded-lg"
                   />
                 </div>
               </div>
 
               {/* Bandwidth Limit */}
               <div>
-                <label className="text-xs font-medium text-[#8E939E] block mb-1.5 flex items-center gap-1.5">
-                  <Gauge className="w-3.5 h-3.5 text-[#7C818A]" />
+                <label className="text-xs font-medium text-[var(--text-secondary)] block mb-1.5 flex items-center gap-1.5">
+                  <Gauge className="w-3.5 h-3.5 text-[var(--text-muted)]" />
                   <span>Speed Limit (KB/s, 0 = Unlimited)</span>
                 </label>
                 <div className="flex items-center gap-2 max-w-xs">
@@ -320,9 +318,9 @@ export const QueuesView: React.FC<QueuesViewProps> = ({ onBack, embedded = false
                       });
                     }}
                     placeholder="0 = Unlimited"
-                    className="w-full h-8 px-3 rounded-lg text-xs bg-black/40 border border-white/10 text-[#FFFFFF] focus:outline-none focus:border-white/30 font-mono transition-colors"
+                    className="w-full h-8 px-3 rounded-lg text-xs bg-[var(--bg-chassis)] border border-[var(--border-subtle)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)] font-mono transition-colors"
                   />
-                  <span className="text-xs font-mono text-[#7C818A] px-2 py-1 rounded bg-white/[0.04] border border-white/5">
+                  <span className="text-xs font-mono text-[var(--text-muted)] px-2.5 py-1.5 rounded-lg bg-[var(--bg-chassis)] border border-[var(--border-subtle)]">
                     KB/s
                   </span>
                 </div>
@@ -330,11 +328,11 @@ export const QueuesView: React.FC<QueuesViewProps> = ({ onBack, embedded = false
             </div>
 
             {/* 2. Scheduled Window Card */}
-            <div className="rounded-xl border border-white/10 bg-white/[0.02] p-5 space-y-4 shadow-[0_1px_2px_rgba(0,0,0,0.3)]">
+            <div className="card-3d p-5 rounded-xl space-y-4">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <Clock className="w-3.5 h-3.5 text-[#A0A5B0]" />
-                  <h3 className="text-xs font-semibold uppercase tracking-wider text-[#E4E6EA]">
+                  <Clock className="w-3.5 h-3.5 text-[var(--accent)]" />
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-[var(--text-primary)]">
                     Time-Window Scheduling
                   </h3>
                 </div>
@@ -343,17 +341,17 @@ export const QueuesView: React.FC<QueuesViewProps> = ({ onBack, embedded = false
                     type="checkbox"
                     checked={isScheduleEnabled}
                     onChange={(e) => setIsScheduleEnabled(e.target.checked)}
-                    className="w-4 h-4 rounded accent-white cursor-pointer"
+                    className="w-4 h-4 rounded accent-[var(--accent)] cursor-pointer"
                   />
-                  <span className="text-xs font-medium text-[#B8BCC4]">Enable Schedule</span>
+                  <span className="text-xs font-semibold text-[var(--text-primary)]">Enable Schedule</span>
                 </label>
               </div>
 
               {isScheduleEnabled && (
-                <div className="space-y-4 pt-3 border-t border-white/10">
+                <div className="space-y-4 pt-3 border-t border-[var(--border-subtle)]">
                   <div className="grid grid-cols-2 gap-4 max-w-sm">
                     <div>
-                      <label className="text-xs font-medium text-[#8E939E] block mb-1.5">
+                      <label className="text-xs font-medium text-[var(--text-secondary)] block mb-1.5">
                         Start Time
                       </label>
                       <input
@@ -362,11 +360,11 @@ export const QueuesView: React.FC<QueuesViewProps> = ({ onBack, embedded = false
                         onChange={(e) =>
                           setEditingQueue({ ...editingQueue, schedule_start: e.target.value })
                         }
-                        className="w-full h-8 px-2.5 rounded-lg text-xs bg-black/40 border border-white/10 text-white font-mono focus:outline-none focus:border-white/30"
+                        className="w-full h-8 px-2.5 rounded-lg text-xs bg-[var(--bg-chassis)] border border-[var(--border-subtle)] text-[var(--text-primary)] font-mono focus:outline-none focus:border-[var(--accent)]"
                       />
                     </div>
                     <div>
-                      <label className="text-xs font-medium text-[#8E939E] block mb-1.5">
+                      <label className="text-xs font-medium text-[var(--text-secondary)] block mb-1.5">
                         Stop Time
                       </label>
                       <input
@@ -375,14 +373,14 @@ export const QueuesView: React.FC<QueuesViewProps> = ({ onBack, embedded = false
                         onChange={(e) =>
                           setEditingQueue({ ...editingQueue, schedule_stop: e.target.value })
                         }
-                        className="w-full h-8 px-2.5 rounded-lg text-xs bg-black/40 border border-white/10 text-white font-mono focus:outline-none focus:border-white/30"
+                        className="w-full h-8 px-2.5 rounded-lg text-xs bg-[var(--bg-chassis)] border border-[var(--border-subtle)] text-[var(--text-primary)] font-mono focus:outline-none focus:border-[var(--accent)]"
                       />
                     </div>
                   </div>
 
                   <div>
-                    <label className="text-xs font-medium text-[#8E939E] block mb-1.5 flex items-center gap-1.5">
-                      <Calendar className="w-3.5 h-3.5 text-[#7C818A]" />
+                    <label className="text-xs font-medium text-[var(--text-secondary)] block mb-1.5 flex items-center gap-1.5">
+                      <Calendar className="w-3.5 h-3.5 text-[var(--text-muted)]" />
                       <span>Active Days</span>
                     </label>
                     <div className="flex flex-wrap gap-1.5">
@@ -395,8 +393,8 @@ export const QueuesView: React.FC<QueuesViewProps> = ({ onBack, embedded = false
                             onClick={() => handleToggleDay(day)}
                             className={`px-3 py-1 rounded-lg text-xs font-medium transition-all cursor-pointer ${
                               active
-                                ? "bg-white/15 text-white border border-white/20 shadow-sm font-semibold"
-                                : "bg-white/[0.03] text-[#7C818A] border border-white/5 hover:text-white hover:bg-white/[0.06]"
+                                ? "bg-[var(--accent)] text-[var(--accent-on)] border border-[var(--accent)] font-semibold shadow-sm"
+                                : "bg-[var(--bg-chassis)] text-[var(--text-muted)] border border-[var(--border-subtle)] hover:text-[var(--text-primary)] hover:border-[var(--border-strong)]"
                             }`}
                           >
                             {day}
@@ -410,18 +408,18 @@ export const QueuesView: React.FC<QueuesViewProps> = ({ onBack, embedded = false
             </div>
 
             {/* 3. When Done Actions Card */}
-            <div className="rounded-xl border border-white/10 bg-white/[0.02] p-5 space-y-3.5 shadow-[0_1px_2px_rgba(0,0,0,0.3)]">
+            <div className="card-3d p-5 rounded-xl space-y-3.5">
               <div className="flex items-center gap-2">
-                <Power className="w-3.5 h-3.5 text-[#A0A5B0]" />
-                <h3 className="text-xs font-semibold uppercase tracking-wider text-[#E4E6EA]">
+                <Power className="w-3.5 h-3.5 text-[var(--accent)]" />
+                <h3 className="text-xs font-bold uppercase tracking-wider text-[var(--text-primary)]">
                   &quot;When Done&quot; Post Actions
                 </h3>
               </div>
-              <p className="text-[11px] text-[#7C818A] leading-relaxed">
+              <p className="text-[11px] text-[var(--text-muted)] leading-relaxed">
                 Action executed when all downloads in this queue finish. System power actions trigger a
                 60-second cancelable countdown overlay before execution.
               </p>
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2">
                 {[
                   { id: "none", label: "Do Nothing" },
                   { id: "open_folder", label: "Open Downloads Folder" },
@@ -436,18 +434,18 @@ export const QueuesView: React.FC<QueuesViewProps> = ({ onBack, embedded = false
                       onClick={() => setEditingQueue({ ...editingQueue, post_action: act.id })}
                       className={`p-2.5 rounded-xl border text-xs font-medium flex items-center gap-2.5 cursor-pointer transition-all select-none ${
                         isChecked
-                          ? "border-white/30 bg-white/[0.08] text-white shadow-[0_1px_3px_rgba(0,0,0,0.5),inset_0_1px_0_rgba(255,255,255,0.1)] font-semibold"
-                          : "border-white/5 bg-black/20 text-[#8E939E] hover:border-white/15 hover:text-[#E4E6EA]"
+                          ? "bg-[var(--bg-active)] border-[var(--accent)] text-[var(--text-primary)] font-semibold shadow-sm ring-1 ring-[var(--accent-glow)]"
+                          : "bg-[var(--bg-chassis)] border-[var(--border-subtle)] text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]"
                       }`}
                     >
                       <span
                         className={`w-3.5 h-3.5 rounded-full border flex items-center justify-center shrink-0 ${
-                          isChecked ? "border-white bg-white" : "border-white/20 bg-transparent"
+                          isChecked ? "border-[var(--accent)] bg-[var(--accent)]" : "border-[var(--border-strong)] bg-transparent"
                         }`}
                       >
-                        {isChecked && <span className="w-1.5 h-1.5 rounded-full bg-black" />}
+                        {isChecked && <span className="w-1.5 h-1.5 rounded-full bg-[var(--accent-on)]" />}
                       </span>
-                      <span>{act.label}</span>
+                      <span className="truncate">{act.label}</span>
                     </label>
                   );
                 })}
@@ -463,7 +461,7 @@ export const QueuesView: React.FC<QueuesViewProps> = ({ onBack, embedded = false
               )}
               <button
                 onClick={handleSave}
-                className="h-8 px-4 rounded-lg text-xs font-semibold bg-gradient-to-b from-[#FFFFFF] to-[#D8DBE0] text-[#0A0B0E] hover:from-[#FFFFFF] hover:to-[#EBEEF3] shadow-[0_2px_8px_rgba(0,0,0,0.5),inset_0_1px_0_rgba(255,255,255,0.9)] inline-flex items-center gap-1.5 cursor-pointer transition-all active:scale-95"
+                className="btn-3d btn-primary h-8 px-4 rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer transition-all active:scale-95 shadow-sm"
               >
                 <Save className="w-3.5 h-3.5" />
                 <span>Save Queue Configuration</span>
@@ -471,7 +469,7 @@ export const QueuesView: React.FC<QueuesViewProps> = ({ onBack, embedded = false
             </div>
           </div>
         ) : (
-          <div className="flex-1 flex items-center justify-center text-xs text-[#7C818A]">
+          <div className="flex-1 flex items-center justify-center p-8 text-xs text-[var(--text-muted)]">
             Select or create a queue to configure
           </div>
         )}

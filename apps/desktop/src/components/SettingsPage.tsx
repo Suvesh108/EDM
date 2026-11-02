@@ -2004,15 +2004,15 @@ export default function SettingsPage({
             <section id="section-queues" className="space-y-4 pt-1 pb-8 border-b border-[var(--border-subtle)]">
               <div>
                 <div className="flex items-center gap-2">
-                  <Layers className="w-5 h-5 text-[#A0A5B0]" />
-                  <h2 className="text-base font-bold text-[#FFFFFF]">Queue Scheduler &amp; Rules</h2>
+                  <Layers className="w-5 h-5 text-[var(--accent)]" />
+                  <h2 className="text-base font-bold text-[var(--text-primary)]">Queue Scheduler &amp; Rules</h2>
                 </div>
                 <p className="text-xs text-[var(--text-muted)] mt-1">
                   Automate download windows, bandwidth caps, and post-task actions per queue.
                 </p>
               </div>
 
-              <div className="rounded-xl overflow-hidden border border-white/10 h-[580px] flex flex-col shadow-[0_2px_12px_rgba(0,0,0,0.5)]">
+              <div className="rounded-xl overflow-hidden border border-[var(--border-subtle)] bg-[var(--bg-card)] shadow-sm">
                 <QueuesView embedded={true} />
               </div>
             </section>
