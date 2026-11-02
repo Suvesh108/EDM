@@ -48,7 +48,7 @@ found_nmh:
   WriteRegStr HKCU "Software\EDM" "InstallDir" "$INSTDIR"
   WriteRegStr HKCU "Software\EDM" "AppPath" "$INSTDIR\EDM.exe"
   WriteRegStr HKCU "Software\EDM" "NmhPath" "$INSTDIR\edm-nmh.exe"
-  WriteRegStr HKCU "Software\EDM" "Version" "0.0.6"
+  WriteRegStr HKCU "Software\EDM" "Version" "0.0.7"
 
   WriteRegStr HKCU "Software\Classes\edm" "" "URL:EDM Protocol"
   WriteRegStr HKCU "Software\Classes\edm" "URL Protocol" ""
