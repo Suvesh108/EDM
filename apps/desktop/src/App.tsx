@@ -32,11 +32,9 @@ import {
   Settings,
   Minus,
   RotateCcw,
-  Sparkles,
 } from "lucide-react";
 import SettingsPage from "./components/SettingsPage";
 import SetupWizard from "./components/SetupWizard";
-import { BatchDownloadModal } from "./components/BatchDownloadModal";
 import { RefreshLinkModal } from "./components/RefreshLinkModal";
 import { PowerCountdownModal } from "./components/PowerCountdownModal";
 import { SpeedChartInteractive } from "./components/SpeedChartInteractive";
@@ -172,7 +170,6 @@ export default function App() {
   );
   const [settings, setSettings] = useState<EdmSettings>(loadSettings);
   const [isWizardOpen, setIsWizardOpen] = useState(false);
-  const [isBatchModalOpen, setIsBatchModalOpen] = useState(false);
   const [refreshModalTask, setRefreshModalTask] = useState<DownloadItem | null>(null);
 
   useEffect(() => {
@@ -1044,15 +1041,6 @@ export default function App() {
                 title="Add Download URL (Ctrl+N)"
               >
                 <Plus className="w-4 h-4 stroke-[2.5]" />
-              </button>
-
-              {/* Batch Download Pattern */}
-              <button
-                onClick={() => setIsBatchModalOpen(true)}
-                className="btn-3d h-8 w-8 rounded-lg flex items-center justify-center shrink-0 cursor-pointer text-[var(--accent)] hover:text-white"
-                title="Batch Download Pattern (Ranges & Sets)"
-              >
-                <Sparkles className="w-4 h-4" />
               </button>
 
               {/* Search Box */}
@@ -2294,14 +2282,6 @@ export default function App() {
         onClose={() => setIsWizardOpen(false)}
         settings={settings}
         onSaveSettings={handleUpdateSettings}
-      />
-
-      <BatchDownloadModal
-        isOpen={isBatchModalOpen}
-        onClose={() => setIsBatchModalOpen(false)}
-        onSuccess={(_count) => {
-          // Success toast or feedback
-        }}
       />
 
       <RefreshLinkModal
