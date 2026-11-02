@@ -104,11 +104,46 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({
     onClose();
   };
 
-  const handleConnectBrowser = async (b: BrowserSetupInfo) => {
+  const [activeBrowserId, setActiveBrowserId] = useState<string | null>(null);
+
+  const copyToClipboard = async (text: string): Promise<boolean> => {
     try {
-      await tauriPrepareExtensionFiles();
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+      const el = document.createElement("textarea");
+      el.value = text;
+      el.style.position = "fixed";
+      el.style.opacity = "0";
+      document.body.appendChild(el);
+      el.select();
+      const ok = document.execCommand("copy");
+      document.body.removeChild(el);
+      return ok;
     } catch {
-      // ignore
+      return false;
+    }
+  };
+
+  const handleConnectBrowser = async (b: BrowserSetupInfo) => {
+    setActiveBrowserId(b.id);
+    let targetPath = extensionFolderPath;
+    try {
+      const prepared = await tauriPrepareExtensionFiles();
+      if (prepared) {
+        targetPath = prepared;
+        setExtensionFolderPath(prepared);
+      }
+    } catch (e) {
+      console.warn("Failed to prepare extension files:", e);
+    }
+
+    if (!targetPath) {
+      try {
+        targetPath = await tauriGetExtensionFolderPath();
+        if (targetPath) setExtensionFolderPath(targetPath);
+      } catch {}
     }
 
     if (b.store_url) {
@@ -118,20 +153,16 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({
         console.warn("Failed to open store URL:", e);
       }
     } else {
-      // Guided unpacked install fallback
-      if (extensionFolderPath) {
-        try {
-          await navigator.clipboard.writeText(extensionFolderPath);
-          setCopiedFolder(true);
-          setTimeout(() => setCopiedFolder(false), 5000);
-        } catch {
-          // ignore
-        }
+      // 1. Copy folder path to clipboard
+      if (targetPath) {
+        await copyToClipboard(targetPath);
+        setCopiedFolder(true);
       }
+      // 2. Launch browser directly to chrome://extensions or edge://extensions
       try {
         await tauriOpenBrowserUrl(b.id, b.extension_page_url);
-      } catch {
-        // ignore
+      } catch (e) {
+        console.warn("Failed to open extension page:", e);
       }
     }
     // Refresh browser status after a short delay
@@ -247,8 +278,37 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({
             </div>
 
             {copiedFolder && (
-              <div className="text-[11px] text-[#B8BCC4] text-center mb-4 p-2.5 rounded border border-[#1B1C20] bg-[#0A0B0E] leading-relaxed">
-                Extension folder path copied! In your browser: 1. Turn on Developer mode &rarr; 2. Click "Load unpacked" &rarr; 3. Paste folder path.
+              <div className="text-left mb-6 p-3.5 rounded-xl border border-[#1B1C20] bg-[#0A0B0E] space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-emerald-400">
+                    Extension path copied to clipboard!
+                  </span>
+                  <button
+                    onClick={() => {
+                      if (extensionFolderPath) copyToClipboard(extensionFolderPath);
+                    }}
+                    className="text-[11px] text-[#7C818A] hover:text-white underline cursor-pointer"
+                  >
+                    Copy again
+                  </button>
+                </div>
+                <div className="text-xs text-[#B8BCC4] space-y-1">
+                  <p>1. In the opened browser tab, toggle <strong className="text-white">Developer mode</strong> (top-right).</p>
+                  <p>2. Click <strong className="text-white">Load unpacked</strong> &rarr; press <strong className="text-white">Ctrl+V</strong> &rarr; <strong className="text-white">Select Folder</strong>.</p>
+                </div>
+                {activeBrowserId && (
+                  <div className="pt-1 border-t border-white/5 flex justify-end">
+                    <button
+                      onClick={() => {
+                        const target = browsers.find((b) => b.id === activeBrowserId);
+                        if (target) tauriOpenBrowserUrl(target.id, target.extension_page_url);
+                      }}
+                      className="text-[11px] text-[#A0A5B0] hover:text-white cursor-pointer"
+                    >
+                      Reopen extensions page &rarr;
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 
