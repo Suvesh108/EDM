@@ -352,6 +352,49 @@ pub async fn probe_media(url: &str) -> Result<MediaProbeResult, String> {
         .build()
         .map_err(|e| e.to_string())?;
 
+    use edm_core::packs::extractors::{SiteExtractor, VimeoExtractor, YouTubeExtractor};
+    let yt = YouTubeExtractor;
+    if yt.can_extract(url) {
+        if let Ok(meta) = yt.extract(url, &client).await {
+            let ipc_variants = meta
+                .formats
+                .into_iter()
+                .map(|f| MediaVariant {
+                    quality: f.resolution.clone().unwrap_or(f.format_id),
+                    url: f.url,
+                    media_type: if f.is_audio && !f.is_video { "audio".into() } else { "direct".into() },
+                    resolution: f.resolution,
+                    bitrate: f.filesize.map(|s| s * 8),
+                })
+                .collect();
+            return Ok(MediaProbeResult {
+                variants: ipc_variants,
+                is_drm: false,
+            });
+        }
+    }
+
+    let vimeo = VimeoExtractor;
+    if vimeo.can_extract(url) {
+        if let Ok(meta) = vimeo.extract(url, &client).await {
+            let ipc_variants = meta
+                .formats
+                .into_iter()
+                .map(|f| MediaVariant {
+                    quality: f.resolution.clone().unwrap_or(f.format_id),
+                    url: f.url,
+                    media_type: if f.is_audio && !f.is_video { "audio".into() } else { "direct".into() },
+                    resolution: f.resolution,
+                    bitrate: f.filesize.map(|s| s * 8),
+                })
+                .collect();
+            return Ok(MediaProbeResult {
+                variants: ipc_variants,
+                is_drm: false,
+            });
+        }
+    }
+
     let (variants, is_drm) = MediaGrabber::probe_media_stream(url, &client).await?;
     let ipc_variants = variants
         .into_iter()

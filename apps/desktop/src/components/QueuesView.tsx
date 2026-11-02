@@ -390,7 +390,7 @@ export const QueuesView: React.FC<QueuesViewProps> = ({ onBack }) => {
                 {[
                   { id: "none", label: "Do Nothing" },
                   { id: "open_folder", label: "Open Downloads Folder" },
-                  { id: "sleep", label: "Sleep PC (Win32)" },
+                  { id: "sleep", label: "Sleep PC" },
                   { id: "hibernate", label: "Hibernate PC" },
                   { id: "shutdown", label: "Shutdown PC" },
                 ].map((act) => {

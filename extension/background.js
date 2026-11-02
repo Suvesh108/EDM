@@ -5,8 +5,70 @@ let latestLifecycleState = "active";
 let nmhHealth = { ok: true };
 let latestDiagnosticsReport = null;
 let reconnectTimer = null;
+let reconnectAttempts = 0;
 let pingInterval = null;
 let bypassNextDownload = false;
+if (typeof chrome !== "undefined" && chrome.webRequest && chrome.webRequest.onResponseStarted) {
+  chrome.webRequest.onResponseStarted.addListener(
+    async (details) => {
+      if (details.tabId < 0) return;
+      const url = details.url;
+      if (!url.startsWith("http://") && !url.startsWith("https://")) return;
+      const headers = details.responseHeaders || [];
+      const contentTypeHeader = headers.find((h) => h.name.toLowerCase() === "content-type");
+      const contentType = (contentTypeHeader?.value || "").toLowerCase();
+      const contentLengthHeader = headers.find((h) => h.name.toLowerCase() === "content-length");
+      const contentLength = contentLengthHeader?.value ? parseInt(contentLengthHeader.value, 10) : void 0;
+      const isMediaMime = contentType.startsWith("video/") || contentType.startsWith("audio/") || contentType.includes("application/vnd.apple.mpegurl") || contentType.includes("application/x-mpegurl") || contentType.includes("application/dash+xml");
+      const isMediaExt = /\.(m3u8|mpd|mp4|m4v|webm|m4a|mp3|flv|ts|ogg|wav|aac)(\?.*)?$/i.test(url);
+      if (isMediaMime || isMediaExt) {
+        try {
+          if (chrome.storage && chrome.storage.session) {
+            const key = `tab_media_${details.tabId}`;
+            const existing = await chrome.storage.session.get(key);
+            const list = existing[key] || [];
+            if (!list.some((item) => item.url === url)) {
+              let mediaType = "video";
+              if (contentType.startsWith("audio/") || /\.(mp3|m4a|aac|flac|wav|ogg)(\?.*)?$/i.test(url)) {
+                mediaType = "audio";
+              } else if (contentType.includes("mpegurl") || contentType.includes("dash") || /\.(m3u8|mpd)(\?.*)?$/i.test(url)) {
+                mediaType = "stream";
+              }
+              let title = "Media Stream";
+              try {
+                const pathname = new URL(url).pathname;
+                const name = pathname.substring(pathname.lastIndexOf("/") + 1);
+                if (name && name.length > 2) title = decodeURIComponent(name);
+              } catch {
+              }
+              list.push({
+                url,
+                title,
+                type: mediaType,
+                size: contentLength,
+                contentType,
+                timestamp: Date.now()
+              });
+              if (list.length > 60) list.shift();
+              await chrome.storage.session.set({ [key]: list });
+            }
+          }
+        } catch {
+        }
+      }
+    },
+    { urls: ["<all_urls>"] },
+    ["responseHeaders"]
+  );
+  chrome.tabs.onRemoved.addListener((tabId) => {
+    try {
+      if (chrome.storage && chrome.storage.session) {
+        chrome.storage.session.remove(`tab_media_${tabId}`);
+      }
+    } catch {
+    }
+  });
+}
 let latestTasks = [];
 let currentEpoch = "";
 let currentRev = 0;
@@ -253,6 +315,24 @@ async function connectWebSocketPromise(timeoutMs = 8e3) {
   }
   return socket !== null && socket.readyState === WebSocket.OPEN && connectionStatus === "connected";
 }
+async function checkIfEdmRunning() {
+  return new Promise((resolve) => {
+    try {
+      chrome.runtime.sendNativeMessage("com.edm.nmh", { type: "status" }, (res) => {
+        if (chrome.runtime.lastError || !res) {
+          console.debug("[EDM Extension] NMH status check:", chrome.runtime.lastError?.message || "No response");
+          return resolve({ running: false });
+        }
+        if (res.running || res.status === "running" || res.status === "connected") {
+          return resolve({ running: true, token: res.token });
+        }
+        return resolve({ running: false });
+      });
+    } catch {
+      resolve({ running: false });
+    }
+  });
+}
 async function connectWebSocket() {
   if (socket && (socket.readyState === WebSocket.CONNECTING || socket.readyState === WebSocket.OPEN)) {
     return;
@@ -263,11 +343,15 @@ async function connectWebSocket() {
   try {
     socket = new WebSocket(WS_URL);
   } catch (err) {
-    console.warn("[EDM Extension] WebSocket creation failed:", err);
-    scheduleReconnect();
+    console.debug("[EDM Extension] WebSocket creation:", err);
     return;
   }
   socket.onopen = () => {
+    reconnectAttempts = 0;
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
     if (socket && socket.readyState === WebSocket.OPEN) {
       const manifest = chrome.runtime.getManifest();
       const browser = detectCurrentBrowser();
@@ -392,27 +476,41 @@ async function connectWebSocket() {
       console.warn("[EDM Extension] Error handling inbound message:", e);
     }
   };
-  socket.onclose = () => {
+  socket.onclose = async () => {
     connectionStatus = "asleep";
     socket = null;
     stopPingInterval();
     notifyPopupPorts();
-    scheduleReconnect();
+    console.debug("[EDM Extension] WebSocket connection closed.");
+    const st = await checkIfEdmRunning();
+    if (st.running) {
+      if (st.token) {
+        await chrome.storage.local.set({ edm_ws_token: st.token });
+      }
+      reconnectAttempts++;
+      const delay = Math.min(1e3 * Math.pow(2, reconnectAttempts), 6e4);
+      console.debug(`[EDM Extension] EDM is running, scheduling reconnect in ${delay}ms`);
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      reconnectTimer = setTimeout(() => {
+        if (connectionStatus !== "connected") {
+          connectWebSocket();
+        }
+      }, delay);
+    } else {
+      console.debug("[EDM Extension] EDM is asleep or closed. Staying idle.");
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      reconnectAttempts = 0;
+    }
   };
   socket.onerror = (err) => {
-    console.warn("[EDM Extension] WebSocket error:", err);
+    console.debug("[EDM Extension] WebSocket event:", err);
     if (socket) {
       socket.close();
     }
   };
-}
-function scheduleReconnect() {
-  if (reconnectTimer) clearTimeout(reconnectTimer);
-  reconnectTimer = setTimeout(() => {
-    if (connectionStatus !== "connected") {
-      connectWebSocket();
-    }
-  }, 3e3);
 }
 function startPingInterval() {
   stopPingInterval();
@@ -677,6 +775,43 @@ chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
   return true;
 });
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg.action === "get_sniffed_media") {
+    const tabId = msg.tabId;
+    if (tabId && chrome.storage && chrome.storage.session) {
+      chrome.storage.session.get(`tab_media_${tabId}`).then((res) => {
+        sendResponse({ ok: true, media: res[`tab_media_${tabId}`] || [] });
+      }).catch(() => sendResponse({ ok: true, media: [] }));
+      return true;
+    }
+    sendResponse({ ok: true, media: [] });
+    return false;
+  }
+  if (msg.action === "probe_page_media") {
+    const pageUrl = msg.url;
+    if (socket && socket.readyState === WebSocket.OPEN && connectionStatus === "connected") {
+      const reqId = crypto.randomUUID();
+      const timer = setTimeout(() => {
+        sendResponse({ ok: false, error: "Probe timed out" });
+      }, 1e4);
+      const listener = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.type === "media_variants" && data.req_id === reqId) {
+            clearTimeout(timer);
+            socket?.removeEventListener("message", listener);
+            sendResponse({ ok: true, variants: data.variants || [], is_drm: data.is_drm });
+          }
+        } catch {
+        }
+      };
+      socket.addEventListener("message", listener);
+      socket.send(JSON.stringify({ type: "probe_media", req_id: reqId, media_url: pageUrl }));
+      return true;
+    } else {
+      sendResponse({ ok: false, error: "EDM is not connected" });
+      return false;
+    }
+  }
   if (msg.action === "wake_desktop") {
     wakeDesktop(!!msg.show_window).then((res) => {
       sendResponse(res);
@@ -864,4 +999,17 @@ chrome.notifications.onClicked.addListener((notifId) => {
     }
   }
 });
-connectWebSocket();
+async function initOnStartup() {
+  const st = await checkIfEdmRunning();
+  if (st.running) {
+    if (st.token) {
+      await chrome.storage.local.set({ edm_ws_token: st.token });
+    }
+    connectWebSocket();
+  } else {
+    connectionStatus = "asleep";
+    notifyPopupPorts();
+    console.debug("[EDM Extension] EDM is asleep on startup. Staying idle.");
+  }
+}
+initOnStartup();

@@ -778,6 +778,9 @@ async fn handle_extension_message(msg: ExtensionMessage, state: &AppState) -> Ap
                 queued_tasks: queued,
                 completed_tasks: completed,
                 aggregate_speed_bps: agg_speed,
+                running: true,
+                port: Some(14370),
+                token: Some(state.ws_manager.get_token().to_string()),
             }
         }
 
@@ -1992,6 +1995,9 @@ fn get_firefox_xpi_url() -> String {
 
 #[command]
 fn is_wizard_completed(state: State<'_, AppState>) -> Result<bool, String> {
+    if let Ok(Some(val)) = state.store.get_setting("setup_completed") {
+        return Ok(val == "true");
+    }
     match state.store.get_setting("wizard_completed") {
         Ok(Some(val)) => Ok(val == "true"),
         _ => Ok(false),
@@ -2000,10 +2006,12 @@ fn is_wizard_completed(state: State<'_, AppState>) -> Result<bool, String> {
 
 #[command]
 fn set_wizard_completed(state: State<'_, AppState>, completed: bool) -> Result<(), String> {
+    let val = if completed { "true" } else { "false" };
     state
         .store
-        .set_setting("wizard_completed", if completed { "true" } else { "false" })
+        .set_setting("setup_completed", val)
         .map_err(|e| e.to_string())?;
+    let _ = state.store.set_setting("wizard_completed", val);
     Ok(())
 }
 

@@ -142,6 +142,12 @@ pub enum AppReply {
         queued_tasks: usize,
         completed_tasks: usize,
         aggregate_speed_bps: u64,
+        #[serde(default)]
+        running: bool,
+        #[serde(default)]
+        port: Option<u16>,
+        #[serde(default)]
+        token: Option<String>,
     },
     DownloadList {
         downloads: Vec<DownloadOverview>,

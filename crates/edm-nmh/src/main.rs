@@ -688,14 +688,20 @@ fn handle_message(msg: ExtensionMessage, store: &Arc<Mutex<Store>>) -> AppReply 
                 0
             };
 
+            let is_running = is_ws_server_ready();
+            let token = if is_running { Some(get_ws_token()) } else { None };
+
             AppReply::Status {
-                status: "connected".into(),
+                status: if is_running { "running".into() } else { "asleep".into() },
                 version: env!("CARGO_PKG_VERSION").into(),
                 protocol: PROTOCOL_VERSION,
                 active_downloads: active,
                 queued_tasks: queued,
                 completed_tasks: completed,
                 aggregate_speed_bps: agg_speed,
+                running: is_running,
+                port: Some(14370),
+                token,
             }
         }
 

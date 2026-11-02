@@ -74,9 +74,13 @@ class PopupController {
     __publicField(this, "latencyMs", 0);
     __publicField(this, "token", "");
     __publicField(this, "interceptionEnabled", true);
+    __publicField(this, "mediaMaster", true);
+    __publicField(this, "mediaYouTube", true);
+    __publicField(this, "mediaOtherSites", true);
+    __publicField(this, "hiddenSites", []);
     __publicField(this, "auditLogs", ["Popup initialized"]);
-    __publicField(this, "currentVersion", "0.0.6");
-    __publicField(this, "expectedVersion", "0.0.6");
+    __publicField(this, "currentVersion", "0.0.7");
+    __publicField(this, "expectedVersion", "0.0.7");
     __publicField(this, "updateStatus", "latest");
     __publicField(this, "detectedBrowser", "browser");
     __publicField(this, "pollInterval", null);
@@ -101,22 +105,116 @@ class PopupController {
     this.bindHeaderNav();
     this.connectPort();
     await this.loadSettings();
+    await this.loadActiveTabResources();
+    this.render();
+  }
+  async loadActiveTabResources() {
     try {
-      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-        if (tabs[0]?.id) {
-          chrome.tabs.sendMessage(tabs[0].id, { action: "grab_page_links" }, (res) => {
-            if (res && res.resources) {
-              this.pageResources = res.resources;
-              if (this.activeTab === "media" || this.activeTab === "grabber") {
-                this.render();
-              }
-            }
+      chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
+        if (!tabs || !tabs[0] || !tabs[0].id) return;
+        const tab = tabs[0];
+        const tabId = tab.id;
+        const tabUrl = tab.url || "";
+        let sniffedMedia = [];
+        try {
+          const res = await new Promise((resolve) => {
+            chrome.runtime.sendMessage({ action: "get_sniffed_media", tabId }, resolve);
           });
+          if (res && res.ok && Array.isArray(res.media)) {
+            sniffedMedia = res.media;
+          }
+        } catch {
+        }
+        const pageLinks = await this.grabLinksWithFallback(tabId);
+        let probedMedia = [];
+        if (tabUrl.includes("youtube.com") || tabUrl.includes("youtu.be") || tabUrl.includes("vimeo.com")) {
+          try {
+            const probeRes = await new Promise((resolve) => {
+              chrome.runtime.sendMessage({ action: "probe_page_media", url: tabUrl }, resolve);
+            });
+            if (probeRes && probeRes.ok && Array.isArray(probeRes.variants)) {
+              const cleanTitle = (tab.title || "Video Stream").replace(" - YouTube", "").trim();
+              probedMedia = probeRes.variants.map((v) => ({
+                url: v.url,
+                title: `${cleanTitle} (${v.quality || v.resolution || "Best"})`,
+                type: v.media_type === "audio" ? "audio" : "video",
+                size: v.bitrate ? Math.round(v.bitrate / 8) : 0,
+                format: v.media_type || "mp4"
+              }));
+            }
+          } catch {
+          }
+        }
+        const combined = [...probedMedia, ...sniffedMedia, ...pageLinks];
+        const seen = /* @__PURE__ */ new Set();
+        this.pageResources = combined.filter((r) => {
+          if (!r.url || seen.has(r.url)) return false;
+          seen.add(r.url);
+          return true;
+        });
+        if (this.activeTab === "media" || this.activeTab === "grabber") {
+          this.render();
         }
       });
     } catch {
     }
-    this.render();
+  }
+  async grabLinksWithFallback(tabId) {
+    try {
+      const res = await new Promise((resolve) => {
+        chrome.tabs.sendMessage(tabId, { action: "grab_page_links" }, (resp) => {
+          if (chrome.runtime.lastError || !resp) {
+            resolve(null);
+          } else {
+            resolve(resp);
+          }
+        });
+      });
+      if (res && Array.isArray(res.resources) && res.resources.length > 0) {
+        return res.resources;
+      }
+    } catch {
+    }
+    try {
+      if (chrome.scripting && chrome.scripting.executeScript) {
+        const injected = await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => {
+            const items = [];
+            const seen = /* @__PURE__ */ new Set();
+            document.querySelectorAll("a[href]").forEach((el) => {
+              const a = el;
+              const href = a.href;
+              if (href && !href.startsWith("javascript:") && !href.startsWith("#") && !seen.has(href)) {
+                seen.add(href);
+                const text = (a.innerText || a.title || href).trim().slice(0, 100);
+                const ext = href.split(".").pop()?.split(/[?#]/)[0]?.toLowerCase() || "";
+                let type = "link";
+                if (["zip", "rar", "7z", "tar", "gz", "iso"].includes(ext)) type = "archive";
+                else if (["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt"].includes(ext)) type = "document";
+                else if (["exe", "msi", "dmg", "pkg", "deb", "rpm", "apk"].includes(ext)) type = "executable";
+                else if (["mp4", "mkv", "webm", "avi", "mov", "mp3", "m4a", "flac"].includes(ext)) type = "video";
+                items.push({ url: href, title: text || href, type, size: 0, format: ext.toUpperCase() });
+              }
+            });
+            document.querySelectorAll("video, audio, source").forEach((el) => {
+              const src = el.src;
+              if (src && !src.startsWith("blob:") && !seen.has(src)) {
+                seen.add(src);
+                items.push({ url: src, title: document.title || "Media File", type: "video", size: 0, format: "MEDIA" });
+              }
+            });
+            return items.slice(0, 150);
+          }
+        });
+        if (injected && injected[0] && Array.isArray(injected[0].result)) {
+          return injected[0].result;
+        }
+      }
+    } catch (err) {
+      console.debug("[EDM Popup] Fallback script execution:", err);
+    }
+    return [];
   }
   connectPort() {
     try {
@@ -245,7 +343,11 @@ class PopupController {
       "edm_theme",
       "edm_palette",
       "edm_ws_token",
-      "edm_interception_enabled"
+      "edm_interception_enabled",
+      "media_button_master",
+      "media_button_youtube",
+      "media_button_other_sites",
+      "hidden_sites"
     ]);
     if (data.edm_refresh_rate) {
       this.refreshRateMs = parseInt(data.edm_refresh_rate, 10);
@@ -257,6 +359,10 @@ class PopupController {
       document.documentElement.setAttribute("data-theme", data.edm_theme);
     }
     this.interceptionEnabled = data.edm_interception_enabled !== false;
+    this.mediaMaster = data.media_button_master !== false;
+    this.mediaYouTube = data.media_button_youtube !== false;
+    this.mediaOtherSites = data.media_button_other_sites !== false;
+    this.hiddenSites = data.hidden_sites || [];
     if (data.edm_ws_token && data.edm_ws_token.length >= 32 && !data.edm_ws_token.startsWith("ed0000000000")) {
       this.token = data.edm_ws_token;
     } else {
@@ -341,12 +447,15 @@ class PopupController {
     const text = document.getElementById("connectionText");
     if (!pill || !dot || !text) return;
     pill.style.cursor = "pointer";
-    pill.title = "Click to view Diagnostics & Host status";
+    pill.title = "Click to view Settings & Diagnostics";
     pill.onclick = () => {
-      this.activeTab = "diagnostics";
+      this.activeTab = "settings";
       document.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("active"));
-      document.querySelector('[data-tab="diagnostics"]')?.classList.add("active");
+      document.querySelector('[data-tab="settings"]')?.classList.add("active");
       this.render();
+      setTimeout(() => {
+        document.getElementById("settings-diagnostics-card")?.scrollIntoView({ behavior: "smooth" });
+      }, 50);
     };
     dot.className = "status-dot";
     if (this.connectionState === "connected") {
@@ -387,12 +496,10 @@ class PopupController {
     } else if (this.activeTab === "grabber") {
       app.innerHTML = this.renderGrabberTab();
       this.attachGrabberEvents();
-    } else if (this.activeTab === "diagnostics") {
-      app.innerHTML = this.renderDiagnosticsTab();
-      this.attachDiagnosticsEvents();
     } else {
       app.innerHTML = this.renderSettingsTab();
       this.attachSettingsEvents();
+      this.attachDiagnosticsEvents();
     }
   }
   // ─────────────────────────────────────────────────────────────
@@ -806,16 +913,19 @@ class PopupController {
   renderMediaTab() {
     const mediaResources = this.pageResources.filter((r) => r.type === "video" || r.type === "audio" || r.type === "stream");
     return `
-      <div class="tasks-toolbar">
-        <div style="font-weight: 600; font-size: 12px; margin-bottom: 4px;">Media Detected on Active Tab</div>
-        <div style="font-size: 11px; color: #94A3B8;">Direct streams and audio tracks sniffed on this web page.</div>
+      <div class="tasks-toolbar" style="display:flex; justify-content:space-between; align-items:center;">
+        <div>
+          <div style="font-weight: 600; font-size: 12px; margin-bottom: 2px;">Media Detected on Active Tab</div>
+          <div style="font-size: 11px; color: #94A3B8;">Direct streams and audio tracks sniffed on this web page.</div>
+        </div>
+        <button id="btnRescanMedia" class="btn-3d" style="font-size:10.5px; padding:3px 8px;">Refresh</button>
       </div>
       <div class="downloads-list">
         ${mediaResources.length === 0 ? `
           <div class="empty-state">
             <div class="empty-icon">\u{1F3AC}</div>
             <div style="font-weight: 600;">No media detected on this page</div>
-            <div style="font-size: 11px; max-width: 280px;">Play a video or audio file on the current tab, then re-open this popup.</div>
+            <div style="font-size: 11px; max-width: 280px;">Play a video or audio file on the current tab, then click Refresh.</div>
           </div>
         ` : mediaResources.map(
       (m, idx) => `
@@ -826,7 +936,7 @@ class PopupController {
             <div class="item-main">
               <div class="file-title" title="${escapeHtml(m.url)}">${escapeHtml(m.title)}</div>
               <div class="item-meta">
-                <span>${m.format} Stream</span>
+                <span>${escapeHtml(m.format || m.quality || (m.type === "audio" ? "Audio" : "Video"))}</span>
                 <span>\u2022</span>
                 <span style="max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(m.url)}</span>
               </div>
@@ -841,6 +951,17 @@ class PopupController {
     `;
   }
   attachMediaEvents() {
+    const rescanBtn = document.getElementById("btnRescanMedia");
+    if (rescanBtn) {
+      rescanBtn.addEventListener("click", () => {
+        rescanBtn.innerText = "Scanning...";
+        this.loadActiveTabResources().then(() => {
+          setTimeout(() => {
+            if (rescanBtn) rescanBtn.innerText = "Refresh";
+          }, 800);
+        });
+      });
+    }
     const mediaResources = this.pageResources.filter((r) => r.type === "video" || r.type === "audio" || r.type === "stream");
     document.querySelectorAll(".download-media-btn").forEach((btn) => {
       btn.addEventListener("click", () => {
@@ -909,9 +1030,9 @@ class PopupController {
               <div class="item-main">
                 <div class="file-title" style="font-size: 11.5px;" title="${escapeHtml(r.url)}">${escapeHtml(r.title)}</div>
                 <div class="item-meta">
-                  <span>${r.type.toUpperCase()}</span>
+                  <span>${escapeHtml(r.type.toUpperCase())}</span>
                   <span>\u2022</span>
-                  <span>${r.format}</span>
+                  <span>${escapeHtml(r.format || r.type.toUpperCase())}</span>
                   <span>\u2022</span>
                   <span style="max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(r.url)}</span>
                 </div>
@@ -1138,37 +1259,48 @@ class PopupController {
           </div>
         </div>
 
-        <!-- Host Diagnostics -->
-        <div class="settings-group">
-          <div class="settings-group-title">Diagnostics &amp; Host Telemetry</div>
-          <div class="setting-row">
+        <!-- Media Download Buttons (Master, YouTube, Other Sites, Hidden Sites) -->
+        <div class="settings-group" style="padding: 14px; background: #070e1b; border: 1px solid #1a273e; border-radius: 10px;">
+          <div class="settings-group-title" style="font-size: 13.5px; font-weight: 700; color: #FFFFFF; margin-bottom: 6px;">Media Download Buttons</div>
+          <div class="setting-row" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
             <div>
-              <div class="setting-label">Host Channel Status</div>
-              <div class="setting-desc">Chromium Native Messaging pipe</div>
+              <div class="setting-label" style="font-size: 12px; font-weight: 600;">Enable Download Buttons</div>
+              <div class="setting-desc" style="font-size: 11px; color: #8fa0be;">Master switch for in-page download buttons</div>
             </div>
-            <span class="pro-badge" style="background:#10B98120; border-color:#10B98150; color:#34D399;">${this.connectionState.toUpperCase()}</span>
+            <label class="switch">
+              <input type="checkbox" id="mediaMasterToggle" ${this.mediaMaster ? "checked" : ""}>
+              <span class="slider"></span>
+            </label>
           </div>
-          <div class="setting-row">
+          <div class="setting-row" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
             <div>
-              <div class="setting-label">IPC Round-Trip Latency</div>
-              <div class="setting-desc">Measured ping response time</div>
+              <div class="setting-label" style="font-size: 12px; font-weight: 600;">YouTube Action Row Pill</div>
+              <div class="setting-desc" style="font-size: 11px; color: #8fa0be;">Show EDM pill button next to Subscribe on YouTube</div>
             </div>
-            <span style="font-family:monospace; font-weight:600; color:#38BDF8;">${this.latencyMs} ms</span>
+            <label class="switch">
+              <input type="checkbox" id="mediaYouTubeToggle" ${this.mediaYouTube ? "checked" : ""}>
+              <span class="slider"></span>
+            </label>
           </div>
-          <div class="setting-row">
+          <div class="setting-row" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
             <div>
-              <div class="setting-label">Host Identifier</div>
-              <div class="setting-desc">Native Messaging Host ID</div>
+              <div class="setting-label" style="font-size: 12px; font-weight: 600;">Other Sites Floating Button</div>
+              <div class="setting-desc" style="font-size: 11px; color: #8fa0be;">Show bottom-right floating button on other video sites</div>
             </div>
-            <span style="font-family:monospace; font-size:10.5px;">com.edm.nmh</span>
+            <label class="switch">
+              <input type="checkbox" id="mediaOtherSitesToggle" ${this.mediaOtherSites ? "checked" : ""}>
+              <span class="slider"></span>
+            </label>
           </div>
-          <div class="setting-row">
-            <div>
-              <div class="setting-label">Local WebSocket Bridge</div>
-              <div class="setting-desc">Direct high-speed telemetry link</div>
-            </div>
-            <span style="font-family:monospace; font-size:10.5px; color:#34D399;">ws://127.0.0.1:14370</span>
+          <div style="font-size: 11px; color: #8fa0be; margin-top: 8px; display: flex; justify-content: space-between; align-items: center;">
+            <span>Hidden Sites: <strong>${this.hiddenSites.length}</strong> site(s)</span>
+            ${this.hiddenSites.length > 0 ? `<button id="btnClearHiddenSites" class="btn-3d" style="font-size: 10.5px; padding: 2px 8px;">Clear Hidden Sites</button>` : ""}
           </div>
+        </div>
+
+        <!-- Host Diagnostics Card -->
+        <div id="settings-diagnostics-card" class="settings-group" style="padding: 14px; background: #070e1b; border: 1px solid #1a273e; border-radius: 10px;">
+          ${this.renderDiagnosticsTab()}
         </div>
       </div>
     `;
@@ -1365,20 +1497,36 @@ class PopupController {
         await chrome.storage.local.set({ edm_theme: val });
       });
     }
-    const notifyComp = document.getElementById("notifyCompleteToggle");
-    const notifyFail = document.getElementById("notifyFailToggle");
-    if (notifyComp && notifyFail) {
-      const saveNotif = async () => {
-        await chrome.storage.local.set({
-          edm_settings: {
-            notifyComplete: notifyComp.checked,
-            notifyFail: notifyFail.checked
-          }
-        });
-      };
-      notifyComp.addEventListener("change", saveNotif);
-      notifyFail.addEventListener("change", saveNotif);
+    const masterToggle = document.getElementById("mediaMasterToggle");
+    if (masterToggle) {
+      masterToggle.addEventListener("change", async () => {
+        this.mediaMaster = masterToggle.checked;
+        await chrome.storage.local.set({ media_button_master: this.mediaMaster });
+      });
     }
+    const ytToggle = document.getElementById("mediaYouTubeToggle");
+    if (ytToggle) {
+      ytToggle.addEventListener("change", async () => {
+        this.mediaYouTube = ytToggle.checked;
+        await chrome.storage.local.set({ media_button_youtube: this.mediaYouTube });
+      });
+    }
+    const otherToggle = document.getElementById("mediaOtherSitesToggle");
+    if (otherToggle) {
+      otherToggle.addEventListener("change", async () => {
+        this.mediaOtherSites = otherToggle.checked;
+        await chrome.storage.local.set({ media_button_other_sites: this.mediaOtherSites });
+      });
+    }
+    const clearHiddenBtn = document.getElementById("btnClearHiddenSites");
+    if (clearHiddenBtn) {
+      clearHiddenBtn.addEventListener("click", async () => {
+        this.hiddenSites = [];
+        await chrome.storage.local.set({ hidden_sites: [], disabled_video_domains: [] });
+        this.render();
+      });
+    }
+    this.attachDiagnosticsEvents();
   }
   // ─────────────────────────────────────────────────────────────
   // 3. DIAGNOSTICS TAB

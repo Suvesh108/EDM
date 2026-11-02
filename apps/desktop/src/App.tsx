@@ -37,7 +37,6 @@ import {
 import SettingsPage from "./components/SettingsPage";
 import SetupWizard from "./components/SetupWizard";
 import { HistoryView } from "./components/HistoryView";
-import { QueuesView } from "./components/QueuesView";
 import { BatchDownloadModal } from "./components/BatchDownloadModal";
 import { RefreshLinkModal } from "./components/RefreshLinkModal";
 import { PowerCountdownModal } from "./components/PowerCountdownModal";
@@ -164,12 +163,11 @@ export const generateSpeedSvgPath = (history: number[] = [], peakBps: number = 0
 };
 
 export default function App() {
-  const [activeView, setActiveView] = useState<"downloads" | "settings" | "history" | "queues">(
+  const [activeView, setActiveView] = useState<"downloads" | "settings" | "history">(
     () => {
       if (typeof window !== "undefined") {
-        if (window.location.hash === "#settings") return "settings";
+        if (window.location.hash === "#settings" || window.location.hash === "#queues" || window.location.hash === "#section-queues") return "settings";
         if (window.location.hash === "#history") return "history";
-        if (window.location.hash === "#queues") return "queues";
       }
       return "downloads";
     }
@@ -201,9 +199,8 @@ export default function App() {
   // Synchronize hash routing with activeView
   useEffect(() => {
     const handleHash = () => {
-      if (window.location.hash === "#settings") setActiveView("settings");
+      if (window.location.hash === "#settings" || window.location.hash === "#queues" || window.location.hash === "#section-queues") setActiveView("settings");
       else if (window.location.hash === "#history") setActiveView("history");
-      else if (window.location.hash === "#queues") setActiveView("queues");
       else setActiveView("downloads");
     };
     window.addEventListener("hashchange", handleHash);
@@ -929,22 +926,6 @@ export default function App() {
               }}
             />
           </motion.div>
-        ) : activeView === "queues" ? (
-          <motion.div
-            key="queues-view"
-            variants={viewVariants}
-            initial="initial"
-            animate="animate"
-            exit="exit"
-            className="flex-1 flex flex-col min-h-0 overflow-hidden w-full h-full"
-          >
-            <QueuesView
-              onBack={() => {
-                setActiveView("downloads");
-                window.location.hash = "";
-              }}
-            />
-          </motion.div>
         ) : (
           <motion.div
             key="downloads-view"
@@ -1258,12 +1239,12 @@ export default function App() {
             <div className="space-y-0.5">
               <button
                 onClick={() => {
-                  setActiveView("queues");
-                  window.location.hash = "#queues";
+                  setActiveView("settings");
+                  window.location.hash = "#section-queues";
                 }}
-                title="Queue Scheduler & Rules"
+                title="Queues & Schedule"
                 className={`w-8 h-8 mx-auto flex items-center justify-center rounded-lg text-xs font-medium transition-all duration-150 cursor-pointer ${
-                  (activeView as string) === "queues"
+                  (activeView as string) === "settings" && typeof window !== "undefined" && (window.location.hash === "#section-queues" || window.location.hash === "#queues")
                     ? "sidebar-item-active-3d text-[var(--accent)] font-semibold shadow-sm"
                     : "sidebar-item-inactive-3d text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
                 }`}
@@ -1737,23 +1718,6 @@ export default function App() {
           >
             <Settings className="w-3.5 h-3.5 text-[var(--accent)] shrink-0 icon-3d" />
             <span className="hidden xs:inline">Settings</span>
-          </button>
-
-          {/* Queues Trigger */}
-          <button
-            onClick={() => {
-              setActiveView("queues");
-              window.location.hash = "#queues";
-            }}
-            className={`h-7 px-2.5 rounded-md text-[11px] sm:text-xs font-medium btn-3d inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer ${
-              (activeView as string) === "queues"
-                ? "text-[var(--accent)] font-semibold shadow-sm"
-                : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
-            }`}
-            title="Queue Scheduler & Rules"
-          >
-            <Layers className="w-3.5 h-3.5 text-[var(--accent)] shrink-0 icon-3d" />
-            <span className="hidden xs:inline">Queues</span>
           </button>
 
           {/* History Trigger */}

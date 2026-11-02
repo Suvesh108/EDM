@@ -162,194 +162,511 @@ function sniffImages(): SniffedImage[] {
 }
 
 // Floating Video Downloader Button inside Isolated Shadow DOM
-function injectFloatingMediaButton() {
-  const hostDomain = window.location.hostname;
-  chrome.storage.local.get(["disabled_video_domains", "disable_floating_button"], (res) => {
-    if (res.disable_floating_button) return;
-    const disabledList: string[] = res.disabled_video_domains || [];
-    if (disabledList.includes(hostDomain)) return;
+// -------------------------------------------------------------
+// Media Sniffer & Video Download Buttons
+// Invariants:
+// 1. YouTube watch pages: native pill button inserted into owner row immediately after Subscribe button.
+// 2. YouTube floating button at bottom-right is NEVER shown.
+// 3. SPA navigation handled via yt-navigate-finish & MutationObserver.
+// 4. Shorts skipped unless youtube_shorts_enabled is true.
+// 5. Configurable via media_button_master, media_button_youtube, media_button_other_sites, hidden_sites.
+// -------------------------------------------------------------
 
-    // Check if video element exists or media streams present
-    const videos = document.querySelectorAll("video, audio");
-    if (videos.length === 0) return;
+function isYouTube(): boolean {
+  return window.location.hostname.includes("youtube.com") || window.location.hostname.includes("youtu.be");
+}
 
-    if (document.getElementById("edm-video-sniffer-host")) return;
+function isYouTubeShorts(): boolean {
+  return window.location.pathname.startsWith("/shorts");
+}
 
-    const hostEl = document.createElement("div");
-    hostEl.id = "edm-video-sniffer-host";
-    hostEl.style.position = "fixed";
-    hostEl.style.bottom = "24px";
-    hostEl.style.right = "24px";
-    hostEl.style.zIndex = "2147483647";
-    document.documentElement.appendChild(hostEl);
+function isYouTubeWatch(): boolean {
+  return window.location.pathname === "/watch" || window.location.pathname.startsWith("/watch");
+}
 
-    // Isolated closed Shadow DOM prevents site CSS contamination
-    const shadow = hostEl.attachShadow({ mode: "closed" });
+function isYouTubeDarkMode(): boolean {
+  return (
+    document.documentElement.hasAttribute("dark") ||
+    document.body?.hasAttribute("dark") ||
+    Boolean(document.querySelector("html[dark]")) ||
+    window.matchMedia?.("(prefers-color-scheme: dark)").matches
+  );
+}
 
-    const style = document.createElement("style");
-    style.textContent = `
-      .edm-pill {
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-        background: rgba(15, 23, 42, 0.94);
-        backdrop-filter: blur(12px);
-        color: #f8fafc;
-        border: 1px solid rgba(255, 255, 255, 0.18);
-        border-radius: 9999px;
-        padding: 8px 16px;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        font-size: 13px;
-        font-weight: 600;
-        cursor: pointer;
-        box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.3);
-        transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-        user-select: none;
-      }
-      .edm-pill:hover {
-        background: #0284c7;
-        transform: translateY(-2px);
-        box-shadow: 0 15px 30px -5px rgba(2, 132, 199, 0.4);
-      }
-      .edm-icon {
-        width: 16px;
-        height: 16px;
-        fill: currentColor;
-      }
-      .edm-panel {
-        display: none;
-        position: absolute;
-        bottom: 50px;
-        right: 0;
-        width: 300px;
-        background: #0f172a;
-        border: 1px solid rgba(255, 255, 255, 0.15);
-        border-radius: 12px;
-        padding: 12px;
-        box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.6);
-        color: #e2e8f0;
-      }
-      .edm-panel.open { display: block; }
-      .edm-title { font-size: 13px; font-weight: 700; margin-bottom: 8px; display: flex; justify-content: space-between; }
-      .edm-variant {
-        padding: 8px 10px;
-        margin-bottom: 6px;
-        background: rgba(255, 255, 255, 0.06);
-        border-radius: 6px;
-        cursor: pointer;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        font-size: 12px;
-        transition: background 0.15s;
-      }
-      .edm-variant:hover { background: #0284c7; color: #fff; }
-      .edm-drm-warning {
-        background: rgba(239, 68, 68, 0.15);
-        border: 1px solid rgba(239, 68, 68, 0.3);
-        color: #f87171;
-        padding: 8px 10px;
-        border-radius: 6px;
-        font-size: 11px;
-        line-height: 1.4;
-      }
-      .edm-hide-site {
-        margin-top: 8px;
-        font-size: 11px;
-        color: #94a3b8;
-        cursor: pointer;
-        text-align: right;
-      }
-      .edm-hide-site:hover { color: #f1f5f9; text-decoration: underline; }
-    `;
-
-    const container = document.createElement("div");
-    container.innerHTML = `
-      <div class="edm-pill">
-        <svg class="edm-icon" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14l-4-4 1.41-1.41L11 13.17V7h2v6.17l2.59-2.58L17 12l-5 4z"/></svg>
-        <span>Download Video</span>
-      </div>
-      <div class="edm-panel">
-        <div class="edm-title">
-          <span>Detected Streams</span>
-          <span style="cursor:pointer;" class="edm-close">✕</span>
-        </div>
-        <div class="edm-content">Scanning media...</div>
-        <div class="edm-hide-site">Hide button on this site</div>
-      </div>
-    `;
-
-    shadow.appendChild(style);
-    shadow.appendChild(container);
-
-    const pill = container.querySelector(".edm-pill") as HTMLElement;
-    const panel = container.querySelector(".edm-panel") as HTMLElement;
-    const closeBtn = container.querySelector(".edm-close") as HTMLElement;
-    const contentEl = container.querySelector(".edm-content") as HTMLElement;
-    const hideBtn = container.querySelector(".edm-hide-site") as HTMLElement;
-
-    pill.addEventListener("click", () => {
-      panel.classList.toggle("open");
-      if (panel.classList.contains("open")) {
-        const resources = sniffResources().filter((r) => r.type === "video" || r.type === "stream");
-        if (resources.length === 0) {
-          contentEl.innerHTML = '<div style="font-size:11px; color:#94a3b8; padding:8px 0;">No direct video streams captured yet. Start playing video to sniff streams.</div>';
-          return;
-        }
-
-        contentEl.innerHTML = resources
-          .map(
-            (r, idx) => `
-          <div class="edm-variant" data-idx="${idx}">
-            <div>
-              <div style="font-weight:600; max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${r.title}</div>
-              <div style="font-size:10px; opacity:0.7;">${r.format} Stream</div>
-            </div>
-            <button style="background:#0284c7; color:#fff; border:none; border-radius:4px; padding:4px 8px; font-size:11px; cursor:pointer;">Download</button>
-          </div>
-        `
-          )
-          .join("");
-
-        contentEl.querySelectorAll(".edm-variant").forEach((item) => {
-          item.addEventListener("click", () => {
-            const idx = parseInt(item.getAttribute("data-idx") || "0", 10);
-            const target = resources[idx];
-            if (target) {
-              chrome.runtime.sendMessage({
-                action: "add_download",
-                url: target.url,
-                filename: target.title + (target.format ? `.${target.format.toLowerCase()}` : ""),
-                referrer: window.location.href,
-              });
-              panel.classList.remove("open");
-            }
-          });
-        });
-      }
+// 1. Native YouTube Pill Button
+function injectYouTubeButton() {
+  if (!isYouTube()) return;
+  if (isYouTubeShorts()) {
+    chrome.storage.local.get(["youtube_shorts_enabled"], (res) => {
+      if (!res.youtube_shorts_enabled) return;
+      doInjectYouTubeButton();
     });
+    return;
+  }
+  if (!isYouTubeWatch()) return;
 
-    closeBtn.addEventListener("click", () => panel.classList.remove("open"));
+  doInjectYouTubeButton();
+}
 
-    hideBtn.addEventListener("click", () => {
-      chrome.storage.local.get(["disabled_video_domains"], (r) => {
-        const list = r.disabled_video_domains || [];
-        list.push(hostDomain);
-        chrome.storage.local.set({ disabled_video_domains: list }, () => {
-          hostEl.remove();
+function doInjectYouTubeButton() {
+  chrome.storage.local.get(
+    ["media_button_master", "media_button_youtube", "hidden_sites", "disabled_video_domains"],
+    (res) => {
+      if (res.media_button_master === false) return;
+      if (res.media_button_youtube === false) return;
+      const hidden: string[] = res.hidden_sites || res.disabled_video_domains || [];
+      if (hidden.some((h) => window.location.hostname.includes(h))) return;
+
+      // Check if already injected
+      if (document.getElementById("edm-yt-button-host")) return;
+
+      // Locate YouTube owner container (#subscribe-button inside #owner or ytd-watch-metadata)
+      const subscribeBtn =
+        document.querySelector("#owner #subscribe-button") ||
+        document.querySelector("ytd-watch-metadata #owner #subscribe-button") ||
+        document.querySelector("#subscribe-button");
+
+      if (!subscribeBtn || !subscribeBtn.parentElement) return;
+
+      const isDark = isYouTubeDarkMode();
+      const hostEl = document.createElement("div");
+      hostEl.id = "edm-yt-button-host";
+      hostEl.style.display = "inline-flex";
+      hostEl.style.alignItems = "center";
+      hostEl.style.marginLeft = "8px";
+      hostEl.style.verticalAlign = "middle";
+
+      const shadow = hostEl.attachShadow({ mode: "closed" });
+
+      const bg = isDark ? "rgba(255, 255, 255, 0.1)" : "rgba(0, 0, 0, 0.05)";
+      const bgHover = isDark ? "rgba(255, 255, 255, 0.2)" : "rgba(0, 0, 0, 0.1)";
+      const color = isDark ? "#f1f1f1" : "#0f0f0f";
+      const border = isDark ? "rgba(255, 255, 255, 0.15)" : "rgba(0, 0, 0, 0.1)";
+
+      const style = document.createElement("style");
+      style.textContent = `
+        .edm-yt-pill {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          height: 36px;
+          padding: 0 16px;
+          border-radius: 18px;
+          background: ${bg};
+          color: ${color};
+          border: 1px solid ${border};
+          font-family: "Roboto", "Segoe UI", Arial, sans-serif;
+          font-size: 14px;
+          font-weight: 500;
+          cursor: pointer;
+          user-select: none;
+          transition: background-color 0.2s cubic-bezier(0.05, 0, 0.2, 1), transform 0.1s;
+          box-sizing: border-box;
+          position: relative;
+        }
+        .edm-yt-pill:hover {
+          background: ${bgHover};
+        }
+        .edm-yt-pill:active {
+          transform: scale(0.98);
+        }
+        .edm-yt-icon {
+          width: 16px;
+          height: 16px;
+          fill: currentColor;
+          flex-shrink: 0;
+        }
+        .edm-yt-dropdown {
+          display: none;
+          position: absolute;
+          top: 42px;
+          left: 0;
+          min-width: 200px;
+          background: ${isDark ? "#1f1f1f" : "#ffffff"};
+          color: ${isDark ? "#f1f1f1" : "#0f0f0f"};
+          border: 1px solid ${border};
+          border-radius: 12px;
+          padding: 6px 0;
+          box-shadow: 0 8px 24px rgba(0, 0, 0, ${isDark ? "0.6" : "0.2"});
+          z-index: 2147483647;
+          font-size: 13px;
+        }
+        .edm-yt-dropdown.open {
+          display: block;
+        }
+        .edm-yt-item {
+          padding: 8px 14px;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          transition: background 0.15s;
+        }
+        .edm-yt-item:hover {
+          background: ${isDark ? "rgba(255, 255, 255, 0.1)" : "rgba(0, 0, 0, 0.05)"};
+        }
+        .edm-yt-divider {
+          height: 1px;
+          background: ${border};
+          margin: 4px 0;
+        }
+        .edm-yt-sub {
+          font-size: 11px;
+          opacity: 0.65;
+        }
+      `;
+
+      const wrapper = document.createElement("div");
+      wrapper.style.position = "relative";
+      wrapper.innerHTML = `
+        <button class="edm-yt-pill" type="button" aria-label="Download with EDM">
+          <svg class="edm-yt-icon" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14l-4-4 1.41-1.41L11 13.17V7h2v6.17l2.59-2.58L17 12l-5 4z"/></svg>
+          <span>EDM</span>
+        </button>
+        <div class="edm-yt-dropdown">
+          <div class="edm-yt-item" id="opt-quick">
+            <div>
+              <div>Download Video</div>
+              <div class="edm-yt-sub">Best available quality</div>
+            </div>
+          </div>
+          <div class="edm-yt-item" id="opt-probe">
+            <div>
+              <div>Probe Formats</div>
+              <div class="edm-yt-sub">Inspect 1080p, 720p & audio</div>
+            </div>
+          </div>
+          <div class="edm-yt-divider"></div>
+          <div class="edm-yt-item" id="opt-hide">
+            <div style="font-size:12px; opacity:0.8;">Hide button on YouTube</div>
+          </div>
+        </div>
+      `;
+
+      shadow.appendChild(style);
+      shadow.appendChild(wrapper);
+
+      // Insert immediately after Subscribe button
+      if (subscribeBtn.nextSibling) {
+        subscribeBtn.parentElement.insertBefore(hostEl, subscribeBtn.nextSibling);
+      } else {
+        subscribeBtn.parentElement.appendChild(hostEl);
+      }
+
+      const pillBtn = wrapper.querySelector(".edm-yt-pill") as HTMLElement;
+      const dropdown = wrapper.querySelector(".edm-yt-dropdown") as HTMLElement;
+      const optQuick = wrapper.querySelector("#opt-quick") as HTMLElement;
+      const optProbe = wrapper.querySelector("#opt-probe") as HTMLElement;
+      const optHide = wrapper.querySelector("#opt-hide") as HTMLElement;
+
+      pillBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        dropdown.classList.toggle("open");
+      });
+
+      document.addEventListener("click", () => {
+        dropdown.classList.remove("open");
+      });
+
+      optQuick.addEventListener("click", () => {
+        dropdown.classList.remove("open");
+        const cleanTitle = (document.title || "YouTube Video").replace(" - YouTube", "").trim();
+        chrome.runtime.sendMessage({
+          action: "add_download",
+          url: window.location.href,
+          filename: cleanTitle + ".mp4",
+          referrer: window.location.href,
         });
       });
-    });
+
+      optProbe.addEventListener("click", () => {
+        dropdown.classList.remove("open");
+        optProbe.innerHTML = '<div><div>Probing...</div><div class="edm-yt-sub">Querying formats</div></div>';
+        chrome.runtime.sendMessage(
+          { action: "probe_page_media", url: window.location.href },
+          (res) => {
+            if (res && res.ok && Array.isArray(res.variants) && res.variants.length > 0) {
+              const cleanTitle = (document.title || "YouTube Video").replace(" - YouTube", "").trim();
+              let html = `<div style="padding:6px 14px; font-weight:600; font-size:11px; opacity:0.7;">AVAILABLE FORMATS</div>`;
+              res.variants.slice(0, 5).forEach((v: any) => {
+                html += `
+                  <div class="edm-yt-item edm-probe-variant" data-url="${encodeURIComponent(v.url)}" data-type="${v.media_type || 'direct'}">
+                    <div>
+                      <div>${v.quality || v.resolution || 'Direct Stream'}</div>
+                      <div class="edm-yt-sub">${v.resolution || ''} ${v.media_type || ''}</div>
+                    </div>
+                  </div>
+                `;
+              });
+              html += `<div class="edm-yt-divider"></div><div class="edm-yt-item" id="opt-hide"><div style="font-size:12px; opacity:0.8;">Hide button on YouTube</div></div>`;
+              dropdown.innerHTML = html;
+              dropdown.classList.add("open");
+
+              dropdown.querySelectorAll(".edm-probe-variant").forEach((el) => {
+                el.addEventListener("click", () => {
+                  const targetUrl = decodeURIComponent(el.getAttribute("data-url") || "");
+                  if (targetUrl) {
+                    chrome.runtime.sendMessage({
+                      action: "add_download",
+                      url: targetUrl,
+                      filename: cleanTitle + ".mp4",
+                      referrer: window.location.href,
+                    });
+                    dropdown.classList.remove("open");
+                  }
+                });
+              });
+            } else {
+              // Fallback to quick download
+              const cleanTitle = (document.title || "YouTube Video").replace(" - YouTube", "").trim();
+              chrome.runtime.sendMessage({
+                action: "add_download",
+                url: window.location.href,
+                filename: cleanTitle + ".mp4",
+                referrer: window.location.href,
+              });
+            }
+          }
+        );
+      });
+
+      optHide.addEventListener("click", () => {
+        dropdown.classList.remove("open");
+        chrome.storage.local.get(["hidden_sites"], (r) => {
+          const list: string[] = r.hidden_sites || [];
+          if (!list.includes("youtube.com")) list.push("youtube.com");
+          chrome.storage.local.set({ hidden_sites: list }, () => {
+            hostEl.remove();
+          });
+        });
+      });
+    }
+  );
+}
+
+// 2. Floating Video Downloader Button for Non-YouTube Sites Only
+function injectFloatingMediaButton() {
+  if (isYouTube()) {
+    // Invariant: Never show floating button on YouTube
+    const existing = document.getElementById("edm-video-sniffer-host");
+    if (existing) existing.remove();
+    return;
+  }
+
+  const hostDomain = window.location.hostname;
+  chrome.storage.local.get(
+    ["media_button_master", "media_button_other_sites", "hidden_sites", "disabled_video_domains", "disable_floating_button"],
+    (res) => {
+      if (res.disable_floating_button) return;
+      if (res.media_button_master === false) return;
+      if (res.media_button_other_sites === false) return;
+
+      const disabledList: string[] = res.hidden_sites || res.disabled_video_domains || [];
+      if (disabledList.some((d) => hostDomain.includes(d))) return;
+
+      const videos = document.querySelectorAll("video, audio");
+      if (videos.length === 0) return;
+
+      if (document.getElementById("edm-video-sniffer-host")) return;
+
+      const hostEl = document.createElement("div");
+      hostEl.id = "edm-video-sniffer-host";
+      hostEl.style.position = "fixed";
+      hostEl.style.bottom = "24px";
+      hostEl.style.right = "24px";
+      hostEl.style.zIndex = "2147483647";
+      document.documentElement.appendChild(hostEl);
+
+      const shadow = hostEl.attachShadow({ mode: "closed" });
+
+      const style = document.createElement("style");
+      style.textContent = `
+        .edm-pill {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          background: rgba(15, 23, 42, 0.94);
+          backdrop-filter: blur(12px);
+          color: #f8fafc;
+          border: 1px solid rgba(255, 255, 255, 0.18);
+          border-radius: 9999px;
+          padding: 8px 16px;
+          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+          font-size: 13px;
+          font-weight: 600;
+          cursor: pointer;
+          box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.3);
+          transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+          user-select: none;
+        }
+        .edm-pill:hover {
+          background: #0284c7;
+          transform: translateY(-2px);
+          box-shadow: 0 15px 30px -5px rgba(2, 132, 199, 0.4);
+        }
+        .edm-icon {
+          width: 16px;
+          height: 16px;
+          fill: currentColor;
+        }
+        .edm-panel {
+          display: none;
+          position: absolute;
+          bottom: 50px;
+          right: 0;
+          width: 300px;
+          background: #0f172a;
+          border: 1px solid rgba(255, 255, 255, 0.15);
+          border-radius: 12px;
+          padding: 12px;
+          box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.6);
+          color: #e2e8f0;
+        }
+        .edm-panel.open { display: block; }
+        .edm-title { font-size: 13px; font-weight: 700; margin-bottom: 8px; display: flex; justify-content: space-between; }
+        .edm-variant {
+          padding: 8px 10px;
+          margin-bottom: 6px;
+          background: rgba(255, 255, 255, 0.06);
+          border-radius: 6px;
+          cursor: pointer;
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          font-size: 12px;
+          transition: background 0.15s;
+        }
+        .edm-variant:hover { background: #0284c7; color: #fff; }
+        .edm-hide-site {
+          margin-top: 8px;
+          font-size: 11px;
+          color: #94a3b8;
+          cursor: pointer;
+          text-align: right;
+        }
+        .edm-hide-site:hover { color: #f1f5f9; text-decoration: underline; }
+      `;
+
+      const container = document.createElement("div");
+      container.innerHTML = `
+        <div class="edm-pill">
+          <svg class="edm-icon" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14l-4-4 1.41-1.41L11 13.17V7h2v6.17l2.59-2.58L17 12l-5 4z"/></svg>
+          <span>Download Video</span>
+        </div>
+        <div class="edm-panel">
+          <div class="edm-title">
+            <span>Detected Streams</span>
+            <span style="cursor:pointer;" class="edm-close">✕</span>
+          </div>
+          <div class="edm-content">Scanning media...</div>
+          <div class="edm-hide-site">Hide button on this site</div>
+        </div>
+      `;
+
+      shadow.appendChild(style);
+      shadow.appendChild(container);
+
+      const pill = container.querySelector(".edm-pill") as HTMLElement;
+      const panel = container.querySelector(".edm-panel") as HTMLElement;
+      const closeBtn = container.querySelector(".edm-close") as HTMLElement;
+      const contentEl = container.querySelector(".edm-content") as HTMLElement;
+      const hideBtn = container.querySelector(".edm-hide-site") as HTMLElement;
+
+      pill.addEventListener("click", () => {
+        panel.classList.toggle("open");
+        if (panel.classList.contains("open")) {
+          const resources = sniffResources().filter((r) => r.type === "video" || r.type === "stream");
+          if (resources.length === 0) {
+            contentEl.innerHTML = '<div style="font-size:11px; color:#94a3b8; padding:8px 0;">No direct video streams captured yet. Start playback to sniff streams.</div>';
+            return;
+          }
+
+          contentEl.innerHTML = resources
+            .map(
+              (r, idx) => `
+            <div class="edm-variant" data-idx="${idx}">
+              <div>
+                <div style="font-weight:600; max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${r.title}</div>
+                <div style="font-size:10px; opacity:0.7;">${r.format} Stream</div>
+              </div>
+              <button style="background:#0284c7; color:#fff; border:none; border-radius:4px; padding:4px 8px; font-size:11px; cursor:pointer;">Download</button>
+            </div>
+          `
+            )
+            .join("");
+
+          contentEl.querySelectorAll(".edm-variant").forEach((item) => {
+            item.addEventListener("click", () => {
+              const idx = parseInt(item.getAttribute("data-idx") || "0", 10);
+              const target = resources[idx];
+              if (target) {
+                chrome.runtime.sendMessage({
+                  action: "add_download",
+                  url: target.url,
+                  filename: target.title + (target.format ? `.${target.format.toLowerCase()}` : ""),
+                  referrer: window.location.href,
+                });
+                panel.classList.remove("open");
+              }
+            });
+          });
+        }
+      });
+
+      closeBtn.addEventListener("click", () => panel.classList.remove("open"));
+
+      hideBtn.addEventListener("click", () => {
+        chrome.storage.local.get(["hidden_sites", "disabled_video_domains"], (r) => {
+          const list: string[] = r.hidden_sites || r.disabled_video_domains || [];
+          if (!list.includes(hostDomain)) list.push(hostDomain);
+          chrome.storage.local.set({ hidden_sites: list, disabled_video_domains: list }, () => {
+            hostEl.remove();
+          });
+        });
+      });
+    }
+  );
+}
+
+// 3. Execution & SPA Observer Setup
+function runButtonInjection() {
+  if (isYouTube()) {
+    injectYouTubeButton();
+  } else {
+    injectFloatingMediaButton();
+  }
+}
+
+// Handle YouTube SPA Navigation
+if (isYouTube()) {
+  window.addEventListener("yt-navigate-finish", () => {
+    setTimeout(injectYouTubeButton, 600);
+  });
+  document.addEventListener("spfdone", () => {
+    setTimeout(injectYouTubeButton, 600);
   });
 }
 
-// Run media sniffer injection once DOM is ready
+// Debounced DOM Mutation Observer for SPA navigation & late-loading DOM
+let debounceTimer: any = null;
+const observer = new MutationObserver(() => {
+  if (debounceTimer) clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(() => {
+    runButtonInjection();
+  }, 500);
+});
+
+observer.observe(document.documentElement || document.body, {
+  childList: true,
+  subtree: true,
+});
+
 if (document.readyState === "loading") {
   document.addEventListener("DOMContentLoaded", () => {
-    setTimeout(injectFloatingMediaButton, 1200);
+    setTimeout(runButtonInjection, 800);
   });
 } else {
-  setTimeout(injectFloatingMediaButton, 1200);
+  setTimeout(runButtonInjection, 800);
 }
 
 // Listen for queries from popup or background

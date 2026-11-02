@@ -1,13 +1,13 @@
 {
-  "version": "0.0.6",
-  "generated_at": "2026-11-01T17:16:14.443Z",
+  "version": "0.0.7",
+  "generated_at": "2026-11-02T07:05:22.344Z",
   "files": {
-    "manifest.json": "sha256:24cb95bae384adb478797f2f5d61cf576e5e56e020fd6b718cdef7c468074b58",
-    "background.js": "sha256:977af1caa58d496265b3ce2ab098ed6449009b457b61f0d1665767837c4e2c67",
-    "content.js": "sha256:350986f807296e15759b740697e7cddc236a371e24a1a2fbef6edb0287067e8e",
-    "popup.html": "sha256:d4d39266de8027e60f349eb2ce0b6c1c3665884097707c03a1f4f13770b3fe04",
+    "manifest.json": "sha256:0a327cfae972da50c5ee834c2b53ae6782eab28861da0d782b7907d70796894b",
+    "background.js": "sha256:23225facd2c96e09b27d2651f754d9c6b37f6917e613845a2031d3e5b9ca5492",
+    "content.js": "sha256:ec9e307402c7489f472bf30f1a820f334785d0ef28c84513721dbb3f2c774524",
+    "popup.html": "sha256:ae766cdab90d913aebfb17493a759d0db4eebccc8ec9deef08df113899a8ed1c",
     "popup.css": "sha256:e5608976a73a6536723f08a400dab6e2694fdc0dcd24d3bd92f9e9cc6946fcac",
-    "popup.js": "sha256:a8c2bbf47f9db87560c9ef09e194cf1cad12c1c1e93e9e49e7557983b2ceeb91",
+    "popup.js": "sha256:24cf1b73546454f2be336c51d231665318895a9e9b55750b0ee2b4f7529fb873",
     "options.html": "sha256:e752b8c8a8712afe790a5454680158c6f6dd1f70a767df655cf9d0e16b4e5fa2",
     "options.js": "sha256:a30f82339993baf0732af441bd98f2c55705853f601eaea8f33909e400f6a5c0",
     "logo.png": "sha256:96a0c2bd1531a265bccf9b552886ffc167679806e0cb7e21fa82932964e9e8fa"

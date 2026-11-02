@@ -63,6 +63,7 @@ import {
 } from "../services/tauriBridge";
 import { EdmSettings, defaultSettings, saveSettings } from "../types/settings";
 import { FEATURE_PACKS } from "../types/featurePacks";
+import { QueuesView } from "./QueuesView";
 import { formatBytes } from "../utils/format";
 import { motion, AnimatePresence } from "motion/react";
 import { springs, popoverVariants } from "../utils/motion";
@@ -87,6 +88,7 @@ type SettingsSection =
   | "downloads"
   | "packs"
   | "network"
+  | "queues"
   | "automation"
   | "engine"
   | "about";
@@ -241,8 +243,14 @@ export default function SettingsPage({
       desc: "Browser extension bridge, stream sniffer, proxy protocols",
     },
     {
+      id: "queues" as const,
+      label: "Queues & Schedule",
+      icon: Layers,
+      desc: "Active download queues, scheduling rules, bandwidth limits, post-task actions",
+    },
+    {
       id: "automation" as const,
-      label: "Automation & Queues",
+      label: "Automation & Alerts",
       icon: Clock,
       desc: "Off-peak scheduler, power actions, desktop notifications",
     },
@@ -306,6 +314,14 @@ export default function SettingsPage({
     }
     setActiveSection(current);
   }, [navItems]);
+
+  useEffect(() => {
+    if (window.location.hash === "#section-queues" || window.location.hash === "#queues") {
+      setTimeout(() => {
+        scrollToSection("queues");
+      }, 150);
+    }
+  }, []);
 
   const update = <K extends keyof EdmSettings>(section: K, patch: Partial<EdmSettings[K]>) => {
     const updated = {
@@ -648,11 +664,11 @@ export default function SettingsPage({
                   <div className="flex items-center gap-2">
                     <Sparkles className="w-4 h-4 text-[var(--accent)]" />
                     <label className="text-xs font-semibold text-[var(--text-primary)] block">
-                      Setup Wizard &amp; Browser Onboarding
+                      Browser Setup Wizard
                     </label>
                   </div>
                   <p className="text-[11px] text-[var(--text-muted)] mt-0.5">
-                    Launch the guided 4-step wizard to scan installed browsers, verify extension integrity, and test wake integration.
+                    Run setup again to configure browsers and test native host integration.
                   </p>
                 </div>
                 {onOpenWizard && (
@@ -662,7 +678,7 @@ export default function SettingsPage({
                     className="btn-3d btn-primary h-8 px-3 rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer shrink-0"
                   >
                     <Sparkles className="w-3.5 h-3.5" />
-                    <span>Run Setup Wizard</span>
+                    <span>Run setup again</span>
                   </motion.button>
                 )}
               </div>
@@ -1889,6 +1905,27 @@ export default function SettingsPage({
                     </div>
                   </div>
                 )}
+              </div>
+            </section>
+          )}
+
+          {/* ═════════════════════════════════════════════════════════
+              SECTION: QUEUES & SCHEDULE
+          ══════════════════════════════════════════════════════════ */}
+          {isSectionVisible("queues") && (
+            <section id="section-queues" className="space-y-6 pt-1 pb-8 border-b border-[var(--border-subtle)]">
+              <div>
+                <div className="flex items-center gap-2">
+                  <Layers className="w-5 h-5 text-[var(--accent)]" />
+                  <h2 className="text-base font-bold text-[var(--text-primary)]">Queues &amp; Schedule</h2>
+                </div>
+                <p className="text-xs text-[var(--text-muted)] mt-1">
+                  Automate download windows, bandwidth caps, and post-task actions.
+                </p>
+              </div>
+
+              <div className="rounded-xl overflow-hidden border border-[var(--border-subtle)] h-[580px] flex flex-col">
+                <QueuesView />
               </div>
             </section>
           )}

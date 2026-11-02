@@ -1,7 +1,7 @@
-# Verification Script for EDM v0.0.6
+# Verification Script for EDM v0.0.7
 
 Write-Host "==========================================================" -ForegroundColor Cyan
-Write-Host "   EDM Version 0.0.6 Full Verification Pipeline           " -ForegroundColor Cyan
+Write-Host "   EDM Version 0.0.7 Full Verification Pipeline           " -ForegroundColor Cyan
 Write-Host "==========================================================" -ForegroundColor Cyan
 
 $allPassed = $true

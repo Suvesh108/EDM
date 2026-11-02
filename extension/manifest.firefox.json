@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "EDM — Edge Download Manager",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "description": "High-performance live download dashboard and acceleration integration for EDM",
   "permissions": [
     "downloads",
@@ -9,7 +9,10 @@
     "contextMenus",
     "storage",
     "notifications",
-    "nativeMessaging"
+    "nativeMessaging",
+    "webRequest",
+    "scripting",
+    "activeTab"
   ],
   "host_permissions": [
     "http://*/*",
