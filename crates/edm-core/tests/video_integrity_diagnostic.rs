@@ -172,7 +172,7 @@ async fn handle_file(
                 let chunk_size = 64 * 1024;
                 let chunks: Vec<Bytes> = slice_data
                     .chunks(chunk_size)
-                    .map(|c| Bytes::copy_from_slice(c))
+                    .map(Bytes::copy_from_slice)
                     .collect();
                 let stream = futures_util::stream::unfold((chunks, 0), |(chunks, idx)| async move {
                     if idx >= chunks.len() {

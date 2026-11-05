@@ -18,8 +18,7 @@ pub fn next_step_down(current: u32, min: u32) -> u32 {
     let target = CONNECTION_STEPS
         .iter()
         .copied()
-        .filter(|&s| s < current)
-        .last()
+        .rfind(|&s| s < current)
         .unwrap_or(min);
     target.max(min)
 }
@@ -539,8 +538,7 @@ mod tests {
             assert!(is_warmed_up);
 
             let rem = total_size.saturating_sub(total_downloaded);
-            let eta = if effective_rate > 0 {
-                let raw_eta = rem / effective_rate;
+            let eta = if let Some(raw_eta) = rem.checked_div(effective_rate) {
                 let smoothed = if let Some(prev) = smoothed_eta_sec {
                     let max_delta = (prev as f64 * 0.20).max(1.0) as u64;
                     if raw_eta > prev + max_delta {

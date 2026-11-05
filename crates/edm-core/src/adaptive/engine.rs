@@ -547,8 +547,7 @@ impl AdaptiveEngine {
                             None
                         } else if let Some(tot) = total_size {
                             let rem = tot.saturating_sub(total_downloaded);
-                            if effective_rate_bytes > 0 {
-                                let raw_eta = rem / effective_rate_bytes;
+                            if let Some(raw_eta) = rem.checked_div(effective_rate_bytes) {
                                 // Smooth ETA so it doesn't jump by more than 15% between ticks
                                 let smoothed = if let Some(prev) = smoothed_eta_sec {
                                     let max_delta = (prev as f64 * 0.15).max(1.0) as u64;

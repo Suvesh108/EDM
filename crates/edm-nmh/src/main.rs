@@ -764,6 +764,7 @@ fn handle_message(msg: ExtensionMessage, store: &Arc<Mutex<Store>>) -> AppReply 
                         created_at: r.created_at,
                         completed_at: if is_completed { Some(Utc::now()) } else { None },
                         error_msg: r.error_msg,
+                        eta_seconds: None,
                     });
                 }
             }
@@ -798,6 +799,7 @@ fn handle_message(msg: ExtensionMessage, store: &Arc<Mutex<Store>>) -> AppReply 
                         created_at: r.created_at,
                         completed_at: if is_comp { Some(Utc::now()) } else { None },
                         error_msg: r.error_msg,
+                        eta_seconds: None,
                     },
                 }
             } else {

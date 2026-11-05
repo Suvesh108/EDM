@@ -175,7 +175,7 @@ fn register_native_messaging_host() {
 
     if let Ok(content) = serde_json::to_string_pretty(&manifest_json) {
         let _ = std::fs::write(&manifest_path, &content);
-        if current_dir != &app_dir {
+        if current_dir != app_dir {
             let _ = std::fs::write(current_dir.join("com.edm.nmh.json"), &content);
         }
     }
@@ -191,7 +191,7 @@ fn register_native_messaging_host() {
     });
     if let Ok(content) = serde_json::to_string_pretty(&ff_manifest_json) {
         let _ = std::fs::write(&ff_manifest_path, &content);
-        if current_dir != &app_dir {
+        if current_dir != app_dir {
             let _ = std::fs::write(current_dir.join("com.edm.nmh.firefox.json"), &content);
         }
     }
@@ -2160,7 +2160,7 @@ fn prepare_extension_files() -> Result<String, String> {
                 let _ = std::fs::create_dir_all(&sync_target);
                 for (filename, bytes) in EMBEDDED_EXTENSION_FILES {
                     let dest = sync_target.join(filename);
-                    if !dest.exists() || dest.file_name().map_or(false, |n| n == "manifest.json") {
+                    if !dest.exists() || dest.file_name().is_some_and(|n| n == "manifest.json") {
                         let _ = std::fs::write(&dest, bytes);
                     }
                 }
