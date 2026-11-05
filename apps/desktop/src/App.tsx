@@ -48,6 +48,7 @@ import {
   viewVariants,
 } from "./utils/motion";
 import {
+  isTauri,
   tauriProbeUrl,
   tauriStartDownload,
   tauriPauseDownload,
@@ -343,14 +344,18 @@ export default function App() {
 
     // Listen for backend downloads-changed event (e.g. extension deleted task)
     let unlisten: (() => void) | undefined;
-    import("@tauri-apps/api/event").then(({ listen }) => {
-      listen("downloads-changed", () => {
-        syncWithBackend();
-      }).then((fn) => {
-        if (mounted) unlisten = fn;
-        else fn();
-      });
-    }).catch(() => {});
+    if (isTauri()) {
+      import("@tauri-apps/api/event").then(({ listen }) => {
+        try {
+          listen("downloads-changed", () => {
+            syncWithBackend();
+          }).then((fn) => {
+            if (mounted) unlisten = fn;
+            else fn();
+          }).catch(() => {});
+        } catch {}
+      }).catch(() => {});
+    }
 
     // Fast sync interval
     const interval = setInterval(syncWithBackend, 800);

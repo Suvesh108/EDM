@@ -1,9 +1,9 @@
 {
   "version": "0.0.7",
-  "generated_at": "2026-11-05T13:20:11.648Z",
+  "generated_at": "2026-11-05T14:19:21.741Z",
   "files": {
     "manifest.json": "sha256:96070458e1a921ddb8f3372da804c1f216982d9b0a296701fc8381b8bf62e44e",
-    "background.js": "sha256:fa798d80eaf14c0a4ac5df5d05ccb56038c6e72a42170fd52ec7ca1a4d184b56",
+    "background.js": "sha256:763fc2ba57d32bdd3b47971c90ef3c377ea16e2c52f5ad4ab473037de0c4bb92",
     "content.js": "sha256:3adaa640cff0a491468eebaa41f96f1b7062586020cb5a39775a678b637702cd",
     "popup.html": "sha256:3ef8decdb857078021f6fdf5dc17d3c7439a5eb24396ec3cdf694449977c5160",
     "popup.css": "sha256:e5608976a73a6536723f08a400dab6e2694fdc0dcd24d3bd92f9e9cc6946fcac",

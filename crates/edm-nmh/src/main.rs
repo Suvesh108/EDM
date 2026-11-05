@@ -250,7 +250,15 @@ fn launch_detached(exe: &PathBuf, show_window: bool) {
         } else {
             cmd.arg("--background");
         }
-        cmd.creation_flags(DETACHED_PROCESS | CREATE_BREAKAWAY_FROM_JOB | CREATE_NO_WINDOW);
+        cmd.stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        let flags = if show_window {
+            DETACHED_PROCESS | CREATE_BREAKAWAY_FROM_JOB
+        } else {
+            DETACHED_PROCESS | CREATE_BREAKAWAY_FROM_JOB | CREATE_NO_WINDOW
+        };
+        cmd.creation_flags(flags);
         let _ = cmd.spawn();
     }
 
@@ -262,6 +270,9 @@ fn launch_detached(exe: &PathBuf, show_window: bool) {
         } else {
             cmd.arg("--background");
         }
+        cmd.stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
         let _ = cmd.spawn();
     }
 }

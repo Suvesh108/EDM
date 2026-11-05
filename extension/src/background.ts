@@ -256,9 +256,15 @@ async function wakeDesktop(showWindow = false): Promise<{ ok: boolean; token?: s
       chrome.runtime.sendNativeMessage(
         "com.edm.nmh",
         { type: "wake", show_window: showWindow },
-        (response) => {
+        async (response) => {
           if (chrome.runtime.lastError) {
             const err = chrome.runtime.lastError.message || "Failed to communicate with NMH";
+            // Check if EDM is already alive via loopback before surfacing a wake error
+            const runningCheck = await checkIfEdmRunning();
+            if (runningCheck.running) {
+              nmhHealth = { ok: true };
+              return resolve({ ok: true, token: runningCheck.token });
+            }
             nmhHealth = { ok: false, reason: err };
             return resolve({ ok: false, error: err });
           }
@@ -284,6 +290,20 @@ async function wakeDesktop(showWindow = false): Promise<{ ok: boolean; token?: s
         return { ok: false, error: "Wake succeeded but WebSocket failed to connect within timeout" };
       }
     } else {
+      // Secondary check: Did EDM start anyway?
+      const runningCheck = await checkIfEdmRunning();
+      if (runningCheck.running) {
+        nmhHealth = { ok: true };
+        if (runningCheck.token) {
+          await chrome.storage.local.set({ edm_ws_token: runningCheck.token });
+        }
+        const connected = await connectWebSocketPromise(5000);
+        if (connected) {
+          connectionStatus = "connected";
+          notifyPopupPorts();
+          return { ok: true, token: runningCheck.token };
+        }
+      }
       connectionStatus = "asleep";
       if (res && res.error) {
         nmhHealth = { ok: false, reason: res.error };
@@ -407,6 +427,7 @@ async function connectWebSocket() {
       switch (data.type) {
         case "ready": {
           connectionStatus = "connected";
+          nmhHealth = { ok: true };
           if (data.extension_version) {
             checkAndPerformAutoReload(data.extension_version);
           }

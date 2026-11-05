@@ -30,6 +30,7 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({
   const [extensionFolderPath, setExtensionFolderPath] = useState<string>("");
   const [testResult, setTestResult] = useState<string | null>(null);
   const [testing, setTesting] = useState<boolean>(false);
+  const [activeBrowserId, setActiveBrowserId] = useState<string | null>(null);
 
   const scanBrowsers = useCallback(async () => {
     try {
@@ -103,8 +104,6 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({
     }
     onClose();
   };
-
-  const [activeBrowserId, setActiveBrowserId] = useState<string | null>(null);
 
   const copyToClipboard = async (text: string): Promise<boolean> => {
     try {
