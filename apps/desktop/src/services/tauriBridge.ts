@@ -679,7 +679,11 @@ export async function tauriIsWizardCompleted(): Promise<boolean> {
   if (isTauri()) {
     try {
       const { invoke } = await import("@tauri-apps/api/core");
-      return await invoke<boolean>("is_wizard_completed");
+      const completed = await invoke<boolean>("is_wizard_completed");
+      if (!completed) {
+        localStorage.removeItem("edm_wizard_completed");
+      }
+      return completed;
     } catch {}
   }
   return localStorage.getItem("edm_wizard_completed") === "true";

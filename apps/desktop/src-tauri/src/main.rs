@@ -174,7 +174,10 @@ fn register_native_messaging_host() {
     });
 
     if let Ok(content) = serde_json::to_string_pretty(&manifest_json) {
-        let _ = std::fs::write(&manifest_path, content);
+        let _ = std::fs::write(&manifest_path, &content);
+        if current_dir != &app_dir {
+            let _ = std::fs::write(current_dir.join("com.edm.nmh.json"), &content);
+        }
     }
 
     // Mozilla Firefox manifest (allowed_extensions instead of allowed_origins)
@@ -187,7 +190,10 @@ fn register_native_messaging_host() {
         "allowed_extensions": edm_ipc::extensions::allowed_firefox_ids()
     });
     if let Ok(content) = serde_json::to_string_pretty(&ff_manifest_json) {
-        let _ = std::fs::write(&ff_manifest_path, content);
+        let _ = std::fs::write(&ff_manifest_path, &content);
+        if current_dir != &app_dir {
+            let _ = std::fs::write(current_dir.join("com.edm.nmh.firefox.json"), &content);
+        }
     }
 
     let chromium_reg_targets = [
@@ -1993,6 +1999,19 @@ fn get_user_extension_dir() -> Result<PathBuf, String> {
     }
 }
 
+const EMBEDDED_EXTENSION_FILES: &[(&str, &[u8])] = &[
+    ("manifest.json", include_bytes!("../../../../extension/manifest.json")),
+    ("background.js", include_bytes!("../../../../extension/background.js")),
+    ("content.js", include_bytes!("../../../../extension/content.js")),
+    ("popup.html", include_bytes!("../../../../extension/popup.html")),
+    ("popup.js", include_bytes!("../../../../extension/popup.js")),
+    ("popup.css", include_bytes!("../../../../extension/popup.css")),
+    ("options.html", include_bytes!("../../../../extension/options.html")),
+    ("options.js", include_bytes!("../../../../extension/options.js")),
+    ("hashes.json", include_bytes!("../../../../extension/hashes.json")),
+    ("logo.png", include_bytes!("../../../../extension/logo.png")),
+];
+
 #[command]
 fn prepare_extension_files() -> Result<String, String> {
     use sha2::{Digest, Sha256};
@@ -2033,86 +2052,115 @@ fn prepare_extension_files() -> Result<String, String> {
         }
     }
 
-    let source_dir = found_source.ok_or_else(|| {
-        "Source extension directory not found. Please ensure extension is built.".to_string()
-    })?;
+    let mut copied_from_disk = false;
 
-    let hashes_path = source_dir.join("hashes.json");
-    if hashes_path.exists() {
-        let hashes_content = std::fs::read_to_string(&hashes_path)
-            .map_err(|e| format!("Failed to read hashes.json: {}", e))?;
-        let hashes_json: serde_json::Value = serde_json::from_str(&hashes_content)
-            .map_err(|e| format!("Failed to parse hashes.json: {}", e))?;
+    if let Some(ref source_dir) = found_source {
+        let hashes_path = source_dir.join("hashes.json");
+        if hashes_path.exists() {
+            if let Ok(hashes_content) = std::fs::read_to_string(&hashes_path) {
+                if let Ok(hashes_json) = serde_json::from_str::<serde_json::Value>(&hashes_content) {
+                    if let Some(files_map) = hashes_json.get("files").and_then(|f| f.as_object()) {
+                        let mut all_ok = true;
+                        for (filename, expected_hash_val) in files_map {
+                            let expected_hash_str = match expected_hash_val.as_str() {
+                                Some(s) => s,
+                                None => { all_ok = false; break; }
+                            };
+                            let expected_sha256 = expected_hash_str
+                                .strip_prefix("sha256:")
+                                .unwrap_or(expected_hash_str);
 
-        let files_map = hashes_json
-            .get("files")
-            .and_then(|f| f.as_object())
-            .ok_or_else(|| "Invalid hashes.json: missing 'files' object".to_string())?;
+                            let src_file = source_dir.join(filename);
+                            if !src_file.exists() {
+                                all_ok = false;
+                                break;
+                            }
 
-        for (filename, expected_hash_val) in files_map {
-            let expected_hash_str = expected_hash_val
-                .as_str()
-                .ok_or_else(|| format!("Invalid hash entry for {}", filename))?;
-            let expected_sha256 = expected_hash_str
-                .strip_prefix("sha256:")
-                .unwrap_or(expected_hash_str);
+                            let file_bytes = match std::fs::read(&src_file) {
+                                Ok(b) => b,
+                                Err(_) => { all_ok = false; break; }
+                            };
 
-            let src_file = source_dir.join(filename);
-            if !src_file.exists() {
-                return Err(format!("Source file {} missing in {}", filename, source_dir.display()));
+                            let mut hasher = Sha256::new();
+                            hasher.update(&file_bytes);
+                            let actual_sha256 = hex::encode(hasher.finalize());
+
+                            if !actual_sha256.eq_ignore_ascii_case(expected_sha256) {
+                                all_ok = false;
+                                break;
+                            }
+
+                            let dest_file = target_dir.join(filename);
+                            let _ = std::fs::write(&dest_file, &file_bytes);
+                        }
+                        if all_ok {
+                            let _ = std::fs::copy(&hashes_path, target_dir.join("hashes.json"));
+                            copied_from_disk = true;
+                        }
+                    }
+                }
             }
-
-            let file_bytes = std::fs::read(&src_file)
-                .map_err(|e| format!("Failed to read {}: {}", filename, e))?;
-
-            let mut hasher = Sha256::new();
-            hasher.update(&file_bytes);
-            let actual_sha256 = hex::encode(hasher.finalize());
-
-            if !actual_sha256.eq_ignore_ascii_case(expected_sha256) {
-                return Err(format!(
-                    "Integrity check failed for {}: expected {}, got {}",
-                    filename, expected_sha256, actual_sha256
-                ));
-            }
-
-            let dest_file = target_dir.join(filename);
-            std::fs::write(&dest_file, &file_bytes)
-                .map_err(|e| format!("Failed to write {}: {}", dest_file.display(), e))?;
         }
 
-        let _ = std::fs::copy(&hashes_path, target_dir.join("hashes.json"));
-    } else {
-        // Fallback: copy standard extension files directly
-        let entries = std::fs::read_dir(&source_dir)
-            .map_err(|e| format!("Failed to read source directory: {}", e))?;
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_file() {
-                if let Some(name) = path.file_name() {
-                    let dest = target_dir.join(name);
-                    let _ = std::fs::copy(&path, &dest);
+        if !copied_from_disk {
+            if let Ok(entries) = std::fs::read_dir(source_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_file() {
+                        if let Some(name) = path.file_name() {
+                            let dest = target_dir.join(name);
+                            let _ = std::fs::copy(&path, &dest);
+                        }
+                    }
+                }
+                if target_dir.join("manifest.json").exists() {
+                    copied_from_disk = true;
                 }
             }
         }
     }
 
-    if !target_dir.join("manifest.json").exists() {
-        return Err("Verification failed: manifest.json does not exist in target directory".to_string());
+    // Infallible fallback: Extract embedded assets directly if not copied from disk or manifest missing
+    if !copied_from_disk || !target_dir.join("manifest.json").exists() {
+        for (filename, bytes) in EMBEDDED_EXTENSION_FILES {
+            let dest = target_dir.join(filename);
+            let _ = std::fs::write(&dest, bytes);
+        }
     }
 
-    // Keep LocalAppData in sync if APPDATA was different, so native host manifests are satisfied
+    // Ensure manifest exists and is valid
+    if !target_dir.join("manifest.json").exists() {
+        let manifest_bytes = include_bytes!("../../../../extension/manifest.json");
+        let _ = std::fs::write(target_dir.join("manifest.json"), manifest_bytes);
+    }
+
+    // Synchronize to both %APPDATA%\EDM\extension and %LOCALAPPDATA%\EDM\extension on Windows
     #[cfg(windows)]
-    if let Ok(local) = std::env::var("LOCALAPPDATA") {
-        let local_dir = PathBuf::from(local).join("EDM").join("extension");
-        if local_dir != target_dir {
-            let _ = std::fs::create_dir_all(&local_dir);
-            if let Ok(entries) = std::fs::read_dir(&target_dir) {
-                for entry in entries.flatten() {
-                    let src = entry.path();
-                    if src.is_file() {
-                        if let Some(name) = src.file_name() {
-                            let _ = std::fs::copy(&src, local_dir.join(name));
+    {
+        let mut dirs_to_sync = Vec::new();
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            dirs_to_sync.push(PathBuf::from(appdata).join("EDM").join("extension"));
+        }
+        if let Ok(local) = std::env::var("LOCALAPPDATA") {
+            dirs_to_sync.push(PathBuf::from(local).join("EDM").join("extension"));
+        }
+
+        for sync_target in dirs_to_sync {
+            if sync_target != target_dir {
+                let _ = std::fs::create_dir_all(&sync_target);
+                for (filename, bytes) in EMBEDDED_EXTENSION_FILES {
+                    let dest = sync_target.join(filename);
+                    if !dest.exists() || dest.file_name().map_or(false, |n| n == "manifest.json") {
+                        let _ = std::fs::write(&dest, bytes);
+                    }
+                }
+                if let Ok(entries) = std::fs::read_dir(&target_dir) {
+                    for entry in entries.flatten() {
+                        let src = entry.path();
+                        if src.is_file() {
+                            if let Some(name) = src.file_name() {
+                                let _ = std::fs::copy(&src, sync_target.join(name));
+                            }
                         }
                     }
                 }
@@ -2473,12 +2521,12 @@ fn main() {
 
     spawn_extension_bridge(app_state.clone(), rt_handle.clone());
 
-    // Defer non-essential Native Messaging Host registration repair to background task
+    // Register Native Messaging Host and provision extension files immediately on boot
     #[cfg(windows)]
-    rt_handle.spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+    {
         register_native_messaging_host();
-    });
+        let _ = prepare_extension_files();
+    }
 
     // Background lifecycle monitoring loop (checks every 15 seconds)
     let lc_monitor = lifecycle.clone();

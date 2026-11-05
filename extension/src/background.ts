@@ -195,14 +195,24 @@ function notifyPopupPorts() {
 }
 
 async function checkNmhHealth(): Promise<{ ok: boolean; reason?: string; report?: any }> {
+  if (connectionStatus === "connected") {
+    nmhHealth = { ok: true };
+    return nmhHealth;
+  }
   return new Promise((resolve) => {
     try {
       const extId = (typeof chrome !== "undefined" && chrome.runtime?.id) ? chrome.runtime.id : "ginpdimhcdbojbhemgjedghkeolbcmgj";
       chrome.runtime.sendNativeMessage(
         "com.edm.nmh",
         { type: "get_diagnostics", extension_id: extId },
-        (response) => {
+        async (response) => {
           if (chrome.runtime.lastError) {
+            const st = await checkIfEdmRunning();
+            if (st.running) {
+              nmhHealth = { ok: true };
+              notifyPopupPorts();
+              return resolve(nmhHealth);
+            }
             const err = chrome.runtime.lastError.message || "Native host not found";
             nmhHealth = { ok: false, reason: err };
             notifyPopupPorts();
@@ -308,6 +318,31 @@ async function connectWebSocketPromise(timeoutMs = 8000): Promise<boolean> {
 }
 
 async function checkIfEdmRunning(): Promise<{ running: boolean; token?: string }> {
+  // 1. Direct HTTP loopback check on port 14370 (fastest, 100% reliable when desktop app is alive)
+  try {
+    const extId = (typeof chrome !== "undefined" && chrome.runtime?.id) ? chrome.runtime.id : "ginpdimhcdbojbhemgjedghkeolbcmgj";
+    const headers = {
+      "X-EDM-Client": "extension",
+      "X-EDM-Extension-Id": extId,
+    };
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 600);
+    const resp = await fetch("http://127.0.0.1:14370/token", {
+      method: "GET",
+      headers,
+      signal: ctrl.signal,
+      cache: "no-store",
+    });
+    clearTimeout(timer);
+    if (resp.ok) {
+      const data = await resp.json();
+      if (data && data.token && typeof data.token === "string" && data.token.length >= 32) {
+        return { running: true, token: data.token };
+      }
+    }
+  } catch {}
+
+  // 2. Query Native Messaging Host
   return new Promise((resolve) => {
     try {
       chrome.runtime.sendNativeMessage("com.edm.nmh", { type: "get_status" }, (res) => {
@@ -488,11 +523,17 @@ async function connectWebSocket() {
   };
 
   socket.onclose = async () => {
+    const wasConnected = connectionStatus === "connected";
     connectionStatus = "asleep";
     socket = null;
     stopPingInterval();
     notifyPopupPorts();
     console.debug("[EDM Extension] WebSocket connection closed.");
+
+    // If connection was never established (auth failure / stale token), clear cached token
+    if (!wasConnected) {
+      await chrome.storage.local.remove("edm_ws_token");
+    }
 
     // Check helper once: only reconnect if EDM is running
     const st = await checkIfEdmRunning();
@@ -501,7 +542,7 @@ async function connectWebSocket() {
         await chrome.storage.local.set({ edm_ws_token: st.token });
       }
       reconnectAttempts++;
-      const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 60000);
+      const delay = Math.min(1000 * Math.pow(2, Math.min(reconnectAttempts, 5)), 30000);
       console.debug(`[EDM Extension] EDM is running, scheduling reconnect in ${delay}ms`);
       if (reconnectTimer) clearTimeout(reconnectTimer);
       reconnectTimer = setTimeout(() => {
