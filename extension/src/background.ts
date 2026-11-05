@@ -310,7 +310,7 @@ async function connectWebSocketPromise(timeoutMs = 8000): Promise<boolean> {
 async function checkIfEdmRunning(): Promise<{ running: boolean; token?: string }> {
   return new Promise((resolve) => {
     try {
-      chrome.runtime.sendNativeMessage("com.edm.nmh", { type: "status" }, (res) => {
+      chrome.runtime.sendNativeMessage("com.edm.nmh", { type: "get_status" }, (res) => {
         if (chrome.runtime.lastError || !res) {
           console.debug("[EDM Extension] NMH status check:", chrome.runtime.lastError?.message || "No response");
           return resolve({ running: false });

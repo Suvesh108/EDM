@@ -96,26 +96,62 @@ fn register_native_messaging_host() {
     let current_exe = std::env::current_exe().unwrap_or_default();
     let current_dir = current_exe.parent().unwrap_or(&app_dir);
 
-    // Look for edm-nmh in current_dir, resources subfolder, or app_dir
-    let candidates = [
+    // Look for edm-nmh in current_dir, resources subfolder, target directories, or app_dir
+    let mut candidates = vec![
         current_dir.join("edm-nmh.exe"),
         current_dir.join("resources").join("edm-nmh.exe"),
-        app_dir.join("edm-nmh.exe"),
     ];
 
-    let found_nmh = candidates
-        .iter()
-        .find(|p| p.exists() && p.is_file())
-        .cloned();
+    if let Some(parent) = current_dir.parent() {
+        candidates.push(parent.join("edm-nmh.exe"));
+        candidates.push(parent.join("release").join("edm-nmh.exe"));
+        candidates.push(parent.join("debug").join("edm-nmh.exe"));
+        if let Some(grandparent) = parent.parent() {
+            candidates.push(grandparent.join("target").join("release").join("edm-nmh.exe"));
+            candidates.push(grandparent.join("target").join("debug").join("edm-nmh.exe"));
+        }
+    }
+
     let target_nmh = app_dir.join("edm-nmh.exe");
 
-    if let Some(ref src) = found_nmh {
-        if src != &target_nmh {
-            let _ = std::fs::copy(src, &target_nmh);
+    let found_source = candidates
+        .iter()
+        .filter(|p| *p != &target_nmh && p.exists() && p.is_file())
+        .max_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok());
+
+    if let Some(src) = found_source {
+        let should_copy = if !target_nmh.exists() {
+            true
+        } else {
+            let src_meta = std::fs::metadata(src).ok();
+            let tgt_meta = std::fs::metadata(&target_nmh).ok();
+            match (src_meta, tgt_meta) {
+                (Some(sm), Some(tm)) => {
+                    sm.len() != tm.len()
+                        || sm.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+                            > tm.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+                }
+                _ => true,
+            }
+        };
+
+        if should_copy {
+            match std::fs::copy(src, &target_nmh) {
+                Ok(_) => tracing::info!(
+                    "Updated NMH binary at {} from {}",
+                    target_nmh.display(),
+                    src.display()
+                ),
+                Err(e) => tracing::warn!(
+                    "Failed to copy NMH binary to {}: {}",
+                    target_nmh.display(),
+                    e
+                ),
+            }
         }
-    } else {
+    } else if !target_nmh.exists() {
         tracing::warn!(
-            "edm-nmh.exe not found next to current executable at {}",
+            "edm-nmh.exe not found in candidate paths near {}",
             current_dir.display()
         );
     }
@@ -123,7 +159,9 @@ fn register_native_messaging_host() {
     let nmh_path = if target_nmh.exists() {
         target_nmh
     } else {
-        found_nmh.unwrap_or_else(|| current_dir.join("edm-nmh.exe"))
+        found_source
+            .cloned()
+            .unwrap_or_else(|| current_dir.join("edm-nmh.exe"))
     };
 
     let manifest_path = app_dir.join("com.edm.nmh.json");

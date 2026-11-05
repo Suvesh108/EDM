@@ -1019,7 +1019,7 @@ fn handle_message(msg: ExtensionMessage, store: &Arc<Mutex<Store>>) -> AppReply 
     }
 }
 
-fn read_message<R: Read>(mut reader: R) -> io::Result<Option<ExtensionMessage>> {
+fn read_message<R: Read>(mut reader: R) -> io::Result<Option<Result<ExtensionMessage, String>>> {
     let mut len_bytes = [0u8; 4];
     match reader.read_exact(&mut len_bytes) {
         Ok(_) => (),
@@ -1029,19 +1029,16 @@ fn read_message<R: Read>(mut reader: R) -> io::Result<Option<ExtensionMessage>> 
 
     let len = u32::from_ne_bytes(len_bytes) as usize;
     if len > 10 * 1024 * 1024 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "Message too large",
-        ));
+        return Ok(Some(Err("Message too large (>10MB)".to_string())));
     }
 
     let mut buf = vec![0u8; len];
     reader.read_exact(&mut buf)?;
 
-    let msg: ExtensionMessage =
-        serde_json::from_slice(&buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-
-    Ok(Some(msg))
+    match serde_json::from_slice::<ExtensionMessage>(&buf) {
+        Ok(msg) => Ok(Some(Ok(msg))),
+        Err(e) => Ok(Some(Err(format!("JSON deserialization failed: {}", e)))),
+    }
 }
 
 fn write_reply<W: Write>(mut writer: W, reply: &AppReply) -> io::Result<()> {
@@ -1183,11 +1180,28 @@ async fn main() -> io::Result<()> {
 
     tracing::info!("NMH ready for length-prefixed stdin/stdout messages (init elapsed: {:?})", host_start.elapsed());
 
-    while let Ok(Some(msg)) = read_message(&mut reader) {
-        let msg_start = Instant::now();
-        let reply = handle_message(msg, &store);
-        write_reply(&mut writer, &reply)?;
-        tracing::info!("Processed and replied in {:?}", msg_start.elapsed());
+    while let Ok(Some(res)) = read_message(&mut reader) {
+        match res {
+            Ok(msg) => {
+                let msg_start = Instant::now();
+                let reply = handle_message(msg, &store);
+                if let Err(e) = write_reply(&mut writer, &reply) {
+                    tracing::error!("Failed to write reply: {:?}", e);
+                    break;
+                }
+                tracing::info!("Processed and replied in {:?}", msg_start.elapsed());
+            }
+            Err(parse_err) => {
+                tracing::warn!("Malformed message received: {}", parse_err);
+                let reply = AppReply::Error {
+                    message: format!("Malformed message: {}", parse_err),
+                };
+                if let Err(e) = write_reply(&mut writer, &reply) {
+                    tracing::error!("Failed to write error reply: {:?}", e);
+                    break;
+                }
+            }
+        }
     }
 
     tracing::info!("NMH stdin closed (EOF). Exiting cleanly.");

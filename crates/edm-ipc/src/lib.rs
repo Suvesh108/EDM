@@ -65,6 +65,7 @@ pub enum ExtensionMessage {
         variants: Vec<MediaVariant>,
     },
     Ping,
+    #[serde(alias = "status")]
     GetStatus,
     ListDownloads {
         #[serde(default)]
@@ -94,15 +95,18 @@ pub enum ExtensionMessage {
     RemoveDownloadHistory {
         id: Uuid,
     },
+    #[serde(alias = "token")]
     GetToken,
     Wake {
         #[serde(default)]
         show_window: bool,
     },
+    #[serde(alias = "diagnostics")]
     GetDiagnostics {
         #[serde(default)]
         extension_id: Option<String>,
     },
+    #[serde(alias = "repair")]
     RepairRegistration,
 }
 
