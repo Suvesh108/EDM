@@ -1,13 +1,13 @@
 {
   "version": "0.0.7",
-  "generated_at": "2026-11-02T12:07:09.591Z",
+  "generated_at": "2026-11-05T07:40:05.401Z",
   "files": {
     "manifest.json": "sha256:96070458e1a921ddb8f3372da804c1f216982d9b0a296701fc8381b8bf62e44e",
     "background.js": "sha256:8213ff106be2c99565ee14ad180c15b2c183c2310bbc0ee047c5f0084e13751c",
     "content.js": "sha256:3adaa640cff0a491468eebaa41f96f1b7062586020cb5a39775a678b637702cd",
     "popup.html": "sha256:3ef8decdb857078021f6fdf5dc17d3c7439a5eb24396ec3cdf694449977c5160",
     "popup.css": "sha256:e5608976a73a6536723f08a400dab6e2694fdc0dcd24d3bd92f9e9cc6946fcac",
-    "popup.js": "sha256:77e3855c2b8233a6a9d86154e537e4bbfda3e7a3e76ab1fa19801304eb91fa8e",
+    "popup.js": "sha256:f6b0cb76ab7795b3c46a387865ebc8e6407f155f14a6fc38193adba41c76132e",
     "options.html": "sha256:e752b8c8a8712afe790a5454680158c6f6dd1f70a767df655cf9d0e16b4e5fa2",
     "options.js": "sha256:a30f82339993baf0732af441bd98f2c55705853f601eaea8f33909e400f6a5c0",
     "logo.png": "sha256:96a0c2bd1531a265bccf9b552886ffc167679806e0cb7e21fa82932964e9e8fa"

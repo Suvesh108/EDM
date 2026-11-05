@@ -34,7 +34,7 @@ interface QueuesViewProps {
 
 export const QueuesView: React.FC<QueuesViewProps> = ({ onBack, embedded = false }) => {
   const [queues, setQueues] = useState<QueueRecord[]>([]);
-  const [selectedQueueId, setSelectedQueueId] = useState<string>("main");
+  const [selectedQueueId, setSelectedQueueId] = useState<string>("default");
   const [editingQueue, setEditingQueue] = useState<QueueRecord | null>(null);
   const [isScheduleEnabled, setIsScheduleEnabled] = useState(false);
   const [, setLoading] = useState(true);
@@ -45,9 +45,9 @@ export const QueuesView: React.FC<QueuesViewProps> = ({ onBack, embedded = false
     try {
       const records = await tauriGetQueues();
       if (!records || records.length === 0) {
-        const defaultMain: QueueRecord = {
-          id: "main",
-          name: "Main Queue",
+        const defaultQueue: QueueRecord = {
+          id: "default",
+          name: "Default Queue",
           max_concurrent: 3,
           speed_limit_bytes_per_sec: null,
           schedule_start: null,
@@ -55,9 +55,9 @@ export const QueuesView: React.FC<QueuesViewProps> = ({ onBack, embedded = false
           schedule_days: null,
           post_action: "none",
         };
-        setQueues([defaultMain]);
-        setSelectedQueueId("main");
-        setEditingQueue(defaultMain);
+        setQueues([defaultQueue]);
+        setSelectedQueueId("default");
+        setEditingQueue(defaultQueue);
       } else {
         setQueues(records);
         const current = records.find((q: QueueRecord) => q.id === selectedQueueId) || records[0];
@@ -137,8 +137,8 @@ export const QueuesView: React.FC<QueuesViewProps> = ({ onBack, embedded = false
   };
 
   const handleDelete = async (queueId: string) => {
-    if (queueId === "main") {
-      alert("The Main Queue cannot be deleted.");
+    if (queueId === "default" || queueId === "main") {
+      alert("The Default Queue cannot be deleted.");
       return;
     }
     if (confirm("Delete this queue configuration?")) {
@@ -221,7 +221,7 @@ export const QueuesView: React.FC<QueuesViewProps> = ({ onBack, embedded = false
                     <Layers className={`w-3.5 h-3.5 shrink-0 ${isSelected ? "text-[var(--accent)]" : "text-[var(--text-muted)]"}`} />
                     <span className="truncate">{q.name}</span>
                   </div>
-                  {q.id !== "main" && (
+                  {q.id !== "default" && q.id !== "main" && (
                     <button
                       onClick={(e) => {
                         e.stopPropagation();

@@ -149,13 +149,13 @@ class PopupController {
               this.renderTasksListOnly();
             }
           }
-          if (this.activeTab === "diagnostics") {
+          if (this.activeTab === "settings") {
             this.render();
           }
         } else if (msg.type === "diagnostics_report") {
           if (msg.report) {
             this.diagnosticsReport = msg.report;
-            if (this.activeTab === "diagnostics") {
+            if (this.activeTab === "settings") {
               this.render();
             }
           }
@@ -164,7 +164,7 @@ class PopupController {
           if (msg.report) {
             this.diagnosticsReport = msg.report;
           }
-          if (this.activeTab === "diagnostics") {
+          if (this.activeTab === "settings") {
             this.render();
           }
         }

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   Download,
   Pause,
@@ -543,12 +543,20 @@ export default function App() {
     setProbeResult(null);
   };
 
+  const downloadsRef = useRef(downloads);
+  useEffect(() => {
+    downloadsRef.current = downloads;
+  }, [downloads]);
+
+  const hasDownloadingTasks = downloads.some((d) => d.state === "downloading");
+
   // Active Telemetry and Real Progress Tick (250 ms Monotonic Clock Sampling)
   useEffect(() => {
-    const activeTasks = downloads.filter((d) => d.state === "downloading");
-    if (activeTasks.length === 0) return;
+    if (!hasDownloadingTasks) return;
 
     const interval = setInterval(async () => {
+      const activeTasks = downloadsRef.current.filter((d) => d.state === "downloading");
+      if (activeTasks.length === 0) return;
       const updates = await Promise.all(
         activeTasks.map(async (task) => {
           const telem = await tauriGetTelemetry(task.id);
@@ -665,7 +673,7 @@ export default function App() {
     }, 250);
 
     return () => clearInterval(interval);
-  }, [downloads]);
+  }, [hasDownloadingTasks]);
 
   const toggleSelect = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();

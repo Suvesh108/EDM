@@ -15,3 +15,5 @@ Thumbs.db
 !*.example
 # Graphify (Local knowledge graph only - NEVER commit to git)
 graphify-out/
+# Floorplan (Local architecture maps only)
+floorplan/

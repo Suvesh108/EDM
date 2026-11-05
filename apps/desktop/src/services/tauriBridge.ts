@@ -163,7 +163,9 @@ export async function tauriStartDownload(params: {
       return await invoke<{ status: string; id: string }>("start_download", {
         url: params.url,
         filename: params.filename,
+        saveDir: params.saveDir,
         save_dir: params.saveDir,
+        maxConnections: params.maxConnections,
         max_connections: params.maxConnections,
       });
     } catch (err) {
@@ -247,7 +249,11 @@ export async function tauriDeleteDownload(id: string, deleteFile?: boolean): Pro
   if (isTauri()) {
     try {
       const { invoke } = await import("@tauri-apps/api/core");
-      await invoke("delete_download", { id, delete_file: deleteFile });
+      await invoke("delete_download", {
+        id,
+        deleteFile,
+        delete_file: deleteFile,
+      });
     } catch (err) {
       console.warn("Tauri delete_download:", err);
     }
