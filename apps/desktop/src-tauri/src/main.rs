@@ -2374,10 +2374,39 @@ async fn probe_media_page(media_url: String) -> Result<features::MediaProbeResul
     features::probe_media(&media_url).await
 }
 
+#[cfg(windows)]
+fn purge_all_user_data() {
+    use windows_registry::CURRENT_USER;
+    let _ = CURRENT_USER.remove_tree(r"Software\Google\Chrome\NativeMessagingHosts\com.edm.nmh");
+    let _ = CURRENT_USER.remove_tree(r"Software\Microsoft\Edge\NativeMessagingHosts\com.edm.nmh");
+    let _ = CURRENT_USER.remove_tree(r"Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.edm.nmh");
+    let _ = CURRENT_USER.remove_tree(r"Software\Mozilla\NativeMessagingHosts\com.edm.nmh");
+    let _ = CURRENT_USER.remove_tree(r"Software\Classes\edm");
+    let _ = CURRENT_USER.remove_tree(r"Software\EDM");
+    if let Ok(run_key) = CURRENT_USER.open(r"Software\Microsoft\Windows\CurrentVersion\Run") {
+        let _ = run_key.remove_value("EDM");
+    }
+
+    if let Ok(local) = std::env::var("LOCALAPPDATA") {
+        let _ = std::fs::remove_dir_all(PathBuf::from(&local).join("EDM"));
+        let _ = std::fs::remove_dir_all(PathBuf::from(&local).join("com.edm.desktop"));
+    }
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        let _ = std::fs::remove_dir_all(PathBuf::from(&appdata).join("EDM"));
+    }
+}
+
 fn main() {
     let t_boot = std::time::Instant::now();
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--clean-uninstall" || a == "--purge-data") {
+        #[cfg(windows)]
+        purge_all_user_data();
+        return;
+    }
+
     init_logging();
-    tracing::info!("EDM starting up. Args: {:?}", std::env::args().collect::<Vec<_>>());
+    tracing::info!("EDM starting up. Args: {:?}", args);
 
     #[cfg(windows)]
     set_app_user_model_id();

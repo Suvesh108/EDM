@@ -46,14 +46,28 @@ found_nmh:
   WriteRegStr HKCU "Software\Mozilla\NativeMessagingHosts\com.edm.nmh" "" "$INSTDIR\com.edm.nmh.firefox.json"
 
   WriteRegStr HKCU "Software\EDM" "InstallDir" "$INSTDIR"
+  IfFileExists "$INSTDIR\EDM.exe" 0 +3
+    WriteRegStr HKCU "Software\EDM" "AppPath" "$INSTDIR\EDM.exe"
+    Goto done_apppath
+  IfFileExists "$INSTDIR\edm-desktop-app.exe" 0 +3
+    WriteRegStr HKCU "Software\EDM" "AppPath" "$INSTDIR\edm-desktop-app.exe"
+    Goto done_apppath
   WriteRegStr HKCU "Software\EDM" "AppPath" "$INSTDIR\EDM.exe"
+done_apppath:
   WriteRegStr HKCU "Software\EDM" "NmhPath" "$INSTDIR\edm-nmh.exe"
   WriteRegStr HKCU "Software\EDM" "Version" "0.0.7"
 
   WriteRegStr HKCU "Software\Classes\edm" "" "URL:EDM Protocol"
   WriteRegStr HKCU "Software\Classes\edm" "URL Protocol" ""
   WriteRegStr HKCU "Software\Classes\edm\DefaultIcon" "" "$INSTDIR\EDM.exe,0"
+  IfFileExists "$INSTDIR\EDM.exe" 0 +3
+    WriteRegStr HKCU "Software\Classes\edm\shell\open\command" "" '"$INSTDIR\EDM.exe" "%1"'
+    Goto done_cmd
+  IfFileExists "$INSTDIR\edm-desktop-app.exe" 0 +3
+    WriteRegStr HKCU "Software\Classes\edm\shell\open\command" "" '"$INSTDIR\edm-desktop-app.exe" "%1"'
+    Goto done_cmd
   WriteRegStr HKCU "Software\Classes\edm\shell\open\command" "" '"$INSTDIR\EDM.exe" "%1"'
+done_cmd:
 
   ; Create user-only extension folder %LOCALAPPDATA%\EDM\extension and copy extension if present
   CreateDirectory "$LOCALAPPDATA\EDM\extension"
@@ -62,15 +76,51 @@ found_nmh:
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
+  ; 1. Terminate running EDM processes to release locks on .exe, .dll, and .db files
+  nsExec::Exec 'taskkill /F /IM EDM.exe /T'
+  nsExec::Exec 'taskkill /F /IM edm-desktop-app.exe /T'
+  nsExec::Exec 'taskkill /F /IM edm-nmh.exe /T'
+  Sleep 500
+
+  ; 2. Delete all browser Native Messaging Host registry keys
   DeleteRegKey HKCU "Software\Google\Chrome\NativeMessagingHosts\com.edm.nmh"
   DeleteRegKey HKCU "Software\Microsoft\Edge\NativeMessagingHosts\com.edm.nmh"
   DeleteRegKey HKCU "Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.edm.nmh"
   DeleteRegKey HKCU "Software\Mozilla\NativeMessagingHosts\com.edm.nmh"
 
+  ; 3. Delete EDM app, autostart, and protocol handler registry keys
   DeleteRegKey HKCU "Software\Classes\edm"
   DeleteRegKey HKCU "Software\EDM"
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "EDM"
 
+  ; 4. Delete generated runtime manifests, logs, and database files in INSTDIR
   Delete /REBOOTOK "$INSTDIR\com.edm.nmh.json"
   Delete /REBOOTOK "$INSTDIR\com.edm.nmh.firefox.json"
-  RMDir /r "$LOCALAPPDATA\EDM\extension"
+  Delete /REBOOTOK "$INSTDIR\edm-nmh.exe"
+  Delete /REBOOTOK "$INSTDIR\store.db"
+  Delete /REBOOTOK "$INSTDIR\store.db-shm"
+  Delete /REBOOTOK "$INSTDIR\store.db-wal"
+  Delete /REBOOTOK "$INSTDIR\last_wake.json"
+  Delete /REBOOTOK "$INSTDIR\extension.crx"
+  Delete /REBOOTOK "$INSTDIR\extension.pem"
+
+  ; 5. Delete runtime subfolders in INSTDIR
+  RMDir /r "$INSTDIR\extension"
+  RMDir /r "$INSTDIR\tools"
+  RMDir /r "$INSTDIR\_up_"
+  RMDir /r "$INSTDIR\logs"
+
+  ; 6. Completely remove user data and cache directories
+  RMDir /r "$LOCALAPPDATA\EDM"
+  RMDir /r "$APPDATA\EDM"
+  RMDir /r "$LOCALAPPDATA\com.edm.desktop"
+  RMDir /r "$LOCALAPPDATA\EDM_desktop"
+!macroend
+
+!macro NSIS_HOOK_POSTUNINSTALL
+  ; Final sweep to ensure absolutely zero leftover files or directories remain
+  RMDir /r "$LOCALAPPDATA\EDM"
+  RMDir /r "$APPDATA\EDM"
+  RMDir /r "$LOCALAPPDATA\com.edm.desktop"
+  RMDir /r "$INSTDIR"
 !macroend
