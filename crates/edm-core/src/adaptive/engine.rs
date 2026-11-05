@@ -207,6 +207,10 @@ impl AdaptiveEngine {
         let mut sample_ticker = tokio::time::interval(task.config.sample_interval);
         let mut etag_restarts = 0;
         let mut retry_gap_attempts = 0;
+        let start_time = Instant::now();
+        let mut smoothed_speed_bytes: f64 = 0.0;
+        let mut smoothed_eta_sec: Option<u64> = None;
+        let mut last_progress_time = Instant::now();
 
         loop {
             if task.cancelled.load(Ordering::Relaxed) {
@@ -511,11 +515,23 @@ impl AdaptiveEngine {
 
                     // Emit Telemetry
                     if let Some(ref cb) = telemetry_callback {
+                        let secs = sample_duration.as_secs_f64().max(0.001);
                         let instant_rate = if sample_duration.as_secs_f64() > 0.0 {
-                            (sample_bytes as f64 / sample_duration.as_secs_f64()) as u64
+                            (sample_bytes as f64 / secs) as u64
                         } else {
                             0
                         };
+
+                        if sample_bytes > 0 {
+                            last_progress_time = Instant::now();
+                        }
+
+                        // Speed smoothed as EMA over a sustained window (~5-10s)
+                        if smoothed_speed_bytes <= 0.0 {
+                            smoothed_speed_bytes = instant_rate as f64;
+                        } else {
+                            smoothed_speed_bytes = 0.20 * (instant_rate as f64) + 0.80 * smoothed_speed_bytes;
+                        }
 
                         let progress = if let Some(tot) = total_size {
                             if tot > 0 { (total_downloaded as f64 / tot as f64) * 100.0 } else { 0.0 }
@@ -523,18 +539,44 @@ impl AdaptiveEngine {
                             0.0
                         };
 
-                        let effective_rate_bytes = (controller.rolling_throughput_bps() / 8).max(instant_rate);
-                        let eta = if let Some(tot) = total_size {
+                        let effective_rate_bytes = (controller.rolling_throughput_bps() / 8).max(smoothed_speed_bytes as u64);
+
+                        // Warmup gate: during first 3 seconds or < 1 MiB, ETA is warmup
+                        let is_warmed_up = start_time.elapsed() >= Duration::from_secs(3) || total_downloaded >= 1024 * 1024;
+                        let eta = if !is_warmed_up {
+                            None
+                        } else if let Some(tot) = total_size {
                             let rem = tot.saturating_sub(total_downloaded);
                             if effective_rate_bytes > 0 {
-                                rem.checked_div(effective_rate_bytes)
+                                let raw_eta = rem / effective_rate_bytes;
+                                // Smooth ETA so it doesn't jump by more than 20% between ticks
+                                let smoothed = if let Some(prev) = smoothed_eta_sec {
+                                    let max_delta = (prev as f64 * 0.20).max(1.0) as u64;
+                                    if raw_eta > prev + max_delta {
+                                        prev + max_delta
+                                    } else if prev > max_delta && raw_eta < prev - max_delta {
+                                        prev - max_delta
+                                    } else {
+                                        raw_eta
+                                    }
+                                } else {
+                                    raw_eta
+                                };
+                                smoothed_eta_sec = Some(smoothed);
+                                Some(smoothed)
                             } else {
-                                None
+                                // Speed is 0: if less than 10s of zero progress, hold last valid ETA
+                                if last_progress_time.elapsed() < Duration::from_secs(10) {
+                                    smoothed_eta_sec
+                                } else {
+                                    None
+                                }
                             }
                         } else {
                             None
                         };
 
+                        let target_conns = controller.current_connections().max(1);
                         let telemetry = AdaptiveTelemetry {
                             download_id: task.id.to_string(),
                             total_bytes: total_size,
@@ -546,7 +588,9 @@ impl AdaptiveEngine {
                             } else {
                                 instant_rate * 8
                             },
-                            active_connections: scheduler.active_count(),
+                            active_connections: target_conns,
+                            target_connections: target_conns,
+                            live_workers: scheduler.active_count(),
                             max_allowed_connections: task.config.max_connections,
                             mode: controller.mode(),
                             eta_seconds: eta,

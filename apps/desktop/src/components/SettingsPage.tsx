@@ -971,6 +971,23 @@ export default function SettingsPage({
                         <option value="60">After 60 minutes idle</option>
                       </select>
                     </div>
+
+                    <label className="flex items-center gap-3 cursor-pointer group pt-2 border-t border-[var(--border-subtle)]">
+                      <input
+                        type="checkbox"
+                        checked={settings.general.showConnectionBoundaries ?? false}
+                        onChange={(e) => update("general", { showConnectionBoundaries: e.target.checked })}
+                        className="w-[18px] h-[18px] rounded accent-[var(--accent)] cursor-pointer align-middle transition-transform active:scale-90"
+                      />
+                      <div className="text-xs">
+                        <span className="font-medium text-[var(--text-primary)] group-hover:text-[var(--accent)] transition-colors">
+                          Show connection stream boundaries on progress bar
+                        </span>
+                        <p className="text-[11px] text-[var(--text-muted)] mt-0.5">
+                          When enabled, displays faint overlays marking active parallel worker byte boundaries. Off by default for continuous seamless fill.
+                        </p>
+                      </div>
+                    </label>
                   </div>
                 </div>
               </div>
@@ -2547,7 +2564,12 @@ export default function SettingsPage({
                   {selectedDownload.progress}%
                 </span>
                 <span className="text-[var(--text-muted)] hidden xs:inline">•</span>
-                <span className="hidden xs:inline whitespace-nowrap">{selectedDownload.connections} TCP Threads</span>
+                <span className="hidden xs:inline whitespace-nowrap">
+                  {selectedDownload.state === "downloading"
+                    ? Math.max(1, selectedDownload.connections || 1)
+                    : 0}{" "}
+                  TCP Threads
+                </span>
                 {onInspectDownload && (
                   <button
                     onClick={onInspectDownload}

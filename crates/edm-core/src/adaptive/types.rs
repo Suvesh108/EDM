@@ -45,12 +45,12 @@ impl Default for AdaptiveConfig {
             initial_connections: 8,
             min_connections: 1,
             max_connections: 16,
-            max_connections_per_host: 8,
+            max_connections_per_host: 16,
             min_chunk_size: 1024 * 1024, // 1 MiB
             sample_interval: Duration::from_millis(250),
-            cooldown_duration: Duration::from_secs(3),
-            throughput_gain_threshold: 0.08,
-            throughput_drop_threshold: -0.15, // -15% hysteresis against transient jitter
+            cooldown_duration: Duration::from_secs(15), // 15s hysteresis cooldown
+            throughput_gain_threshold: 0.10,            // +10% sustained gain required
+            throughput_drop_threshold: -0.15,           // -15% hysteresis against transient jitter
             stall_timeout: Duration::from_secs(8),
             max_worker_retries: 5,
         }
@@ -88,6 +88,10 @@ pub struct AdaptiveTelemetry {
     pub instant_throughput_bps: u64,
     pub rolling_throughput_bps: u64,
     pub active_connections: u32,
+    #[serde(default)]
+    pub target_connections: u32,
+    #[serde(default)]
+    pub live_workers: u32,
     pub max_allowed_connections: u32,
     pub mode: AccelerationMode,
     pub eta_seconds: Option<u64>,

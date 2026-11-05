@@ -40,6 +40,7 @@ import { PowerCountdownModal } from "./components/PowerCountdownModal";
 import { SpeedChartInteractive } from "./components/SpeedChartInteractive";
 import { loadSettings, saveSettings, EdmSettings } from "./types/settings";
 import { formatBytes, formatSpeed, formatEta } from "./utils/format";
+import { getMergedProgressSpans } from "./utils/progress";
 import { motion, AnimatePresence } from "motion/react";
 import {
   backdropVariants,
@@ -307,15 +308,17 @@ export default function App() {
             sizeTotal: total,
             sizeDone: done,
             error_msg: b.error_msg || existing?.error_msg || null,
-            speed: itemState === "downloading" ? formatSpeed(speedVal) : "0 B/s",
+            speed: itemState === "downloading" ? (existing?.speed || formatSpeed(speedVal)) : "0 B/s",
             eta: itemState === "completed"
               ? "Finished"
               : itemState === "failed"
               ? (b.error_msg || "Download Failed")
               : itemState === "paused"
               ? "Paused"
-              : (etaSec > 0 ? formatEta(etaSec) : (speedVal > 0 ? "Estimating..." : "Connecting...")),
-            connections: b.connections || existing?.connections || 8,
+              : (existing?.eta && existing.eta !== "Calculating..." && existing.eta !== "—"
+                  ? existing.eta
+                  : (etaSec > 0 ? formatEta(etaSec) : "Calculating...")),
+            connections: itemState === "downloading" ? Math.max(1, existing?.connections || b.connections || 1) : 0,
             state: itemState,
             progress: itemState === "completed" ? 100 : pct,
             url: b.url,
@@ -572,10 +575,10 @@ export default function App() {
             const sizeTotal = telem.total_bytes || task.sizeTotal;
             const progress = sizeTotal > 0 ? Math.min(100, Math.floor((sizeDone / sizeTotal) * 100)) : 0;
             
-            // One source of truth for speed: 3-second moving average (12 samples @ 250ms)
+            // One source of truth for speed: 5-second moving average (20 samples @ 250ms)
             const instantSpeed = Math.floor((telem.instant_throughput_bps || telem.rolling_throughput_bps) / 8);
             const prevSamples = (task as any)._speedSamples || [];
-            const newSamples = [...prevSamples.slice(-11), instantSpeed];
+            const newSamples = [...prevSamples.slice(-19), instantSpeed];
             (task as any)._speedSamples = newSamples;
             const smoothedSpeedBps = Math.round(newSamples.reduce((a: number, b: number) => a + b, 0) / newSamples.length);
 
@@ -585,15 +588,34 @@ export default function App() {
             (task as any).elapsedSeconds = elapsed;
 
             const remainingBytes = Math.max(0, sizeTotal - sizeDone);
-            const eta = isFinished
-              ? "Finished"
-              : elapsed < 3
-              ? "Calculating..."
-              : smoothedSpeedBps > 0
-              ? formatEta(Math.ceil(remainingBytes / smoothedSpeedBps))
-              : telem.eta_seconds
-              ? formatEta(telem.eta_seconds)
-              : "—";
+
+            // Bug 3: ETA stability logic
+            // "Calculating..." may ONLY be shown at the start (until ~3s elapsed and < 1 MiB received)
+            const isWarmup = elapsed < 3 && sizeDone < 1024 * 1024;
+            let eta = (task as any)._lastValidEta || "Calculating...";
+            if (isFinished) {
+              eta = "Finished";
+            } else if (isWarmup) {
+              eta = "Calculating...";
+            } else if (telem.eta_seconds !== null && telem.eta_seconds !== undefined && telem.eta_seconds > 0) {
+              eta = formatEta(telem.eta_seconds);
+              (task as any)._lastValidEta = eta;
+              (task as any)._lastProgressTime = Date.now();
+            } else if (smoothedSpeedBps > 0) {
+              const rawSec = Math.ceil(remainingBytes / smoothedSpeedBps);
+              eta = formatEta(rawSec);
+              (task as any)._lastValidEta = eta;
+              (task as any)._lastProgressTime = Date.now();
+            } else {
+              // Speed briefly dipped to 0
+              const stalledMs = Date.now() - ((task as any)._lastProgressTime || Date.now());
+              if (stalledMs < 10000 && (task as any)._lastValidEta) {
+                // Retain last valid ETA during brief dips/reconnects
+                eta = (task as any)._lastValidEta;
+              } else if (stalledMs >= 10000) {
+                eta = "Waiting...";
+              }
+            }
 
             if (telem.workers && telem.workers.length > 0) {
               newWorkers = telem.workers.map((w) => ({
@@ -614,7 +636,7 @@ export default function App() {
                     : w.status,
               }));
             } else {
-              const numConns = telem.active_connections || task.connections || 1;
+              const numConns = telem.target_connections || telem.active_connections || task.connections || 1;
               const chunkBytes = Math.floor(sizeTotal / numConns);
               newWorkers = Array.from({ length: numConns }).map((_, idx) => {
                 const start = idx * chunkBytes;
@@ -638,6 +660,11 @@ export default function App() {
             const history = [...(task.speedHistory || []).slice(-59), actualBps];
             const peak = Math.max(task.peakSpeedBps || 0, actualBps);
 
+            // Bug 2: UI must never show 0 while download is actively running
+            const targetConns = isFinished
+              ? 0
+              : Math.max(1, telem.target_connections || telem.active_connections || task.connections || 1);
+
             return {
               id: task.id,
               sizeDone,
@@ -645,7 +672,7 @@ export default function App() {
               progress,
               speed: isFinished ? "0 B/s" : speed,
               eta,
-              connections: telem.active_connections,
+              connections: targetConns,
               state: isFinished ? ("completed" as const) : ("downloading" as const),
               workers: newWorkers,
               speedHistory: history,
@@ -763,7 +790,7 @@ export default function App() {
 
   // Real aggregate network telemetry calculations
   const activeDownloadsList = downloads.filter((d) => d.state === "downloading");
-  const totalActiveThreads = activeDownloadsList.reduce((sum, d) => sum + (d.connections || 0), 0);
+  const totalActiveThreads = activeDownloadsList.reduce((sum, d) => sum + Math.max(1, d.connections || 1), 0);
   const totalSessionBytes = downloads.reduce((sum, d) => sum + (d.sizeDone || 0), 0);
 
   let totalSpeedDisplay = "0 B/s";
@@ -1301,36 +1328,51 @@ export default function App() {
                                 {formatBytes(item.sizeDone)} / {formatBytes(item.sizeTotal)}
                               </span>
                             </div>
-                            {/* Segmented Micro Track with 3D Depth */}
+                            {/* Continuous Micro Track with 3D Depth */}
                             <div className="w-full h-2 rounded overflow-hidden track-3d relative bg-[var(--bg-chassis)]">
-                              {item.workers && item.workers.length > 1 ? (
-                                item.workers.map((w, wIdx) => {
-                                  const total = Math.max(1, item.sizeTotal);
-                                  const startPct = (w.start / total) * 100;
-                                  const endPct = (w.end / total) * 100;
-                                  const chunkWidth = endPct - startPct;
-                                  const range = Math.max(1, w.end - w.start);
-                                  const done = Math.max(0, Math.min(range, w.pos - w.start));
-                                  const fillWidth = (chunkWidth * done) / range;
+                              {(() => {
+                                const isDone =
+                                  item.state === "completed" ||
+                                  item.progress >= 100 ||
+                                  (item.sizeTotal > 0 && item.sizeDone >= item.sizeTotal);
+
+                                if (isDone) {
                                   return (
-                                    <React.Fragment key={w.idx || wIdx}>
-                                      <div
-                                        className="absolute top-0 bottom-0 progress-fill-3d z-10 transition-all duration-300"
-                                        style={{ left: `${startPct}%`, width: `${fillWidth}%` }}
-                                      />
-                                    </React.Fragment>
+                                    <div
+                                      className="h-full w-full progress-fill-3d transition-all duration-300"
+                                      style={{ width: "100%" }}
+                                    />
                                   );
-                                })
-                              ) : (
-                                <div
-                                  className="h-full progress-fill-3d rounded-sm relative overflow-hidden transition-all duration-300"
-                                  style={{ width: `${item.progress}%` }}
-                                >
-                                  {item.state === "downloading" && (
-                                    <div className="absolute inset-0 bg-white/20 animate-[pulse_1.5s_infinite]" />
-                                  )}
-                                </div>
-                              )}
+                                }
+
+                                const spans = getMergedProgressSpans(
+                                  item.workers,
+                                  item.sizeTotal,
+                                  item.sizeDone,
+                                  false
+                                );
+
+                                return (
+                                  <>
+                                    {spans.map((span, sIdx) => (
+                                      <div
+                                        key={sIdx}
+                                        className="absolute top-0 bottom-0 progress-fill-3d z-10 transition-all duration-300"
+                                        style={{
+                                          left: `${span.startPct}%`,
+                                          width:
+                                            sIdx < spans.length - 1
+                                              ? `calc(${span.widthPct}% + 1px)`
+                                              : `${span.widthPct}%`,
+                                        }}
+                                      />
+                                    ))}
+                                    {item.state === "downloading" && (
+                                      <div className="absolute inset-0 bg-white/10 pointer-events-none animate-[pulse_1.5s_infinite]" />
+                                    )}
+                                  </>
+                                );
+                              })()}
                             </div>
                           </div>
                         </td>
@@ -1505,32 +1547,51 @@ export default function App() {
                           {formatBytes(item.sizeDone)} / {formatBytes(item.sizeTotal)}
                         </span>
                       </div>
-                      {/* Dynamic Segment Micro-Chunks */}
+                      {/* Continuous Micro-Track */}
                       <div className="w-full h-2 rounded bg-[var(--bg-chassis)] overflow-hidden border border-[var(--border-subtle)] relative">
-                        {item.workers && item.workers.length > 1 ? (
-                          item.workers.map((w, wIdx) => {
-                            const total = Math.max(1, item.sizeTotal);
-                            const startPct = (w.start / total) * 100;
-                            const endPct = (w.end / total) * 100;
-                            const chunkWidth = endPct - startPct;
-                            const range = Math.max(1, w.end - w.start);
-                            const done = Math.max(0, Math.min(range, w.pos - w.start));
-                            const fillWidth = (chunkWidth * done) / range;
+                        {(() => {
+                          const isDone =
+                            item.state === "completed" ||
+                            item.progress >= 100 ||
+                            (item.sizeTotal > 0 && item.sizeDone >= item.sizeTotal);
+
+                          if (isDone) {
                             return (
-                              <React.Fragment key={w.idx || wIdx}>
-                                <div
-                                  className="absolute top-0 bottom-0 bg-[var(--accent)] z-10 transition-all duration-300"
-                                  style={{ left: `${startPct}%`, width: `${fillWidth}%` }}
-                                />
-                              </React.Fragment>
+                              <div
+                                className="h-full w-full progress-fill-3d transition-all duration-300"
+                                style={{ width: "100%" }}
+                              />
                             );
-                          })
-                        ) : (
-                          <div
-                            className="h-full bg-[var(--accent)] transition-all duration-300"
-                            style={{ width: `${item.progress}%` }}
-                          />
-                        )}
+                          }
+
+                          const spans = getMergedProgressSpans(
+                            item.workers,
+                            item.sizeTotal,
+                            item.sizeDone,
+                            false
+                          );
+
+                          return (
+                            <>
+                              {spans.map((span, sIdx) => (
+                                <div
+                                  key={sIdx}
+                                  className="absolute top-0 bottom-0 progress-fill-3d z-10 transition-all duration-300"
+                                  style={{
+                                    left: `${span.startPct}%`,
+                                    width:
+                                      sIdx < spans.length - 1
+                                        ? `calc(${span.widthPct}% + 1px)`
+                                        : `${span.widthPct}%`,
+                                  }}
+                                />
+                              ))}
+                              {item.state === "downloading" && (
+                                <div className="absolute inset-0 bg-white/10 pointer-events-none animate-[pulse_1.5s_infinite]" />
+                              )}
+                            </>
+                          );
+                        })()}
                       </div>
                     </div>
 
@@ -1734,7 +1795,10 @@ export default function App() {
                 </span>
                 <span className="text-[var(--text-muted)] hidden xs:inline">•</span>
                 <span className="hidden xs:inline whitespace-nowrap">
-                  {activeSelectedDownload.connections} TCP Threads
+                  {activeSelectedDownload.state === "downloading"
+                    ? Math.max(1, activeSelectedDownload.connections || 1)
+                    : 0}{" "}
+                  TCP Threads
                 </span>
                 <button
                   onClick={() => setIsInspectorOpen(true)}
@@ -1893,41 +1957,67 @@ export default function App() {
                           {activeSelectedDownload.progress}% ({formatBytes(activeSelectedDownload.sizeDone)} / {formatBytes(activeSelectedDownload.sizeTotal)})
                         </span>
                       </div>
-                      {/* Dynamic Visual Segmentation Bar with Red Start Dividers */}
+                      {/* Continuous Visual Progress Bar (Zero Seams & Merged Spans) */}
                       <div className="h-5 rounded bg-[var(--bg-chassis)] border border-[var(--border-strong)] relative overflow-hidden shadow-inner flex items-center">
-                        {workersList.map((w, idx) => {
-                          const startPct = (w.start / totalBytes) * 100;
-                          const endPct = (w.end / totalBytes) * 100;
-                          const chunkWidthPct = Math.max(0, endPct - startPct);
-                          const range = Math.max(1, w.end - w.start);
-                          const doneBytes = Math.max(0, Math.min(range, w.pos - w.start));
-                          const progressRatio = doneBytes / range;
-                          const filledWidthPct = chunkWidthPct * progressRatio;
-                          const isComplete = progressRatio >= 0.999 || activeSelectedDownload.state === "completed";
-                          const isDownloading = activeSelectedDownload.state === "downloading" && !isComplete && progressRatio > 0;
+                        {(() => {
+                          const isComplete =
+                            activeSelectedDownload.state === "completed" ||
+                            activeSelectedDownload.progress >= 100 ||
+                            (totalBytes > 0 && activeSelectedDownload.sizeDone >= totalBytes);
+
+                          if (isComplete) {
+                            return (
+                              <div
+                                className="h-full w-full progress-fill-3d transition-all duration-300"
+                                style={{ width: "100%" }}
+                              />
+                            );
+                          }
+
+                          const spans = getMergedProgressSpans(
+                            workersList,
+                            totalBytes,
+                            activeSelectedDownload.sizeDone,
+                            false
+                          );
 
                           return (
-                            <React.Fragment key={w.idx || idx}>
-                              {/* Chunk Progress Fill extending from startPct towards the right */}
-                              <div
-                                className={`absolute top-0 bottom-0 z-10 transition-all duration-300 ${
-                                  isComplete
-                                    ? "bg-gradient-to-r from-blue-600 to-blue-500 shadow-[inset_0_1px_0_rgba(255,255,255,0.35)]"
-                                    : "bg-gradient-to-r from-blue-700 via-blue-600 to-sky-500 shadow-[inset_0_1px_0_rgba(255,255,255,0.4)]"
-                                }`}
-                                style={{
-                                  left: `${startPct}%`,
-                                  width: `${filledWidthPct}%`,
-                                }}
-                              >
-                                {/* Active downloading write-head beacon line at current pos */}
-                                {isDownloading && (
-                                  <div className="absolute right-0 top-0 bottom-0 w-[2px] bg-white shadow-[0_0_8px_#38BDF8] animate-pulse" />
-                                )}
-                              </div>
-                            </React.Fragment>
+                            <>
+                              {spans.map((span, sIdx) => (
+                                <div
+                                  key={sIdx}
+                                  className="absolute top-0 bottom-0 z-10 progress-fill-3d transition-all duration-300"
+                                  style={{
+                                    left: `${span.startPct}%`,
+                                    width:
+                                      sIdx < spans.length - 1
+                                        ? `calc(${span.widthPct}% + 1px)`
+                                        : `${span.widthPct}%`,
+                                  }}
+                                >
+                                  {/* Active downloading write-head beacon line at the leading edge of active span */}
+                                  {activeSelectedDownload.state === "downloading" && sIdx === spans.length - 1 && (
+                                    <div className="absolute right-0 top-0 bottom-0 w-[2px] bg-white shadow-[0_0_8px_#38BDF8] animate-pulse" />
+                                  )}
+                                </div>
+                              ))}
+                              {/* Optional faint overlay if showConnectionBoundaries is enabled (default off) */}
+                              {settings?.general?.showConnectionBoundaries &&
+                                workersList &&
+                                workersList.length > 1 &&
+                                workersList.slice(1).map((w, idx) => {
+                                  const offsetPct = totalBytes > 0 ? (w.start / totalBytes) * 100 : 0;
+                                  return (
+                                    <div
+                                      key={`boundary-${idx}`}
+                                      className="absolute top-0 bottom-0 w-[1px] bg-white/20 pointer-events-none z-20"
+                                      style={{ left: `${offsetPct}%` }}
+                                    />
+                                  );
+                                })}
+                            </>
                           );
-                        })}
+                        })()}
                       </div>
                       <div className="flex justify-between text-[9.5px] text-[var(--text-muted)] font-mono mt-1">
                         <span>Offset: 0x00000000</span>

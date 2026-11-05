@@ -118,6 +118,8 @@ impl BitTorrentPack {
                     instant_throughput_bps: dl_speed * 8,
                     rolling_throughput_bps: dl_speed * 8,
                     active_connections: live_conns.max(1),
+                    target_connections: live_conns.max(1),
+                    live_workers: live_conns,
                     max_allowed_connections: 64,
                     mode: AccelerationMode::Stable,
                     eta_seconds: if dl_speed > 0 && stats.total_bytes > stats.progress_bytes {

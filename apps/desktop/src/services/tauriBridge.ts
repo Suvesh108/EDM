@@ -27,6 +27,8 @@ export interface BackendTelemetry {
   instant_throughput_bps: number;
   rolling_throughput_bps: number;
   active_connections: number;
+  target_connections?: number;
+  live_workers?: number;
   max_allowed_connections: number;
   mode: "auto" | "optimizing" | "stable" | "limited" | "fallback_single_stream";
   eta_seconds: number | null;

@@ -27,6 +27,7 @@ export interface EdmSettings {
     confirmDestructiveActions: boolean;
     keepAwake?: boolean;
     idleExitMinutes?: number | null; // null = never, 0 = immediately after listener sleep, 5, 15, 30, 60
+    showConnectionBoundaries?: boolean;
   };
   downloads: {
     defaultDirectory: string;
@@ -125,6 +126,7 @@ export const defaultSettings: EdmSettings = {
     confirmDestructiveActions: true,
     keepAwake: false,
     idleExitMinutes: 15,
+    showConnectionBoundaries: false,
   },
   downloads: {
     defaultDirectory: "C:\\Users\\Suvesh\\Downloads",

@@ -258,31 +258,32 @@ fn test_adaptive_controller_decisions() {
     match dec1 {
         AdaptiveDecision::ScaleUp { from, to, .. } => {
             assert_eq!(from, 2);
-            assert_eq!(to, 3);
+            assert_eq!(to, 4);
         }
         _ => panic!("Expected ScaleUp probe"),
     }
 
-    // Sample 2: Meaningful gain (+50% throughput = 12 Mbps)
+    // Sample 2: Meaningful sustained gain (+50% throughput = 12 Mbps)
     std::thread::sleep(Duration::from_millis(60));
+    let _ = controller.evaluate_sample(1_500_000, Duration::from_secs(1), 0, false, None);
     let dec2 = controller.evaluate_sample(1_500_000, Duration::from_secs(1), 0, false, None);
     match dec2 {
         AdaptiveDecision::ScaleUp { from, to, .. } => {
-            assert_eq!(from, 3);
-            assert_eq!(to, 4);
+            assert_eq!(from, 4);
+            assert_eq!(to, 6);
         }
-        _ => panic!("Expected ScaleUp on gain"),
+        other => panic!("Expected ScaleUp on gain, got {:?}", other),
     }
 
-    // Sample 3: Degradation (-40% throughput drop -> back off)
+    // Sample 3: Degradation (-60% throughput drop -> back off)
     std::thread::sleep(Duration::from_millis(60));
-    let dec3 = controller.evaluate_sample(900_000, Duration::from_secs(1), 0, false, None);
+    let dec3 = controller.evaluate_sample(400_000, Duration::from_secs(1), 0, false, None);
     match dec3 {
         AdaptiveDecision::ScaleDown { from, to, .. } => {
-            assert_eq!(from, 4);
-            assert_eq!(to, 3);
+            assert_eq!(from, 6);
+            assert_eq!(to, 4);
         }
-        _ => panic!("Expected ScaleDown on degradation"),
+        other => panic!("Expected ScaleDown on degradation, got {:?}", other),
     }
 
     // Sample 4: HTTP 429 rate limit
