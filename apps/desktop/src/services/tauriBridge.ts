@@ -296,6 +296,7 @@ export interface BackendDownloadItem {
   resumable: boolean;
   speed_bytes_per_sec: number;
   connections: number;
+  eta_seconds?: number | null;
   created_at: string;
   completed_at: string | null;
   error_msg: string | null;

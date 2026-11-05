@@ -281,7 +281,6 @@ export default function App() {
           const done = b.size_done || existing?.sizeDone || 0;
           const pct = total > 0 ? Math.min(100, Math.floor((done / total) * 100)) : (existing?.progress || 0);
           const speedVal = b.speed_bytes_per_sec || 0;
-          const etaSec = speedVal > 0 && total > done ? Math.ceil((total - done) / speedVal) : 0;
 
           const category = validCategories.includes(b.category as any)
             ? (b.category as DownloadItem["category"])
@@ -296,10 +295,22 @@ export default function App() {
           })();
 
           const itemState = stateMap[b.state] || (existing?.state || "downloading");
-          const currentBps = itemState === "downloading" ? speedVal : 0;
+          const isDownloading = itemState === "downloading";
+          const currentBps = isDownloading ? speedVal : 0;
           const history = existing?.speedHistory
             ? [...existing.speedHistory.slice(-59), currentBps]
             : [currentBps];
+
+          // Single source of truth: preserve live smoothed ETA and connections from telemetry
+          const eta = itemState === "completed"
+            ? "Finished"
+            : itemState === "failed"
+            ? (b.error_msg || "Download Failed")
+            : itemState === "paused"
+            ? "Paused"
+            : (existing?.eta && existing.eta !== "—"
+                ? existing.eta
+                : (b.eta_seconds ? formatEta(b.eta_seconds) : "Calculating..."));
 
           return {
             id: b.id,
@@ -308,17 +319,9 @@ export default function App() {
             sizeTotal: total,
             sizeDone: done,
             error_msg: b.error_msg || existing?.error_msg || null,
-            speed: itemState === "downloading" ? (existing?.speed || formatSpeed(speedVal)) : "0 B/s",
-            eta: itemState === "completed"
-              ? "Finished"
-              : itemState === "failed"
-              ? (b.error_msg || "Download Failed")
-              : itemState === "paused"
-              ? "Paused"
-              : (existing?.eta && existing.eta !== "Calculating..." && existing.eta !== "—"
-                  ? existing.eta
-                  : (etaSec > 0 ? formatEta(etaSec) : "Calculating...")),
-            connections: itemState === "downloading" ? Math.max(1, existing?.connections || b.connections || 1) : 0,
+            speed: isDownloading ? (existing?.speed || formatSpeed(speedVal)) : "0 B/s",
+            eta,
+            connections: isDownloading ? (existing?.connections || b.connections || 1) : 0,
             state: itemState,
             progress: itemState === "completed" ? 100 : pct,
             url: b.url,
@@ -556,6 +559,18 @@ export default function App() {
     downloadsRef.current = downloads;
   }, [downloads]);
 
+  interface TelemetrySmoothingState {
+    lastValidEta: string;
+    lastProgressTime: number;
+    speedSamples: number[];
+    elapsedSeconds: number;
+    lastUiUpdate: number;
+    displayedEta: string;
+    displayedSpeed: string;
+    displayedConns: number;
+  }
+  const telemetrySmoothingRef = useRef<Map<string, TelemetrySmoothingState>>(new Map());
+
   const hasDownloadingTasks = downloads.some((d) => d.state === "downloading");
 
   // Active Telemetry and Real Progress Tick (250 ms Monotonic Clock Sampling)
@@ -570,51 +585,78 @@ export default function App() {
           const telem = await tauriGetTelemetry(task.id);
           let newWorkers: WorkerInfo[] = [];
 
+          let smooth = telemetrySmoothingRef.current.get(task.id);
+          if (!smooth) {
+            smooth = {
+              lastValidEta: task.eta || "Calculating...",
+              lastProgressTime: Date.now(),
+              speedSamples: [],
+              elapsedSeconds: 0,
+              lastUiUpdate: 0,
+              displayedEta: task.eta || "Calculating...",
+              displayedSpeed: task.speed || "0 B/s",
+              displayedConns: task.connections || 8,
+            };
+            telemetrySmoothingRef.current.set(task.id, smooth);
+          }
+
           if (telem) {
             const sizeDone = telem.downloaded_bytes;
             const sizeTotal = telem.total_bytes || task.sizeTotal;
             const progress = sizeTotal > 0 ? Math.min(100, Math.floor((sizeDone / sizeTotal) * 100)) : 0;
-            
-            // One source of truth for speed: 5-second moving average (20 samples @ 250ms)
-            const instantSpeed = Math.floor((telem.instant_throughput_bps || telem.rolling_throughput_bps) / 8);
-            const prevSamples = (task as any)._speedSamples || [];
-            const newSamples = [...prevSamples.slice(-19), instantSpeed];
-            (task as any)._speedSamples = newSamples;
-            const smoothedSpeedBps = Math.round(newSamples.reduce((a: number, b: number) => a + b, 0) / newSamples.length);
-
-            const speed = formatSpeed(smoothedSpeedBps);
             const isFinished = progress >= 100;
-            const elapsed = ((task as any).elapsedSeconds || 0) + 0.25;
-            (task as any).elapsedSeconds = elapsed;
+            const now = Date.now();
 
-            const remainingBytes = Math.max(0, sizeTotal - sizeDone);
+            smooth.elapsedSeconds += 0.25;
 
-            // Bug 3: ETA stability logic
-            // "Calculating..." may ONLY be shown at the start (until ~3s elapsed and < 1 MiB received)
-            const isWarmup = elapsed < 3 && sizeDone < 1024 * 1024;
-            let eta = (task as any)._lastValidEta || "Calculating...";
+            // Speed smoothing EMA (8s window = 32 samples @ 250ms)
+            const instantSpeed = Math.floor((telem.instant_throughput_bps || telem.rolling_throughput_bps) / 8);
+            if (instantSpeed > 0) {
+              smooth.lastProgressTime = now;
+            }
+            smooth.speedSamples = [...smooth.speedSamples.slice(-31), instantSpeed];
+            const smoothedSpeedBps = Math.round(
+              smooth.speedSamples.reduce((a, b) => a + b, 0) / smooth.speedSamples.length
+            );
+
+            // Bug 3: ETA stability logic (AdaptiveTelemetry is single source of truth)
+            // Warmup gate: only first 3s and < 1 MiB can be "Calculating..."
+            const isWarmup = smooth.elapsedSeconds < 3 && sizeDone < 1024 * 1024;
+            let currentEta = smooth.lastValidEta || "Calculating...";
+
             if (isFinished) {
-              eta = "Finished";
+              currentEta = "Finished";
+              smooth.lastValidEta = "Finished";
             } else if (isWarmup) {
-              eta = "Calculating...";
+              currentEta = "Calculating...";
             } else if (telem.eta_seconds !== null && telem.eta_seconds !== undefined && telem.eta_seconds > 0) {
-              eta = formatEta(telem.eta_seconds);
-              (task as any)._lastValidEta = eta;
-              (task as any)._lastProgressTime = Date.now();
-            } else if (smoothedSpeedBps > 0) {
-              const rawSec = Math.ceil(remainingBytes / smoothedSpeedBps);
-              eta = formatEta(rawSec);
-              (task as any)._lastValidEta = eta;
-              (task as any)._lastProgressTime = Date.now();
+              currentEta = formatEta(telem.eta_seconds);
+              smooth.lastValidEta = currentEta;
+            } else if (smoothedSpeedBps > 0 && sizeTotal > sizeDone) {
+              const rawSec = Math.ceil((sizeTotal - sizeDone) / smoothedSpeedBps);
+              currentEta = formatEta(rawSec);
+              smooth.lastValidEta = currentEta;
             } else {
-              // Speed briefly dipped to 0
-              const stalledMs = Date.now() - ((task as any)._lastProgressTime || Date.now());
-              if (stalledMs < 10000 && (task as any)._lastValidEta) {
-                // Retain last valid ETA during brief dips/reconnects
-                eta = (task as any)._lastValidEta;
+              // Speed is zero: hold last valid ETA for 10s before showing Stalled
+              const stalledMs = now - smooth.lastProgressTime;
+              if (stalledMs < 10000 && smooth.lastValidEta && smooth.lastValidEta !== "Calculating...") {
+                currentEta = smooth.lastValidEta;
               } else if (stalledMs >= 10000) {
-                eta = "Waiting...";
+                currentEta = "Stalled";
               }
+            }
+
+            // Target connection count from AdaptiveTelemetry (never 0 while downloading)
+            const targetConns = isFinished
+              ? 0
+              : Math.max(1, telem.target_connections || telem.active_connections || smooth.displayedConns || 1);
+
+            // Throttle UI label updates to at most 1-2 per second (500ms)
+            if (now - smooth.lastUiUpdate >= 500 || isFinished) {
+              smooth.displayedEta = currentEta;
+              smooth.displayedSpeed = isFinished ? "0 B/s" : formatSpeed(smoothedSpeedBps);
+              smooth.displayedConns = targetConns;
+              smooth.lastUiUpdate = now;
             }
 
             if (telem.workers && telem.workers.length > 0) {
@@ -636,7 +678,7 @@ export default function App() {
                     : w.status,
               }));
             } else {
-              const numConns = telem.target_connections || telem.active_connections || task.connections || 1;
+              const numConns = smooth.displayedConns;
               const chunkBytes = Math.floor(sizeTotal / numConns);
               newWorkers = Array.from({ length: numConns }).map((_, idx) => {
                 const start = idx * chunkBytes;
@@ -660,31 +702,23 @@ export default function App() {
             const history = [...(task.speedHistory || []).slice(-59), actualBps];
             const peak = Math.max(task.peakSpeedBps || 0, actualBps);
 
-            // Bug 2: UI must never show 0 while download is actively running
-            const targetConns = isFinished
-              ? 0
-              : Math.max(1, telem.target_connections || telem.active_connections || task.connections || 1);
-
             return {
               id: task.id,
               sizeDone,
               sizeTotal,
               progress,
-              speed: isFinished ? "0 B/s" : speed,
-              eta,
-              connections: targetConns,
+              speed: smooth.displayedSpeed,
+              eta: smooth.displayedEta,
+              connections: smooth.displayedConns,
               state: isFinished ? ("completed" as const) : ("downloading" as const),
               workers: newWorkers,
               speedHistory: history,
               peakSpeedBps: peak,
-              elapsedSeconds: elapsed,
             };
           } else {
-            const elapsed = ((task as any).elapsedSeconds || 0) + 0.25;
-            (task as any).elapsedSeconds = elapsed;
+            smooth.elapsedSeconds += 0.25;
             return {
               id: task.id,
-              elapsedSeconds: elapsed,
             };
           }
         })
@@ -1328,51 +1362,18 @@ export default function App() {
                                 {formatBytes(item.sizeDone)} / {formatBytes(item.sizeTotal)}
                               </span>
                             </div>
-                            {/* Continuous Micro Track with 3D Depth */}
+                            {/* Plain Seamless Progress Bar (100% smooth, zero vertical lines) */}
                             <div className="w-full h-2 rounded overflow-hidden track-3d relative bg-[var(--bg-chassis)]">
-                              {(() => {
-                                const isDone =
-                                  item.state === "completed" ||
-                                  item.progress >= 100 ||
-                                  (item.sizeTotal > 0 && item.sizeDone >= item.sizeTotal);
-
-                                if (isDone) {
-                                  return (
-                                    <div
-                                      className="h-full w-full progress-fill-3d transition-all duration-300"
-                                      style={{ width: "100%" }}
-                                    />
-                                  );
-                                }
-
-                                const spans = getMergedProgressSpans(
-                                  item.workers,
-                                  item.sizeTotal,
-                                  item.sizeDone,
-                                  false
-                                );
-
-                                return (
-                                  <>
-                                    {spans.map((span, sIdx) => (
-                                      <div
-                                        key={sIdx}
-                                        className="absolute top-0 bottom-0 progress-fill-3d z-10 transition-all duration-300"
-                                        style={{
-                                          left: `${span.startPct}%`,
-                                          width:
-                                            sIdx < spans.length - 1
-                                              ? `calc(${span.widthPct}% + 1px)`
-                                              : `${span.widthPct}%`,
-                                        }}
-                                      />
-                                    ))}
-                                    {item.state === "downloading" && (
-                                      <div className="absolute inset-0 bg-white/10 pointer-events-none animate-[pulse_1.5s_infinite]" />
-                                    )}
-                                  </>
-                                );
-                              })()}
+                              <div
+                                className="h-full rounded bg-[var(--accent)] transition-[width] duration-200 ease-linear"
+                                style={{
+                                  width: `${item.state === "completed" ? 100 : Math.min(100, Math.max(0, item.progress))}%`,
+                                  opacity: item.state === "paused" ? 0.6 : 1,
+                                }}
+                              />
+                              {item.state === "downloading" && (
+                                <div className="absolute inset-0 bg-white/10 pointer-events-none animate-[pulse_1.5s_infinite]" />
+                              )}
                             </div>
                           </div>
                         </td>
@@ -1547,51 +1548,18 @@ export default function App() {
                           {formatBytes(item.sizeDone)} / {formatBytes(item.sizeTotal)}
                         </span>
                       </div>
-                      {/* Continuous Micro-Track */}
+                      {/* Plain Seamless Progress Bar (100% smooth, zero vertical lines) */}
                       <div className="w-full h-2 rounded bg-[var(--bg-chassis)] overflow-hidden border border-[var(--border-subtle)] relative">
-                        {(() => {
-                          const isDone =
-                            item.state === "completed" ||
-                            item.progress >= 100 ||
-                            (item.sizeTotal > 0 && item.sizeDone >= item.sizeTotal);
-
-                          if (isDone) {
-                            return (
-                              <div
-                                className="h-full w-full progress-fill-3d transition-all duration-300"
-                                style={{ width: "100%" }}
-                              />
-                            );
-                          }
-
-                          const spans = getMergedProgressSpans(
-                            item.workers,
-                            item.sizeTotal,
-                            item.sizeDone,
-                            false
-                          );
-
-                          return (
-                            <>
-                              {spans.map((span, sIdx) => (
-                                <div
-                                  key={sIdx}
-                                  className="absolute top-0 bottom-0 progress-fill-3d z-10 transition-all duration-300"
-                                  style={{
-                                    left: `${span.startPct}%`,
-                                    width:
-                                      sIdx < spans.length - 1
-                                        ? `calc(${span.widthPct}% + 1px)`
-                                        : `${span.widthPct}%`,
-                                  }}
-                                />
-                              ))}
-                              {item.state === "downloading" && (
-                                <div className="absolute inset-0 bg-white/10 pointer-events-none animate-[pulse_1.5s_infinite]" />
-                              )}
-                            </>
-                          );
-                        })()}
+                        <div
+                          className="h-full rounded bg-[var(--accent)] transition-[width] duration-200 ease-linear"
+                          style={{
+                            width: `${item.state === "completed" ? 100 : Math.min(100, Math.max(0, item.progress))}%`,
+                            opacity: item.state === "paused" ? 0.6 : 1,
+                          }}
+                        />
+                        {item.state === "downloading" && (
+                          <div className="absolute inset-0 bg-white/10 pointer-events-none animate-[pulse_1.5s_infinite]" />
+                        )}
                       </div>
                     </div>
 

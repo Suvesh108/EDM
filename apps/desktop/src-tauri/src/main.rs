@@ -856,6 +856,8 @@ async fn handle_extension_message(msg: ExtensionMessage, state: &AppState) -> Ap
                 let mut current_speed = 0u64;
                 let mut current_done = r.size_done;
                 let mut current_total = r.size_total;
+                let mut current_connections = r.connections;
+                let mut current_eta = None;
 
                 if is_active {
                     active_count += 1;
@@ -867,6 +869,8 @@ async fn handle_extension_message(msg: ExtensionMessage, state: &AppState) -> Ap
                                 if telem.total_bytes.is_some() {
                                     current_total = telem.total_bytes;
                                 }
+                                current_connections = telem.target_connections.max(1);
+                                current_eta = telem.eta_seconds;
                             }
                         }
                     }
@@ -900,7 +904,8 @@ async fn handle_extension_message(msg: ExtensionMessage, state: &AppState) -> Ap
                         size_done: current_done,
                         resumable: r.resumable,
                         speed_bytes_per_sec: current_speed,
-                        connections: r.connections,
+                        connections: current_connections,
+                        eta_seconds: current_eta,
                         created_at: r.created_at,
                         completed_at: if is_completed { Some(Utc::now()) } else { None },
                         error_msg: r.error_msg,
@@ -924,16 +929,20 @@ async fn handle_extension_message(msg: ExtensionMessage, state: &AppState) -> Ap
                 let mut speed = 0u64;
                 let mut done = r.size_done;
                 let mut total = r.size_total;
+                let mut connections = r.connections;
+                let mut eta_seconds = None;
                 if r.state == DownloadState::Downloading {
                     let tasks = state.tasks.lock().unwrap();
                     if let Some(h) = tasks.get(&id.to_string()) {
                         if let Ok(lock) = h.telemetry.lock() {
                             if let Some(ref telem) = *lock {
-                                speed = telem.rolling_throughput_bps;
+                                speed = telem.rolling_throughput_bps / 8;
                                 done = telem.downloaded_bytes;
                                 if telem.total_bytes.is_some() {
                                     total = telem.total_bytes;
                                 }
+                                connections = telem.target_connections.max(1);
+                                eta_seconds = telem.eta_seconds;
                             }
                         }
                     }
@@ -950,7 +959,8 @@ async fn handle_extension_message(msg: ExtensionMessage, state: &AppState) -> Ap
                         size_done: done,
                         resumable: r.resumable,
                         speed_bytes_per_sec: speed,
-                        connections: r.connections,
+                        connections,
+                        eta_seconds,
                         created_at: r.created_at,
                         completed_at: if is_comp { Some(Utc::now()) } else { None },
                         error_msg: r.error_msg,

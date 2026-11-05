@@ -265,7 +265,6 @@ fn test_adaptive_controller_decisions() {
 
     // Sample 2: Meaningful sustained gain (+50% throughput = 12 Mbps)
     std::thread::sleep(Duration::from_millis(60));
-    let _ = controller.evaluate_sample(1_500_000, Duration::from_secs(1), 0, false, None);
     let dec2 = controller.evaluate_sample(1_500_000, Duration::from_secs(1), 0, false, None);
     match dec2 {
         AdaptiveDecision::ScaleUp { from, to, .. } => {

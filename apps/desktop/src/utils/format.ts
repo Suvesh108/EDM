@@ -20,7 +20,14 @@ export const formatEta = (seconds: number): string => {
     const secs = rounded % 60;
     return secs > 0 ? `${mins}m ${secs}s` : `${mins}m`;
   }
-  // 2 minutes and above: round to nearest minute
+  if (seconds < 600) {
+    // Under 10 minutes: round to nearest 10s
+    const rounded = Math.round(seconds / 10) * 10;
+    const mins = Math.floor(rounded / 60);
+    const secs = rounded % 60;
+    return secs > 0 ? `${mins}m ${secs}s` : `${mins}m`;
+  }
+  // 10 minutes and above: round to nearest minute
   const roundedMins = Math.round(seconds / 60);
   if (roundedMins < 60) return `${roundedMins}m`;
   const hrs = Math.floor(roundedMins / 60);

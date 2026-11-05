@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use super::controller::AdaptiveController;
@@ -526,11 +526,11 @@ impl AdaptiveEngine {
                             last_progress_time = Instant::now();
                         }
 
-                        // Speed smoothed as EMA over a sustained window (~5-10s)
+                        // Speed smoothed as EMA over a sustained window (~8s)
                         if smoothed_speed_bytes <= 0.0 {
                             smoothed_speed_bytes = instant_rate as f64;
                         } else {
-                            smoothed_speed_bytes = 0.20 * (instant_rate as f64) + 0.80 * smoothed_speed_bytes;
+                            smoothed_speed_bytes = 0.12 * (instant_rate as f64) + 0.88 * smoothed_speed_bytes;
                         }
 
                         let progress = if let Some(tot) = total_size {
@@ -549,9 +549,9 @@ impl AdaptiveEngine {
                             let rem = tot.saturating_sub(total_downloaded);
                             if effective_rate_bytes > 0 {
                                 let raw_eta = rem / effective_rate_bytes;
-                                // Smooth ETA so it doesn't jump by more than 20% between ticks
+                                // Smooth ETA so it doesn't jump by more than 15% between ticks
                                 let smoothed = if let Some(prev) = smoothed_eta_sec {
-                                    let max_delta = (prev as f64 * 0.20).max(1.0) as u64;
+                                    let max_delta = (prev as f64 * 0.15).max(1.0) as u64;
                                     if raw_eta > prev + max_delta {
                                         prev + max_delta
                                     } else if prev > max_delta && raw_eta < prev - max_delta {
@@ -576,7 +576,7 @@ impl AdaptiveEngine {
                             None
                         };
 
-                        let target_conns = controller.current_connections().max(1);
+                        let stable_conns = controller.stable_target().max(1);
                         let telemetry = AdaptiveTelemetry {
                             download_id: task.id.to_string(),
                             total_bytes: total_size,
@@ -586,10 +586,10 @@ impl AdaptiveEngine {
                             rolling_throughput_bps: if controller.rolling_throughput_bps() > 0 {
                                 controller.rolling_throughput_bps()
                             } else {
-                                instant_rate * 8
+                                (smoothed_speed_bytes as u64) * 8
                             },
-                            active_connections: target_conns,
-                            target_connections: target_conns,
+                            active_connections: stable_conns,
+                            target_connections: stable_conns,
                             live_workers: scheduler.active_count(),
                             max_allowed_connections: task.config.max_connections,
                             mode: controller.mode(),
@@ -598,6 +598,11 @@ impl AdaptiveEngine {
                             workers: scheduler.get_telemetry_snapshot(),
                             updated_at: Utc::now(),
                         };
+
+                        debug!(
+                            "[{:?}] Telemetry emission: id={}, stable_target={}, live_workers={}, speed_bps={}, eta_sec={:?}",
+                            Utc::now(), task.id, stable_conns, scheduler.active_count(), effective_rate_bytes * 8, eta
+                        );
 
                         cb(telemetry);
                     }

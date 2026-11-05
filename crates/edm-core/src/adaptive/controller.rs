@@ -27,6 +27,7 @@ pub fn next_step_down(current: u32, min: u32) -> u32 {
 #[derive(Debug)]
 pub struct AdaptiveController {
     config: AdaptiveConfig,
+    stable_target: u32,
     current_connections: u32,
     mode: AccelerationMode,
     last_adjustment: Instant,
@@ -65,6 +66,7 @@ impl AdaptiveController {
 
         Self {
             config,
+            stable_target: initial,
             current_connections: initial,
             mode,
             last_adjustment: Instant::now(),
@@ -81,6 +83,10 @@ impl AdaptiveController {
         self.mode
     }
 
+    pub fn stable_target(&self) -> u32 {
+        self.stable_target
+    }
+
     pub fn current_connections(&self) -> u32 {
         self.current_connections
     }
@@ -95,6 +101,7 @@ impl AdaptiveController {
 
     pub fn force_single_stream(&mut self) {
         self.is_resumable_range = false;
+        self.stable_target = 1;
         self.current_connections = 1;
         self.mode = AccelerationMode::FallbackSingleStream;
         self.status_reason = "Server ignored HTTP Range; single stream fallback active".into();
@@ -132,11 +139,13 @@ impl AdaptiveController {
         let secs = sample_duration.as_secs_f64().max(0.001);
         let instant_bps = (bytes_transferred as f64 / secs) * 8.0;
 
-        // Exponential moving average over a sustained window (~5-8s)
+        // Time-aware exponential moving average:
+        // Adapts smoothing weight based on sample duration (~0.15 for 250ms telemetry, ~0.35 for 1s samples)
+        let alpha = (secs * 0.35).clamp(0.12, 0.40);
         if self.rolling_throughput_bps == 0.0 {
             self.rolling_throughput_bps = instant_bps;
         } else {
-            self.rolling_throughput_bps = 0.15 * instant_bps + 0.85 * self.rolling_throughput_bps;
+            self.rolling_throughput_bps = alpha * instant_bps + (1.0 - alpha) * self.rolling_throughput_bps;
         }
 
         // Single stream fallback invariant: never scale if server cannot handle ranges
@@ -150,6 +159,7 @@ impl AdaptiveController {
         if has_http_429 {
             let from = self.current_connections;
             let to = next_step_down(from, self.config.min_connections);
+            self.stable_target = to;
             self.current_connections = to;
             self.mode = AccelerationMode::Limited;
             self.last_adjustment = now;
@@ -164,8 +174,8 @@ impl AdaptiveController {
             );
             self.status_reason = reason.clone();
             debug!(
-                "AdaptiveController decision: old_target={}, new_target={}, reason='{}', rolling_bps={}",
-                from, to, reason, self.rolling_throughput_bps
+                "[{:?}] AdaptiveController decision: old_target={}, new_target={}, reason='{}', rolling_bps={}",
+                now, from, to, reason, self.rolling_throughput_bps
             );
             return AdaptiveDecision::LimitRate {
                 retry_after,
@@ -177,6 +187,7 @@ impl AdaptiveController {
         if active_error_count > 0 {
             let from = self.current_connections;
             let to = next_step_down(from, self.config.min_connections);
+            self.stable_target = to;
             self.current_connections = to;
             self.mode = AccelerationMode::Limited;
             self.last_adjustment = now;
@@ -187,8 +198,8 @@ impl AdaptiveController {
             );
             self.status_reason = reason.clone();
             debug!(
-                "AdaptiveController decision: old_target={}, new_target={}, reason='{}', rolling_bps={}",
-                from, to, reason, self.rolling_throughput_bps
+                "[{:?}] AdaptiveController decision: old_target={}, new_target={}, reason='{}', rolling_bps={}",
+                now, from, to, reason, self.rolling_throughput_bps
             );
             return AdaptiveDecision::ScaleDown { from, to, reason };
         }
@@ -272,6 +283,8 @@ impl AdaptiveController {
                 // Sustained meaningful gain (>= +10%)
                 self.consecutive_failed_probes = 0;
                 self.previous_baseline_throughput = self.rolling_throughput_bps;
+                // Probe succeeded: commit new stable target!
+                self.stable_target = self.current_connections;
 
                 if self.current_connections < max_allowed {
                     let from = self.current_connections;
@@ -289,8 +302,8 @@ impl AdaptiveController {
                         );
                         self.status_reason = reason.clone();
                         debug!(
-                            "AdaptiveController decision: old_target={}, new_target={}, reason='{}', rolling_bps={}",
-                            from, to, reason, self.rolling_throughput_bps
+                            "[{:?}] AdaptiveController decision: committed_target={}, probe_target={}, reason='{}', rolling_bps={}",
+                            now, self.stable_target, to, reason, self.rolling_throughput_bps
                         );
                         return AdaptiveDecision::ScaleUp { from, to, reason };
                     }
@@ -304,11 +317,11 @@ impl AdaptiveController {
                 );
                 self.status_reason = reason.clone();
                 debug!(
-                    "AdaptiveController decision: old_target={}, new_target={}, reason='{}', rolling_bps={}",
-                    self.current_connections, self.current_connections, reason, self.rolling_throughput_bps
+                    "[{:?}] AdaptiveController decision: locked at max_cap={}, reason='{}', rolling_bps={}",
+                    now, self.stable_target, reason, self.rolling_throughput_bps
                 );
                 return AdaptiveDecision::HoldStable {
-                    connections: self.current_connections,
+                    connections: self.stable_target,
                     reason,
                 };
             } else if delta <= self.config.throughput_drop_threshold {
@@ -316,6 +329,7 @@ impl AdaptiveController {
                 self.mode = AccelerationMode::Stable;
                 let from = self.current_connections;
                 let to = next_step_down(from, self.config.min_connections);
+                self.stable_target = to;
                 self.current_connections = to;
                 self.last_adjustment = now;
                 self.stable_locked_until = Some(now + Duration::from_secs(60));
@@ -327,31 +341,45 @@ impl AdaptiveController {
                 );
                 self.status_reason = reason.clone();
                 debug!(
-                    "AdaptiveController decision: old_target={}, new_target={}, reason='{}', rolling_bps={}",
-                    from, to, reason, self.rolling_throughput_bps
+                    "[{:?}] AdaptiveController decision: old_target={}, new_target={}, reason='{}', rolling_bps={}",
+                    now, from, to, reason, self.rolling_throughput_bps
                 );
                 return AdaptiveDecision::ScaleDown { from, to, reason };
             } else {
-                // Diminishing returns (change between -15% and +10%)
+                // Diminishing returns (change between -15% and +10%): probe did not yield >= 10% gain.
+                // Revert probing connections back to stable target without tearing down existing stable connections.
                 self.consecutive_failed_probes += 1;
+                let from = self.current_connections;
+                self.current_connections = self.stable_target;
+                self.last_adjustment = now;
+
                 if self.consecutive_failed_probes >= 2 {
                     self.mode = AccelerationMode::Stable;
-                    self.last_adjustment = now;
                     self.stable_locked_until = Some(now + Duration::from_secs(60));
                     let reason = format!(
                         "Throughput plateaued at {:.2} Mbps after 2 failed probes. Locking concurrency at {} streams for 60s",
                         self.rolling_throughput_bps / 1_000_000.0,
-                        self.current_connections
+                        self.stable_target
                     );
                     self.status_reason = reason.clone();
                     debug!(
-                        "AdaptiveController decision: locked at {}, reason='{}', rolling_bps={}",
-                        self.current_connections, reason, self.rolling_throughput_bps
+                        "[{:?}] AdaptiveController decision: locked at {}, reason='{}', rolling_bps={}",
+                        now, self.stable_target, reason, self.rolling_throughput_bps
                     );
                     return AdaptiveDecision::HoldStable {
-                        connections: self.current_connections,
+                        connections: self.stable_target,
                         reason,
                     };
+                } else {
+                    let reason = format!(
+                        "Probe to {} streams yielded sub-10% gain ({:+.1}%). Reverted to stable target ({})",
+                        from, delta * 100.0, self.stable_target
+                    );
+                    self.status_reason = reason.clone();
+                    debug!(
+                        "[{:?}] AdaptiveController decision: reverted probe {} -> {}, reason='{}'",
+                        now, from, self.stable_target, reason
+                    );
                 }
             }
         }
@@ -440,7 +468,7 @@ mod tests {
                 None,
             );
 
-            let cur = controller.current_connections();
+            let cur = controller.stable_target();
             if cur != prev_conns {
                 change_events.push((prev_conns, cur, elapsed_sim));
                 prev_conns = cur;
@@ -540,5 +568,89 @@ mod tests {
                 tick
             );
         }
+    }
+
+    #[test]
+    fn test_controller_trace_under_10pct_gain_never_oscillates() {
+        let config = AdaptiveConfig {
+            initial_connections: 8,
+            min_connections: 1,
+            max_connections: 16,
+            max_connections_per_host: 16,
+            cooldown_duration: Duration::from_secs(20),
+            throughput_gain_threshold: 0.10,
+            throughput_drop_threshold: -0.15,
+            sample_interval: Duration::from_millis(250),
+            ..Default::default()
+        };
+
+        let mut controller = AdaptiveController::new(config, true);
+        assert_eq!(controller.stable_target(), 8);
+
+        let start_time = Instant::now();
+        let mut sim_clock = start_time;
+        controller.last_adjustment = sim_clock;
+
+        // Baseline: 4 MB/s (1 MB per 250ms)
+        for _ in 0..8 {
+            sim_clock += Duration::from_millis(250);
+            let _ = controller.evaluate_sample_at(
+                sim_clock,
+                1_000_000,
+                Duration::from_millis(250),
+                0,
+                false,
+                None,
+            );
+        }
+
+        // Advance 21 seconds to trigger probe upward
+        sim_clock += Duration::from_secs(21);
+        let dec_probe1 = controller.evaluate_sample_at(
+            sim_clock,
+            1_000_000,
+            Duration::from_millis(250),
+            0,
+            false,
+            None,
+        );
+
+        match dec_probe1 {
+            AdaptiveDecision::ScaleUp { from, to, .. } => {
+                assert_eq!(from, 8);
+                assert_eq!(to, 12);
+            }
+            other => panic!("Expected ScaleUp probe, got {:?}", other),
+        }
+        // UI still sees stable target 8!
+        assert_eq!(controller.stable_target(), 8);
+
+        // Throughput only increases by 3% (under 10% gain requirement)
+        for _ in 0..8 {
+            sim_clock += Duration::from_millis(250);
+            let _ = controller.evaluate_sample_at(
+                sim_clock,
+                1_030_000,
+                Duration::from_millis(250),
+                0,
+                false,
+                None,
+            );
+        }
+
+        // Advance past 20s cooldown
+        sim_clock += Duration::from_secs(21);
+        let _ = controller.evaluate_sample_at(
+            sim_clock,
+            1_030_000,
+            Duration::from_millis(250),
+            0,
+            false,
+            None,
+        );
+
+        // Sub-10% gain: probe reverted to stable target 8 without changing stable target!
+        assert_eq!(controller.stable_target(), 8);
+        assert_eq!(controller.current_connections(), 8);
     }
 }

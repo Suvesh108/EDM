@@ -281,6 +281,8 @@ pub struct DownloadOverview {
     pub resumable: bool,
     pub speed_bytes_per_sec: u64,
     pub connections: u32,
+    #[serde(default)]
+    pub eta_seconds: Option<u64>,
     pub created_at: DateTime<Utc>,
     pub completed_at: Option<DateTime<Utc>>,
     pub error_msg: Option<String>,
