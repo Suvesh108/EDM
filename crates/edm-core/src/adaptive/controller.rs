@@ -70,6 +70,13 @@ impl AdaptiveController {
         &self.status_reason
     }
 
+    pub fn force_single_stream(&mut self) {
+        self.is_resumable_range = false;
+        self.current_connections = 1;
+        self.mode = AccelerationMode::FallbackSingleStream;
+        self.status_reason = "Server ignored HTTP Range; single stream fallback active".into();
+    }
+
     /// Evaluates current throughput sample and makes an adaptive scaling decision
     pub fn evaluate_sample(
         &mut self,

@@ -32,6 +32,13 @@ enum Commands {
         #[arg(long, default_value_t = true)]
         adaptive: bool,
     },
+    /// Compare two files and report sizes, SHA-256 hashes, and differing byte ranges
+    Verify {
+        file_a: PathBuf,
+        file_b: PathBuf,
+        #[arg(short, long)]
+        chunk_size: Option<u64>,
+    },
 }
 
 #[tokio::main]
@@ -124,6 +131,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("Starting Static Download for {}", url);
                 let saved_path = engine.download(task, Some(progress)).await?;
                 println!("\nSaved to: {:?}", saved_path);
+            }
+        }
+        Commands::Verify {
+            file_a,
+            file_b,
+            chunk_size,
+        } => {
+            let report = edm_core::compare_files(&file_a, &file_b, chunk_size, &[])?;
+            print!("{}", report.format_summary());
+            if !report.is_identical {
+                std::process::exit(1);
             }
         }
     }

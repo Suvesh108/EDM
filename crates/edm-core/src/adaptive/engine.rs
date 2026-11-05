@@ -11,6 +11,7 @@ use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use super::controller::AdaptiveController;
+use super::range_set::RangeSet;
 use super::scheduler::WorkScheduler;
 use super::types::{AdaptiveConfig, AdaptiveDecision, AdaptiveTelemetry};
 use super::worker::AdaptiveWorkerEvent;
@@ -198,11 +199,14 @@ impl AdaptiveEngine {
         }
 
         // 5. Orchestration loop: event handling, metrics sampling, and adaptive optimization
+        let mut range_set = RangeSet::new();
         let mut total_downloaded: u64 = 0;
         let mut last_sample_time = Instant::now();
         let mut sample_bytes: u64 = 0;
         let mut last_checkpoint = Instant::now();
         let mut sample_ticker = tokio::time::interval(task.config.sample_interval);
+        let mut etag_restarts = 0;
+        let mut retry_gap_attempts = 0;
 
         loop {
             if task.cancelled.load(Ordering::Relaxed) {
@@ -225,9 +229,10 @@ impl AdaptiveEngine {
                 // Handle worker events
                 maybe_event = event_rx.recv() => {
                     match maybe_event {
-                        Some(AdaptiveWorkerEvent::Progress { bytes_read, .. }) => {
+                        Some(AdaptiveWorkerEvent::Progress { bytes_read, range_start, range_end, .. }) => {
                             total_downloaded += bytes_read;
                             sample_bytes += bytes_read;
+                            range_set.add(range_start, range_end);
 
                             // Checkpoint to SQLite every 2 seconds without blocking worker I/O on fsync
                             if last_checkpoint.elapsed() >= Duration::from_secs(2) {
@@ -250,6 +255,106 @@ impl AdaptiveEngine {
                                 last_checkpoint = Instant::now();
                             }
                         }
+                        Some(AdaptiveWorkerEvent::ServerIgnoredRange { idx }) => {
+                            warn!(
+                                "Task {}: Worker {} reported server ignored Range header. Switching to single-stream fallback.",
+                                task.id, idx
+                            );
+                            controller.force_single_stream();
+                            scheduler.cancel_all_except(0);
+
+                            let mut w0_active = false;
+                            for w in &scheduler.workers {
+                                if w.idx == 0 {
+                                    if let Some(tot) = total_size {
+                                        w.end.store(tot.saturating_sub(1), Ordering::SeqCst);
+                                    } else {
+                                        w.end.store(u64::MAX - 1, Ordering::SeqCst);
+                                    }
+                                    let s = w.get_status();
+                                    if s == super::types::WorkerStatus::Connecting || s == super::types::WorkerStatus::Downloading {
+                                        w0_active = true;
+                                    }
+                                }
+                            }
+
+                            if !w0_active {
+                                let full_end = total_size.map(|s| s.saturating_sub(1)).unwrap_or(u64::MAX - 1);
+                                scheduler.spawn_worker(
+                                    probe.final_url.clone(),
+                                    0,
+                                    full_end,
+                                    probe.etag.clone(),
+                                    task.cookies.clone(),
+                                    task.referer.clone(),
+                                    task.user_agent.clone(),
+                                    self.client.clone(),
+                                    writer.clone(),
+                                    task.limiter.clone(),
+                                    event_tx.clone(),
+                                );
+                            }
+                        }
+                        Some(AdaptiveWorkerEvent::ETagChanged { idx, old_etag, new_etag }) => {
+                            warn!(
+                                "Task {}: Worker {} detected validator change ('{}' -> '{}'). Restarting clean download.",
+                                task.id, idx, old_etag, new_etag
+                            );
+                            if etag_restarts < 2 {
+                                etag_restarts += 1;
+                                scheduler.cancel_all();
+                                tokio::time::sleep(Duration::from_millis(50)).await;
+                                let _ = writer.reset();
+                                range_set = RangeSet::new();
+                                total_downloaded = 0;
+                                sample_bytes = 0;
+
+                                while event_rx.try_recv().is_ok() {}
+
+                                let new_etag_opt = Some(new_etag.clone());
+                                if let Some(size) = total_size {
+                                    let initial_conns = if is_resumable {
+                                        task.config.initial_connections.min(task.config.max_connections).max(1)
+                                    } else {
+                                        1
+                                    };
+                                    let plans = Planner::plan(size, initial_conns, task.config.min_chunk_size);
+                                    for plan in plans {
+                                        scheduler.spawn_worker(
+                                            probe.final_url.clone(),
+                                            plan.start,
+                                            plan.end,
+                                            new_etag_opt.clone(),
+                                            task.cookies.clone(),
+                                            task.referer.clone(),
+                                            task.user_agent.clone(),
+                                            self.client.clone(),
+                                            writer.clone(),
+                                            task.limiter.clone(),
+                                            event_tx.clone(),
+                                        );
+                                    }
+                                } else {
+                                    scheduler.spawn_worker(
+                                        probe.final_url.clone(),
+                                        0,
+                                        u64::MAX - 1,
+                                        new_etag_opt,
+                                        task.cookies.clone(),
+                                        task.referer.clone(),
+                                        task.user_agent.clone(),
+                                        self.client.clone(),
+                                        writer.clone(),
+                                        task.limiter.clone(),
+                                        event_tx.clone(),
+                                    );
+                                }
+                            } else {
+                                error!("Task {}: Server ETag changed repeatedly. Aborting to avoid corrupting output.", task.id);
+                                let _ = self.store.update_download_state(task.id, DownloadState::Failed, Some("ETag changed repeatedly"));
+                                return Err("Server ETag changed repeatedly mid-download".into());
+                            }
+                        }
                         Some(AdaptiveWorkerEvent::RateLimited { idx, retry_after }) => {
                             warn!("Worker {} reported rate limiting from host", idx);
                             controller.evaluate_sample(
@@ -266,7 +371,7 @@ impl AdaptiveEngine {
                         Some(AdaptiveWorkerEvent::Done { idx }) => {
                             info!("Worker {} completed assigned byte range", idx);
                             // Dynamic work stealing on completion to keep all connections busy
-                            if is_resumable {
+                            if is_resumable && controller.mode() != super::types::AccelerationMode::FallbackSingleStream {
                                 scheduler.try_steal_work(
                                     self.client.clone(),
                                     writer.clone(),
@@ -275,22 +380,80 @@ impl AdaptiveEngine {
                                 );
                             }
 
-                            // Check if entire file has finished
+                            // Check completion criteria
                             let active = scheduler.active_count();
-                            let is_finished = if let Some(tot) = total_size {
-                                total_downloaded >= tot || active == 0
-                            } else {
-                                active == 0
-                            };
-
-                            if is_finished {
-                                info!("All bytes received for download {}", task.id);
+                            if let Some(tot) = total_size {
+                                if range_set.is_complete(tot) {
+                                    info!("All bytes verified and received for download {}", task.id);
+                                    break;
+                                } else if active == 0 {
+                                    let missing = range_set.missing_ranges(tot);
+                                    warn!("Task {}: All workers stopped but {} byte ranges are missing: {:?}", task.id, missing.len(), missing);
+                                    if retry_gap_attempts < 3 {
+                                        retry_gap_attempts += 1;
+                                        info!("Task {}: Recovering {} missing byte ranges (attempt {}/3)...", task.id, missing.len(), retry_gap_attempts);
+                                        for (gap_start, gap_end) in missing {
+                                            scheduler.spawn_worker(
+                                                probe.final_url.clone(),
+                                                gap_start,
+                                                gap_end,
+                                                probe.etag.clone(),
+                                                task.cookies.clone(),
+                                                task.referer.clone(),
+                                                task.user_agent.clone(),
+                                                self.client.clone(),
+                                                writer.clone(),
+                                                task.limiter.clone(),
+                                                event_tx.clone(),
+                                            );
+                                        }
+                                    } else {
+                                        error!("Task {}: Failed to fill missing byte ranges after retries", task.id);
+                                        let _ = writer.flush();
+                                        let _ = self.store.update_download_state(
+                                            task.id,
+                                            DownloadState::Failed,
+                                            Some(&format!("Integrity check failed: {} unwritten ranges", missing.len())),
+                                        );
+                                        return Err(format!("Download failed integrity check: {} missing byte ranges", missing.len()));
+                                    }
+                                }
+                            } else if active == 0 {
+                                info!("All workers stopped for unbounded download {}", task.id);
                                 break;
                             }
                         }
                         Some(AdaptiveWorkerEvent::Failed { idx, reason }) => {
                             error!("Worker {} failed: {}", idx, reason);
                             if scheduler.active_count() == 0 {
+                                if let Some(tot) = total_size {
+                                    if range_set.is_complete(tot) {
+                                        info!("Download {} complete despite failed worker event", task.id);
+                                        break;
+                                    }
+                                    let missing = range_set.missing_ranges(tot);
+                                    if retry_gap_attempts < 3 {
+                                        retry_gap_attempts += 1;
+                                        info!("Task {}: Retrying {} missing ranges after worker failure...", task.id, missing.len());
+                                        for (gap_start, gap_end) in missing {
+                                            scheduler.spawn_worker(
+                                                probe.final_url.clone(),
+                                                gap_start,
+                                                gap_end,
+                                                probe.etag.clone(),
+                                                task.cookies.clone(),
+                                                task.referer.clone(),
+                                                task.user_agent.clone(),
+                                                self.client.clone(),
+                                                writer.clone(),
+                                                task.limiter.clone(),
+                                                event_tx.clone(),
+                                            );
+                                        }
+                                        continue;
+                                    }
+                                }
+
                                 let _ = self.store.update_download_progress(task.id, total_downloaded);
                                 let is_expired = reason.contains("expired")
                                     || reason.contains("401")
@@ -328,7 +491,7 @@ impl AdaptiveEngine {
 
                     // Execute decision
                     if let AdaptiveDecision::ScaleUp { to, .. } = decision {
-                        if scheduler.active_count() < to && is_resumable {
+                        if scheduler.active_count() < to && is_resumable && controller.mode() != super::types::AccelerationMode::FallbackSingleStream {
                             scheduler.try_steal_work(
                                 self.client.clone(),
                                 writer.clone(),
@@ -407,6 +570,31 @@ impl AdaptiveEngine {
             .finalize(Some(&task.url))
             .map_err(|e| format!("Failed to finalize file: {}", e))?;
 
+        if let Some(tot) = total_size {
+            let actual_size = std::fs::metadata(&final_path)
+                .map(|m| m.len())
+                .unwrap_or(0);
+            if actual_size != tot {
+                let err = format!(
+                    "Final file size mismatch: expected {} bytes, got {} bytes on disk",
+                    tot, actual_size
+                );
+                error!("{}", err);
+                let _ = self.store.update_download_state(task.id, DownloadState::Failed, Some(&err));
+                return Err(err);
+            }
+            if !range_set.is_complete(tot) {
+                let missing = range_set.missing_ranges(tot);
+                let err = format!(
+                    "Integrity verification failed: {} byte ranges missing from file",
+                    missing.len()
+                );
+                error!("{}", err);
+                let _ = self.store.update_download_state(task.id, DownloadState::Failed, Some(&err));
+                return Err(err);
+            }
+        }
+
         let _ = self
             .store
             .update_download_progress(task.id, total_downloaded);
@@ -415,7 +603,7 @@ impl AdaptiveEngine {
             .update_download_state(task.id, DownloadState::Completed, None);
 
         info!(
-            "Download completed successfully: {:?} ({} bytes)",
+            "Download completed and verified successfully: {:?} ({} bytes)",
             final_path, total_downloaded
         );
         Ok(final_path)

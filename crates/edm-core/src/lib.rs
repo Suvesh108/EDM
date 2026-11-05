@@ -8,6 +8,7 @@ pub mod planner;
 pub mod probe;
 pub mod sanitizer;
 pub mod security;
+pub mod verify;
 pub mod worker;
 pub mod writer;
 
@@ -25,4 +26,5 @@ pub use packs::{
 pub use planner::{Planner, SegmentPlan};
 pub use probe::{Probe, ProbeResult};
 pub use sanitizer::Sanitizer;
+pub use verify::{compare_files, is_near_boundary, DiffRange, VerificationReport};
 pub use writer::FileWriter;

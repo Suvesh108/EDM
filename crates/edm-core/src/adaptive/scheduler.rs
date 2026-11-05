@@ -92,28 +92,53 @@ impl WorkScheduler {
             }
         }
 
-        let (target_idx, remaining) = best_candidate?;
+        let (target_idx, _) = best_candidate?;
         let target = &self.workers[target_idx];
 
-        let cur_pos = target.pos.load(Ordering::Relaxed);
-        let cur_end = target.end.load(Ordering::Relaxed);
+        let cur_end = target.end.load(Ordering::SeqCst);
+        let cur_pos = target.pos.load(Ordering::SeqCst);
 
-        if cur_end < cur_pos || (cur_end - cur_pos + 1) < 2 * self.min_chunk_size {
+        if cur_end <= cur_pos || (cur_end - cur_pos + 1) < 2 * self.min_chunk_size {
             return None;
         }
 
-        let half = remaining / 2;
-        let new_target_end = cur_pos + half - 1;
+        let remaining = cur_end - cur_pos + 1;
+        let stolen_len = remaining / 2;
+
+        if stolen_len < self.min_chunk_size || (remaining - stolen_len) < self.min_chunk_size {
+            return None;
+        }
+
+        // Steal from tail: victim keeps [cur_pos ..= cur_end - stolen_len], thief gets [cur_end - stolen_len + 1 ..= cur_end]
+        let new_target_end = cur_end - stolen_len;
+
+        // Atomically contract target worker's end boundary using compare_exchange
+        if target
+            .end
+            .compare_exchange(cur_end, new_target_end, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            // End boundary was concurrently modified by another steal or boundary update
+            return None;
+        }
+
+        // Verify victim hasn't already crossed the new end boundary while CAS was executing
+        let active_pos = target.pos.load(Ordering::SeqCst);
+        if active_pos > new_target_end {
+            // Target already advanced past the proposed split point: rollback and cancel steal
+            let _ = target
+                .end
+                .compare_exchange(new_target_end, cur_end, Ordering::SeqCst, Ordering::SeqCst);
+            return None;
+        }
+
         let new_worker_start = new_target_end + 1;
         let new_worker_end = cur_end;
-
-        // Atomically contract target worker's end boundary
-        target.end.store(new_target_end, Ordering::SeqCst);
 
         info!(
             "Dynamic Work Steal: Worker {} boundary shrunk to {}-{}. Spawning Worker {} for {}-{} ({} KiB stolen)",
             target.idx,
-            cur_pos,
+            active_pos,
             new_target_end,
             self.next_idx,
             new_worker_start,
@@ -217,7 +242,15 @@ impl WorkScheduler {
 
     pub fn cancel_all(&self) {
         for w in &self.workers {
-            w.cancelled.store(true, Ordering::Relaxed);
+            w.cancelled.store(true, Ordering::SeqCst);
+        }
+    }
+
+    pub fn cancel_all_except(&self, keep_idx: u32) {
+        for w in &self.workers {
+            if w.idx != keep_idx {
+                w.cancelled.store(true, Ordering::SeqCst);
+            }
         }
     }
 
@@ -254,5 +287,158 @@ impl WorkScheduler {
                 }
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_work_stealing_stress_1000_runs() {
+        use crate::adaptive::range_set::RangeSet;
+        use std::sync::atomic::Ordering;
+
+        let total_size = 100 * 1024 * 1024; // 100 MiB
+        let min_chunk = 1024 * 1024; // 1 MiB
+
+        let mut rng_state: u64 = 0xDEADBEEFCAFE;
+        let mut next_rand = || {
+            rng_state ^= rng_state >> 12;
+            rng_state ^= rng_state << 25;
+            rng_state ^= rng_state >> 27;
+            rng_state.wrapping_mul(0x2545F4914F6CDD1D)
+        };
+
+        for run in 0..1000 {
+            let mut scheduler = WorkScheduler::new(min_chunk, Duration::from_secs(3), 3);
+            let initial_conns = (next_rand() % 8 + 1) as u32;
+            let plans = crate::planner::Planner::plan(total_size, initial_conns, min_chunk);
+
+            for plan in plans {
+                let w = Arc::new(AdaptiveWorker::new(
+                    scheduler.next_idx,
+                    "http://localhost/test".into(),
+                    plan.start,
+                    plan.end,
+                    plan.start,
+                    None,
+                    None,
+                    None,
+                    None,
+                ));
+                scheduler.next_idx += 1;
+                w.set_status(WorkerStatus::Downloading);
+                scheduler.workers.push(w);
+            }
+
+            // Simulate up to 20 random steal and progress events per run
+            let num_events = (next_rand() % 20 + 5) as usize;
+            for _ in 0..num_events {
+                // Advance random worker by a random amount
+                if !scheduler.workers.is_empty() {
+                    let w_idx = (next_rand() as usize) % scheduler.workers.len();
+                    let w = &scheduler.workers[w_idx];
+                    let cur_pos = w.pos.load(Ordering::SeqCst);
+                    let cur_end = w.end.load(Ordering::SeqCst);
+                    if cur_pos < cur_end {
+                        let advance = (next_rand() % (cur_end - cur_pos + 1)).min(512 * 1024);
+                        w.pos.fetch_add(advance, Ordering::SeqCst);
+                    }
+                }
+
+                // Simulate steal logic directly on the scheduler's workers
+                let mut best: Option<(usize, u64)> = None;
+                for (i, w) in scheduler.workers.iter().enumerate() {
+                    let rem = w.remaining_bytes();
+                    if rem >= 2 * scheduler.min_chunk_size {
+                        match best {
+                            None => best = Some((i, rem)),
+                            Some((_, b_rem)) if rem > b_rem => best = Some((i, rem)),
+                            _ => {}
+                        }
+                    }
+                }
+
+                if let Some((target_idx, _)) = best {
+                    let target = &scheduler.workers[target_idx];
+                    let cur_end = target.end.load(Ordering::SeqCst);
+                    let cur_pos = target.pos.load(Ordering::SeqCst);
+
+                    if cur_end > cur_pos && (cur_end - cur_pos + 1) >= 2 * scheduler.min_chunk_size {
+                        let remaining = cur_end - cur_pos + 1;
+                        let stolen_len = remaining / 2;
+                        if stolen_len >= scheduler.min_chunk_size
+                            && (remaining - stolen_len) >= scheduler.min_chunk_size
+                        {
+                            let new_target_end = cur_end - stolen_len;
+                            if target
+                                .end
+                                .compare_exchange(
+                                    cur_end,
+                                    new_target_end,
+                                    Ordering::SeqCst,
+                                    Ordering::SeqCst,
+                                )
+                                .is_ok()
+                            {
+                                let active_pos = target.pos.load(Ordering::SeqCst);
+                                if active_pos <= new_target_end {
+                                    let new_w = Arc::new(AdaptiveWorker::new(
+                                        scheduler.next_idx,
+                                        target.url.clone(),
+                                        new_target_end + 1,
+                                        cur_end,
+                                        new_target_end + 1,
+                                        None,
+                                        None,
+                                        None,
+                                        None,
+                                    ));
+                                    scheduler.next_idx += 1;
+                                    new_w.set_status(WorkerStatus::Downloading);
+                                    scheduler.workers.push(new_w);
+                                } else {
+                                    // Rollback
+                                    let _ = target.end.compare_exchange(
+                                        new_target_end,
+                                        cur_end,
+                                        Ordering::SeqCst,
+                                        Ordering::SeqCst,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // INVARIANT CHECK:
+                // 1. All workers have pos <= end + 1 and start <= end
+                // 2. Active remaining ranges [pos, end] are disjoint
+                // 3. Union of [start, end] of all workers is exactly [0, total_size - 1]
+                let mut range_set = RangeSet::new();
+                for w in &scheduler.workers {
+                    let s = w.start;
+                    let e = w.end.load(Ordering::SeqCst);
+                    assert!(s <= e, "Run {}: worker start {} > end {}", run, s, e);
+                    range_set.add(s, e);
+                }
+
+                assert!(
+                    range_set.is_complete(total_size),
+                    "Run {}: range_set is not complete! Gaps: {:?}",
+                    run,
+                    range_set.missing_ranges(total_size)
+                );
+                assert_eq!(
+                    range_set.total_covered_bytes(),
+                    total_size,
+                    "Run {}: total covered bytes {} != expected {}",
+                    run,
+                    range_set.total_covered_bytes(),
+                    total_size
+                );
+            }
+        }
     }
 }

@@ -18,7 +18,16 @@ pub enum AdaptiveWorkerEvent {
     Progress {
         idx: u32,
         bytes_read: u64,
-        current_pos: u64,
+        range_start: u64,
+        range_end: u64,
+    },
+    ServerIgnoredRange {
+        idx: u32,
+    },
+    ETagChanged {
+        idx: u32,
+        old_etag: String,
+        new_etag: String,
     },
     RateLimited {
         idx: u32,
@@ -34,6 +43,28 @@ pub enum AdaptiveWorkerEvent {
         idx: u32,
         reason: String,
     },
+}
+
+pub fn parse_content_range(val: &str) -> Option<(u64, u64, Option<u64>)> {
+    let val = val.trim();
+    let lower = val.to_ascii_lowercase();
+    if !lower.starts_with("bytes ") {
+        return None;
+    }
+    let rest = val[6..].trim();
+    let mut parts = rest.split('/');
+    let range_str = parts.next()?.trim();
+    let total_str = parts.next().map(|s| s.trim());
+
+    let mut range_parts = range_str.split('-');
+    let start_str = range_parts.next()?.trim();
+    let end_str = range_parts.next()?.trim();
+
+    let start = start_str.parse::<u64>().ok()?;
+    let end = end_str.parse::<u64>().ok()?;
+    let total = total_str.and_then(|s| if s == "*" { None } else { s.parse::<u64>().ok() });
+
+    Some((start, end, total))
 }
 
 #[derive(Clone)]
@@ -292,18 +323,82 @@ impl AdaptiveWorker {
                 continue;
             }
 
-            if status == reqwest::StatusCode::OK && self.start > 0 {
-                warn!("Server returned 200 OK instead of 206 Partial Content for Worker {}. Aborting secondary worker to prevent overwrite.", self.idx);
-                self.set_status(WorkerStatus::Completed);
-                let _ = event_tx
-                    .send(AdaptiveWorkerEvent::Done { idx: self.idx })
-                    .await;
-                return;
+            // Validate ETag if server provides one
+            if let Some(resp_etag) = resp.headers().get(reqwest::header::ETAG).and_then(|v| v.to_str().ok()) {
+                let clean_resp = resp_etag.trim().trim_matches('"');
+                if let Some(ref expected) = self.etag {
+                    let clean_exp = expected.trim().trim_matches('"');
+                    if !clean_resp.is_empty() && !clean_exp.is_empty() && clean_resp != clean_exp {
+                        warn!(
+                            "Worker {}: Server ETag changed from '{}' to '{}'. Aborting worker.",
+                            self.idx, clean_exp, clean_resp
+                        );
+                        self.set_status(WorkerStatus::Failed);
+                        let _ = event_tx
+                            .send(AdaptiveWorkerEvent::ETagChanged {
+                                idx: self.idx,
+                                old_etag: clean_exp.to_string(),
+                                new_etag: clean_resp.to_string(),
+                            })
+                            .await;
+                        return;
+                    }
+                }
             }
 
-            if status == reqwest::StatusCode::OK && self.start == 0 {
-                // Server streaming from 0; reset write pos to 0
-                self.pos.store(0, Ordering::SeqCst);
+            // Handle server returning 200 OK (ignoring Range)
+            if status == reqwest::StatusCode::OK {
+                if self.start > 0 {
+                    warn!(
+                        "Worker {}: Server returned 200 OK instead of 206 Partial Content. Aborting secondary worker to prevent overwrite.",
+                        self.idx
+                    );
+                    self.set_status(WorkerStatus::Failed);
+                    let _ = event_tx
+                        .send(AdaptiveWorkerEvent::ServerIgnoredRange { idx: self.idx })
+                        .await;
+                    return;
+                } else {
+                    warn!(
+                        "Worker 0: Server returned 200 OK. Resetting offset to 0 and expanding to full body stream."
+                    );
+                    self.pos.store(0, Ordering::SeqCst);
+                    if let Some(content_len) = resp.content_length() {
+                        if content_len > 0 {
+                            self.end.store(content_len - 1, Ordering::SeqCst);
+                        }
+                    }
+                    let _ = event_tx
+                        .send(AdaptiveWorkerEvent::ServerIgnoredRange { idx: self.idx })
+                        .await;
+                }
+            }
+
+            // Validate Content-Range header for 206 Partial Content
+            if status == reqwest::StatusCode::PARTIAL_CONTENT {
+                if let Some(cr_header) = resp.headers().get(reqwest::header::CONTENT_RANGE) {
+                    if let Ok(cr_str) = cr_header.to_str() {
+                        if let Some((cr_start, cr_end, _)) = parse_content_range(cr_str) {
+                            if cr_start != current_pos {
+                                warn!(
+                                    "Worker {}: Content-Range start mismatch (expected {}, got {}). Retrying.",
+                                    self.idx, current_pos, cr_start
+                                );
+                                retries += 1;
+                                self.retry_count.store(retries, Ordering::Relaxed);
+                                tokio::time::sleep(Duration::from_millis(500 * (1 << retries.min(4)))).await;
+                                continue;
+                            }
+                            if cr_end < current_end {
+                                debug!(
+                                    "Worker {}: Server truncated range end to {}.",
+                                    self.idx, cr_end
+                                );
+                                self.end.store(cr_end, Ordering::SeqCst);
+                            }
+                        }
+                    }
+                }
             }
 
             self.set_status(WorkerStatus::Downloading);
@@ -349,12 +444,17 @@ impl AdaptiveWorker {
                     lim.acquire(chunk_len).await;
                 }
 
-                let write_offset = self.pos.load(Ordering::Relaxed);
-                let boundary_end = self.end.load(Ordering::Relaxed);
+                let write_offset = self.pos.load(Ordering::SeqCst);
+                let boundary_end = self.end.load(Ordering::SeqCst);
+
+                // Guard against writing past boundary or underflow
+                if write_offset > boundary_end {
+                    break;
+                }
 
                 // Check if this chunk crosses the dynamically shrunk boundary
                 if write_offset + chunk_len - 1 > boundary_end {
-                    let allowed = (boundary_end - write_offset + 1) as usize;
+                    let allowed = (boundary_end + 1 - write_offset) as usize;
                     if allowed > 0 {
                         let sliced = next_chunk.slice(0..allowed);
                         if let Err(e) = writer.write_at(write_offset, &sliced) {
@@ -371,7 +471,8 @@ impl AdaptiveWorker {
                             .send(AdaptiveWorkerEvent::Progress {
                                 idx: self.idx,
                                 bytes_read: allowed as u64,
-                                current_pos: self.pos.load(Ordering::Relaxed),
+                                range_start: write_offset,
+                                range_end: write_offset + allowed as u64 - 1,
                             })
                             .await;
                     }
@@ -395,16 +496,20 @@ impl AdaptiveWorker {
                     .send(AdaptiveWorkerEvent::Progress {
                         idx: self.idx,
                         bytes_read: chunk_len,
-                        current_pos: self.pos.load(Ordering::Relaxed),
+                        range_start: write_offset,
+                        range_end: write_offset + chunk_len - 1,
                     })
                     .await;
 
-                if self.pos.load(Ordering::Relaxed) > self.end.load(Ordering::Relaxed) {
+                if self.pos.load(Ordering::SeqCst) > self.end.load(Ordering::SeqCst) {
                     break;
                 }
             }
 
-            if !read_failed && self.pos.load(Ordering::Relaxed) > self.end.load(Ordering::Relaxed) {
+            let pos_after = self.pos.load(Ordering::SeqCst);
+            let end_after = self.end.load(Ordering::SeqCst);
+
+            if !read_failed && pos_after > end_after {
                 self.set_status(WorkerStatus::Completed);
                 let _ = event_tx
                     .send(AdaptiveWorkerEvent::Done { idx: self.idx })
@@ -412,11 +517,9 @@ impl AdaptiveWorker {
                 return;
             }
 
-            if read_failed {
-                retries += 1;
-                self.retry_count.store(retries, Ordering::Relaxed);
-                tokio::time::sleep(Duration::from_millis(300 * (1 << retries.min(4)))).await;
-            }
+            retries += 1;
+            self.retry_count.store(retries, Ordering::Relaxed);
+            tokio::time::sleep(Duration::from_millis(300 * (1 << retries.min(4)))).await;
         }
 
         if self.cancelled.load(Ordering::Relaxed) {
@@ -430,5 +533,28 @@ impl AdaptiveWorker {
                 reason: format!("Worker {} exhausted {} retries", self.idx, retries),
             })
             .await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_content_range() {
+        assert_eq!(
+            parse_content_range("bytes 0-1048575/67108864"),
+            Some((0, 1048575, Some(67108864)))
+        );
+        assert_eq!(
+            parse_content_range("bytes 5242880-10485759/10485760"),
+            Some((5242880, 10485759, Some(10485760)))
+        );
+        assert_eq!(
+            parse_content_range("bytes 100-200/*"),
+            Some((100, 200, None))
+        );
+        assert_eq!(parse_content_range("invalid-header"), None);
+        assert_eq!(parse_content_range("bytes invalid/100"), None);
     }
 }

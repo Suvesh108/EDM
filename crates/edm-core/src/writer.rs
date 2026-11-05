@@ -84,11 +84,24 @@ impl FileWriter {
     }
 
     pub fn write_at(&self, offset: u64, data: &[u8]) -> Result<(), WriterError> {
+        if data.is_empty() {
+            return Ok(());
+        }
         let guard = self.file.lock().unwrap();
         if let Some(ref file) = *guard {
             #[cfg(windows)]
             {
-                file.seek_write(data, offset)?;
+                let mut written = 0;
+                while written < data.len() {
+                    let n = file.seek_write(&data[written..], offset + written as u64)?;
+                    if n == 0 {
+                        return Err(WriterError::Io(io::Error::new(
+                            io::ErrorKind::WriteZero,
+                            "failed to write whole buffer",
+                        )));
+                    }
+                    written += n;
+                }
             }
 
             #[cfg(not(windows))]
@@ -107,6 +120,18 @@ impl FileWriter {
     pub fn flush(&self) -> Result<(), WriterError> {
         let guard = self.file.lock().unwrap();
         if let Some(ref file) = *guard {
+            file.sync_data()?;
+        }
+        Ok(())
+    }
+
+    pub fn reset(&self) -> Result<(), WriterError> {
+        let guard = self.file.lock().unwrap();
+        if let Some(ref file) = *guard {
+            file.set_len(0)?;
+            if let Some(size) = self.total_size {
+                file.set_len(size)?;
+            }
             file.sync_data()?;
         }
         Ok(())
