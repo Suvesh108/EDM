@@ -155,6 +155,10 @@ impl AdaptiveEngine {
             return Err("Download cancelled by user".into());
         }
 
+        // 5. Orchestration loop: event handling, metrics sampling, and adaptive optimization
+        let mut range_set = RangeSet::new();
+        let mut total_downloaded: u64 = 0;
+
         if let Some(size) = total_size {
             let initial_conns = if is_resumable {
                 task.config
@@ -165,21 +169,59 @@ impl AdaptiveEngine {
                 1
             };
 
-            let plans = Planner::plan(size, initial_conns, task.config.min_chunk_size);
-            for plan in plans {
-                scheduler.spawn_worker(
-                    probe.final_url.clone(),
-                    plan.start,
-                    plan.end,
-                    probe.etag.clone(),
-                    task.cookies.clone(),
-                    task.referer.clone(),
-                    task.user_agent.clone(),
-                    self.client.clone(),
-                    writer.clone(),
-                    task.limiter.clone(),
-                    event_tx.clone(),
+            // Check if existing valid segments exist in Store for this task (Resume)
+            let existing_segments = if is_resumable {
+                self.store.get_segments(task.id).unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+
+            if !existing_segments.is_empty() {
+                info!(
+                    "Resuming download for task {} with {} saved segments",
+                    task.id,
+                    existing_segments.len()
                 );
+                for s in existing_segments {
+                    if s.pos > s.start {
+                        let already_done = s.pos.saturating_sub(s.start);
+                        total_downloaded += already_done;
+                        range_set.add(s.start, s.pos.saturating_sub(1));
+                    }
+                    if s.pos <= s.end {
+                        scheduler.spawn_worker_at(
+                            probe.final_url.clone(),
+                            s.start,
+                            s.end,
+                            s.pos,
+                            probe.etag.clone(),
+                            task.cookies.clone(),
+                            task.referer.clone(),
+                            task.user_agent.clone(),
+                            self.client.clone(),
+                            writer.clone(),
+                            task.limiter.clone(),
+                            event_tx.clone(),
+                        );
+                    }
+                }
+            } else {
+                let plans = Planner::plan(size, initial_conns, task.config.min_chunk_size);
+                for plan in plans {
+                    scheduler.spawn_worker(
+                        probe.final_url.clone(),
+                        plan.start,
+                        plan.end,
+                        probe.etag.clone(),
+                        task.cookies.clone(),
+                        task.referer.clone(),
+                        task.user_agent.clone(),
+                        self.client.clone(),
+                        writer.clone(),
+                        task.limiter.clone(),
+                        event_tx.clone(),
+                    );
+                }
             }
         } else {
             // Unknown file size: fallback to unbounded single-stream
@@ -198,9 +240,6 @@ impl AdaptiveEngine {
             );
         }
 
-        // 5. Orchestration loop: event handling, metrics sampling, and adaptive optimization
-        let mut range_set = RangeSet::new();
-        let mut total_downloaded: u64 = 0;
         let mut last_sample_time = Instant::now();
         let mut sample_bytes: u64 = 0;
         let mut last_checkpoint = Instant::now();

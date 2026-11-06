@@ -45,11 +45,44 @@ impl WorkScheduler {
         limiter: Option<TokenBucketLimiter>,
         event_tx: mpsc::Sender<AdaptiveWorkerEvent>,
     ) -> Arc<AdaptiveWorker> {
+        self.spawn_worker_at(
+            url,
+            start,
+            end,
+            start,
+            etag,
+            cookies,
+            referer,
+            user_agent,
+            client,
+            writer,
+            limiter,
+            event_tx,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn spawn_worker_at(
+        &mut self,
+        url: String,
+        start: u64,
+        end: u64,
+        pos: u64,
+        etag: Option<String>,
+        cookies: Option<String>,
+        referer: Option<String>,
+        user_agent: Option<String>,
+        client: Client,
+        writer: FileWriter,
+        limiter: Option<TokenBucketLimiter>,
+        event_tx: mpsc::Sender<AdaptiveWorkerEvent>,
+    ) -> Arc<AdaptiveWorker> {
         let idx = self.next_idx;
         self.next_idx += 1;
 
+        let initial_pos = pos.clamp(start, end + 1);
         let worker = Arc::new(AdaptiveWorker::new(
-            idx, url, start, end, start, etag, cookies, referer, user_agent,
+            idx, url, start, end, initial_pos, etag, cookies, referer, user_agent,
         ));
         self.workers.push(worker.clone());
 
@@ -166,9 +199,9 @@ impl WorkScheduler {
     /// Checks for stalled workers and triggers connection renewal if needed
     pub fn check_stalled_workers(
         &self,
-        client: &Client,
-        writer: &FileWriter,
-        limiter: Option<TokenBucketLimiter>,
+        _client: &Client,
+        _writer: &FileWriter,
+        _limiter: Option<TokenBucketLimiter>,
         event_tx: &mpsc::Sender<AdaptiveWorkerEvent>,
     ) {
         for w in &self.workers {
@@ -190,33 +223,14 @@ impl WorkScheduler {
                     continue;
                 }
                 info!(
-                    "Stall detected on Worker {} at pos {}. Initiating reconnect (attempt {}/{}).",
+                    "Stall detected on Worker {} at pos {}. Worker internal retry loop will reconnect (attempt {}/{}).",
                     w.idx,
                     w.pos.load(Ordering::Relaxed),
                     current_retries + 1,
                     self.max_retries
                 );
                 w.set_status(WorkerStatus::Stalled);
-                let w_clone = w.clone();
-                let client_clone = client.clone();
-                let writer_clone = writer.clone();
-                let limiter_clone = limiter.clone();
-                let event_tx_clone = event_tx.clone();
-                let stall = self.stall_timeout;
-                let retries = self.max_retries;
-
-                tokio::spawn(async move {
-                    w_clone
-                        .run(
-                            client_clone,
-                            writer_clone,
-                            limiter_clone,
-                            event_tx_clone,
-                            stall,
-                            retries,
-                        )
-                        .await;
-                });
+                let _ = event_tx.try_send(AdaptiveWorkerEvent::Stalled { idx: w.idx });
             }
         }
     }

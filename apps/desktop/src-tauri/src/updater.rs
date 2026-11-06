@@ -125,6 +125,11 @@ pub async fn install_update(
     state: State<'_, crate::AppState>,
     download_url: String,
 ) -> Result<(), String> {
+    let trimmed = download_url.trim();
+    if !trimmed.starts_with("https://github.com/Suvesh108/EDM/releases/download/") {
+        return Err("Security violation: Update download URL must originate from official Suvesh108/EDM GitHub releases".into());
+    }
+
     let temp_dir = std::env::temp_dir();
     let installer_path = temp_dir.join("EDM_Update_Installer.exe");
 
@@ -135,7 +140,7 @@ pub async fn install_update(
         .map_err(|e| format!("HTTP client error: {}", e))?;
 
     let res = client
-        .get(&download_url)
+        .get(trimmed)
         .send()
         .await
         .map_err(|e| format!("Failed to download update installer: {}", e))?;
@@ -145,6 +150,10 @@ pub async fn install_update(
     }
 
     let total_bytes = res.content_length().unwrap_or(0);
+    if total_bytes < 1_000_000 {
+        return Err("Invalid installer package size received from release server".into());
+    }
+
     use futures_util::StreamExt;
     let mut stream = res.bytes_stream();
     let mut file = tokio::fs::File::create(&installer_path)
@@ -161,11 +170,7 @@ pub async fn install_update(
             .map_err(|e| format!("File write error: {}", e))?;
         downloaded += chunk.len() as u64;
 
-        let percent = if total_bytes > 0 {
-            (downloaded as f64 / total_bytes as f64) * 100.0
-        } else {
-            0.0
-        };
+        let percent = (downloaded as f64 / total_bytes as f64) * 100.0;
 
         let _ = app.emit(
             "ota-progress",
@@ -182,6 +187,14 @@ pub async fn install_update(
         .await
         .map_err(|e| format!("File flush error: {}", e))?;
     drop(file);
+
+    if downloaded != total_bytes {
+        let _ = tokio::fs::remove_file(&installer_path).await;
+        return Err(format!(
+            "Incomplete update download: expected {} bytes but only received {} bytes. Aborting installation.",
+            total_bytes, downloaded
+        ));
+    }
 
     let _ = app.emit(
         "ota-progress",

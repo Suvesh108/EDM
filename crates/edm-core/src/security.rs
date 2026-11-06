@@ -205,6 +205,48 @@ pub fn check_disk_space(target_dir: &Path, needed_bytes: u64) -> Result<(), Stri
     }
 }
 
+/// Determines if a file extension is safe for direct execution / opening via the OS shell.
+/// Strictly whitelists known safe media, text, image, and document formats.
+/// Any unknown or hazardous file format (executables, scripts, HTML apps, control panel applets,
+/// shortcuts, disk images, etc.) will return `false`, requiring safe reveal in Explorer instead.
+pub fn is_safe_to_open_directly(filename: &str) -> bool {
+    let ext = filename.split('.').next_back().unwrap_or("").to_lowercase();
+    matches!(
+        ext.as_str(),
+        // Plain text & structured data
+        "txt" | "log" | "csv" | "json" | "xml" | "md" | "yaml" | "yml"
+        // Video
+        | "mp4" | "mkv" | "webm" | "avi" | "mov" | "wmv" | "flv" | "m4v"
+        // Audio
+        | "mp3" | "flac" | "wav" | "aac" | "ogg" | "m4a" | "wma" | "opus"
+        // Images
+        | "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "svg" | "ico" | "tiff" | "tif"
+        // Standard non-executable compressed archives
+        | "zip" | "rar" | "7z" | "tar" | "gz" | "bz2" | "xz"
+        // Office & generic documents
+        | "pdf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "odt" | "ods" | "odp" | "epub"
+    )
+}
+
+/// Safely opens a file on Windows:
+/// If the file is on the safe whitelist, it opens directly with the default application.
+/// If the file is executable, a script, or unknown, it reveals it safely in Explorer with `/select,<path>`.
+pub fn open_file_safely(file_path: &Path) {
+    if !file_path.exists() {
+        return;
+    }
+    let file_str = file_path.to_string_lossy();
+    if is_safe_to_open_directly(&file_str) {
+        let _ = std::process::Command::new("explorer.exe")
+            .arg(file_path)
+            .spawn();
+    } else {
+        let _ = std::process::Command::new("explorer.exe")
+            .arg(format!("/select,{}", file_str))
+            .spawn();
+    }
+}
+
 /// Preserves Windows Mark-of-the-Web (MOTW) on downloaded files via NTFS Alternate Data Stream `:Zone.Identifier`.
 pub fn apply_mark_of_the_web(file_path: &Path, source_url: Option<&str>) -> Result<(), String> {
     #[cfg(windows)]
@@ -259,5 +301,31 @@ mod tests {
         assert!(check_double_extension("setup.msi").is_none());
         assert!(check_double_extension("normal_file.pdf").is_none());
         assert!(check_double_extension("archive.tar.gz").is_none());
+    }
+
+    #[test]
+    fn test_safe_to_open_directly_whitelist() {
+        // Safe documents & media
+        assert!(is_safe_to_open_directly("document.pdf"));
+        assert!(is_safe_to_open_directly("video.mp4"));
+        assert!(is_safe_to_open_directly("song.mp3"));
+        assert!(is_safe_to_open_directly("photo.png"));
+        assert!(is_safe_to_open_directly("data.json"));
+        assert!(is_safe_to_open_directly("archive.zip"));
+
+        // Dangerous executable & script formats MUST return false
+        assert!(!is_safe_to_open_directly("setup.exe"));
+        assert!(!is_safe_to_open_directly("script.bat"));
+        assert!(!is_safe_to_open_directly("command.cmd"));
+        assert!(!is_safe_to_open_directly("app.hta"));
+        assert!(!is_safe_to_open_directly("panel.cpl"));
+        assert!(!is_safe_to_open_directly("screen.scr"));
+        assert!(!is_safe_to_open_directly("vbs_script.vbs"));
+        assert!(!is_safe_to_open_directly("powershell.ps1"));
+        assert!(!is_safe_to_open_directly("shortcut.lnk"));
+        assert!(!is_safe_to_open_directly("web.url"));
+        assert!(!is_safe_to_open_directly("disk.iso"));
+        assert!(!is_safe_to_open_directly("image.vhd"));
+        assert!(!is_safe_to_open_directly("unknown_payload.xyz"));
     }
 }

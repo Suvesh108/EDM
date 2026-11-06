@@ -38,6 +38,7 @@ pub(crate) struct AppState {
     pub(crate) app_handle: Arc<Mutex<Option<tauri::AppHandle>>>,
     pub(crate) lifecycle: Arc<lifecycle::LifecycleManager>,
     pub(crate) power_countdown: Arc<features::PowerCountdownController>,
+    pub(crate) global_limiter: Arc<edm_core::TokenBucketLimiter>,
 }
 
 fn init_logging() {
@@ -426,22 +427,7 @@ fn validate_url_security(raw_url: &str) -> Result<url::Url, String> {
 
 fn open_file(save_dir: &str, filename: &str) {
     let file_path = PathBuf::from(save_dir).join(filename);
-    if file_path.exists() {
-        let ext = filename.split('.').next_back().unwrap_or("").to_lowercase();
-        let is_executable = [
-            "exe", "bat", "cmd", "scr", "vbs", "ps1", "msi", "reg", "com", "pif",
-        ]
-        .contains(&ext.as_str());
-        if is_executable {
-            let _ = std::process::Command::new("explorer.exe")
-                .arg(format!("/select,{}", file_path.to_string_lossy()))
-                .spawn();
-        } else {
-            let _ = std::process::Command::new("explorer.exe")
-                .arg(file_path)
-                .spawn();
-        }
-    }
+    edm_core::security::open_file_safely(&file_path);
 }
 
 fn open_folder(save_dir: &str, filename: &str) {
@@ -521,6 +507,16 @@ fn execute_download(
             .unwrap_or_else(|_| std::env::temp_dir())
     });
 
+    // Security Guard: Prevent writing to sensitive system directories or Startup folders
+    let path_str = save_path.to_string_lossy().to_lowercase();
+    if path_str.contains(r"\windows\system32")
+        || path_str.contains(r"\windows\syswow64")
+        || path_str.contains(r"\start menu\programs\startup")
+        || path_str.contains(r"\microsoft\windows\start menu")
+    {
+        return Err("Security violation: Target download directory is a restricted Windows system location".into());
+    }
+
     let resolved_path = edm_core::sanitizer::Sanitizer::resolve_duplicate(&save_path, &clean_name);
     let final_clean_name = resolved_path
         .file_name()
@@ -534,6 +530,47 @@ fn execute_download(
     let mut config = AdaptiveConfig::default();
     if let Some(conns) = max_connections {
         config.max_connections = conns;
+    }
+
+    // UI-01: Apply persistent settings from store (connections, segmentation, retries, proxy)
+    let mut proxy_config: Option<reqwest::Proxy> = None;
+    let mut req_timeout_secs = 45u64;
+
+    if let Ok(Some(json_str)) = state.store.get_setting("app_settings") {
+        if let Ok(settings) = serde_json::from_str::<serde_json::Value>(&json_str) {
+            if let Some(dl) = settings.get("downloads") {
+                if max_connections.is_none() {
+                    if let Some(conns) = dl.get("maxConnectionsPerFile").and_then(|v| v.as_u64()) {
+                        config.max_connections = (conns.clamp(1, 64)) as u32;
+                    }
+                }
+                if let Some(min_mb) = dl.get("minFileSizeForSegmentationMb").and_then(|v| v.as_u64()) {
+                    config.min_chunk_size = min_mb.max(1) * 1024 * 1024;
+                }
+                if let Some(retries) = dl.get("maxRetries").and_then(|v| v.as_u64()) {
+                    config.max_worker_retries = (retries.clamp(1, 20)) as u32;
+                }
+            }
+            if let Some(net) = settings.get("network") {
+                if let Some(t) = net.get("connectionTimeoutSeconds").and_then(|v| v.as_u64()) {
+                    if t > 0 {
+                        req_timeout_secs = t;
+                    }
+                }
+                let proxy_mode = net.get("proxyMode").and_then(|v| v.as_str()).unwrap_or("system");
+                if proxy_mode == "manual" {
+                    let proto = net.get("proxyProtocol").and_then(|v| v.as_str()).unwrap_or("http");
+                    let host = net.get("proxyHost").and_then(|v| v.as_str()).unwrap_or("");
+                    let port = net.get("proxyPort").and_then(|v| v.as_u64()).unwrap_or(8080);
+                    if !host.trim().is_empty() {
+                        let p_url = format!("{}://{}:{}", proto, host.trim(), port);
+                        if let Ok(p) = reqwest::Proxy::all(&p_url) {
+                            proxy_config = Some(p);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     let cancelled = Arc::new(AtomicBool::new(false));
@@ -625,7 +662,7 @@ fn execute_download(
         filename: final_clean_name.clone(),
         save_dir: save_path.clone(),
         config,
-        limiter: None,
+        limiter: Some((*state.global_limiter).clone()),
         cancelled,
         cookies,
         referer: referer.clone(),
@@ -669,12 +706,14 @@ fn execute_download(
                     .await;
             });
         });
-        let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(45))
+        let mut client_builder = Client::builder()
+            .timeout(std::time::Duration::from_secs(req_timeout_secs))
             .redirect(reqwest::redirect::Policy::limited(15))
-            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36 Edg/135.0.0.0")
-            .build()
-            .unwrap_or_default();
+            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36 Edg/135.0.0.0");
+        if let Some(p) = proxy_config {
+            client_builder = client_builder.proxy(p);
+        }
+        let client = client_builder.build().unwrap_or_default();
         let result = edm_core::PackExecutor::execute(task, engine, client, Some(cb)).await;
         let (final_state, error_msg) = match result {
             Ok(_) => (DownloadState::Completed, None),
@@ -1624,7 +1663,23 @@ async fn save_settings(
         .update_settings(keep_awake, idle_exit_mins)
         .await;
 
+    if let Some(limit) = settings
+        .get("downloads")
+        .and_then(|d| d.get("globalSpeedLimitBytesPerSecond"))
+        .and_then(|v| v.as_u64())
+    {
+        state.global_limiter.set_limit(limit);
+    } else {
+        state.global_limiter.set_limit(0);
+    }
+
     Ok(serde_json::json!({ "status": "saved" }))
+}
+
+#[command]
+fn set_speed_limit(state: State<'_, AppState>, bytes_per_sec: Option<u64>) -> Result<(), String> {
+    state.global_limiter.set_limit(bytes_per_sec.unwrap_or(0));
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -2507,6 +2562,20 @@ fn main() {
     ));
 
     let power_countdown = Arc::new(features::PowerCountdownController::new());
+    let global_limiter = Arc::new(edm_core::TokenBucketLimiter::new(0));
+
+    // ARC-01: Startup crash recovery: Reset interrupted 'Downloading' or 'Probing' tasks to 'Paused'
+    if let Ok(records) = store.list_all_downloads() {
+        for r in records {
+            if r.state == DownloadState::Downloading || r.state == DownloadState::Probing {
+                let _ = store.update_download_state(
+                    r.id,
+                    DownloadState::Paused,
+                    Some("Interrupted by application shutdown"),
+                );
+            }
+        }
+    }
 
     let app_state = AppState {
         store,
@@ -2518,6 +2587,7 @@ fn main() {
         app_handle: Arc::new(Mutex::new(None)),
         lifecycle: lifecycle.clone(),
         power_countdown,
+        global_limiter,
     };
 
     // Fast-path: Start WebSocket Server on 127.0.0.1:14370 FIRST
@@ -2537,6 +2607,51 @@ fn main() {
         register_native_messaging_host();
         let _ = prepare_extension_files();
     }
+
+    // FAKE-03: Background Queue Scheduler loop (evaluates every 10 seconds)
+    let queue_state = app_state.clone();
+    rt_handle.spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
+        loop {
+            interval.tick().await;
+            if let Ok(queues) = queue_state.store.list_queues() {
+                let now = chrono::Local::now();
+                for q in queues {
+                    if features::is_queue_active_at_time(&q, now) {
+                        let active_count = {
+                            if let Ok(tasks) = queue_state.tasks.lock() {
+                                tasks.values().filter(|h| !h.cancelled.load(Ordering::Relaxed)).count()
+                            } else {
+                                0
+                            }
+                        };
+                        let max_allowed = (q.max_concurrent as usize).max(1);
+                        if active_count < max_allowed {
+                            if let Ok(records) = queue_state.store.list_all_downloads() {
+                                for r in records {
+                                    if r.state == DownloadState::Queued {
+                                        let _ = execute_download(
+                                            &queue_state,
+                                            r.id,
+                                            r.url,
+                                            Some(r.filename),
+                                            Some(PathBuf::from(r.save_dir)),
+                                            Some(r.connections),
+                                            r.size_total,
+                                            None,
+                                            r.referer,
+                                            r.user_agent,
+                                        );
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    });
 
     // Background lifecycle monitoring loop (checks every 15 seconds)
     let lc_monitor = lifecycle.clone();
@@ -3009,6 +3124,7 @@ fn main() {
             get_feature_packs,
             get_settings,
             save_settings,
+            set_speed_limit,
             get_extension_token,
             app_minimize,
             app_toggle_maximize,

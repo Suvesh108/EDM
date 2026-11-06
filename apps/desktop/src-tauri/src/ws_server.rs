@@ -659,12 +659,15 @@ async fn handle_http_token_request(
 
     let mut origin: Option<String> = None;
     let mut host: Option<String> = None;
+    let mut ext_id_hdr: Option<String> = None;
     for line in request_str.lines() {
         let lower = line.to_ascii_lowercase();
         if lower.starts_with("origin:") {
             origin = Some(line[7..].trim().trim_end_matches('/').to_string());
         } else if lower.starts_with("host:") {
             host = Some(line[5..].trim().to_string());
+        } else if lower.starts_with("x-edm-extension-id:") {
+            ext_id_hdr = Some(line[19..].trim().to_string());
         }
     }
 
@@ -712,31 +715,42 @@ async fn handle_http_token_request(
         return;
     }
 
-    // Guard 2: Origin requirement
-    // Only allowed extension origins or direct local loopback callers (no Origin header).
-    // External web origins (http://, https://) or unauthorized extension IDs are strictly forbidden!
+    // Guard 2: Strict Origin & Extension Identity Requirement
+    // Only verified extension callers or direct loopback service workers are allowed to read the authentication token.
     let is_forbidden = if let Some(ref o) = origin {
-        !edm_ipc::extensions::is_allowed_origin(o)
+        let trimmed = o.trim().trim_end_matches('/');
+        if let Some(rest) = trimmed.strip_prefix("chrome-extension://") {
+            let ext_id = rest.split('/').next().unwrap_or(rest);
+            !edm_ipc::extensions::CHROMIUM_ALLOWED_IDS.contains(&ext_id)
+        } else if trimmed.starts_with("moz-extension://") {
+            // For Firefox moz-extension, if X-EDM-Extension-Id header is provided, verify it matches
+            if let Some(ref id) = ext_id_hdr {
+                id != edm_ipc::extensions::FIREFOX_GECKO_ID
+            } else {
+                false
+            }
+        } else {
+            true
+        }
     } else {
-        // Direct local loopback request: no Origin header sent (e.g. extension worker fetch or local tool)
-        // Browsers NEVER omit Origin on cross-origin web requests, so any web page has an Origin header.
+        // Direct loopback or extension background service worker without origin header
         false
     };
 
     let ac_origin = if let Some(ref o) = origin {
-        if edm_ipc::extensions::is_allowed_origin(o) {
+        if !is_forbidden {
             o.as_str()
         } else {
             "null"
         }
     } else {
-        "*"
+        ""
     };
 
     if request_str.starts_with("OPTIONS") {
         let resp = format!(
             "HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: {}\r\nAccess-Control-Allow-Methods: GET, OPTIONS\r\nAccess-Control-Allow-Headers: *\r\nAccess-Control-Max-Age: 86400\r\nConnection: close\r\n\r\n",
-            if !is_forbidden { ac_origin } else { "null" }
+            if !is_forbidden && !ac_origin.is_empty() { ac_origin } else { "null" }
         );
         let _ = stream.write_all(resp.as_bytes()).await;
         return;
@@ -758,12 +772,15 @@ async fn handle_http_token_request(
     })
     .to_string();
 
-    let resp = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: {}\r\nConnection: close\r\n\r\n{}",
-        body.len(),
-        ac_origin,
-        body
+    let mut resp = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n",
+        body.len()
     );
+    if !ac_origin.is_empty() {
+        resp.push_str(&format!("Access-Control-Allow-Origin: {}\r\n", ac_origin));
+    }
+    resp.push_str("Connection: close\r\n\r\n");
+    resp.push_str(&body);
     let _ = stream.write_all(resp.as_bytes()).await;
 }
 

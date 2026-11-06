@@ -282,8 +282,27 @@ impl PackExecutor {
             .extension()
             .and_then(|s| s.to_str())
             .unwrap_or("mp4");
-        let final_path = if target_ext == "ts" {
-            super::remux::NativeRemuxer::remux_segments(&segment_files, &target_file).await?
+
+        // Inspect first segment bytes to determine container format (fMP4 vs MPEG-TS)
+        let is_ts_stream = if let Some(first_seg) = segment_files.first() {
+            if let Ok(mut f) = tokio::fs::File::open(first_seg).await {
+                use tokio::io::AsyncReadExt;
+                let mut header = [0u8; 4];
+                if f.read_exact(&mut header).await.is_ok() {
+                    header[0] == 0x47 // MPEG-TS sync byte
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        let final_path = if is_ts_stream || target_ext == "ts" {
+            let out_ts = target_file.with_extension("ts");
+            super::remux::NativeRemuxer::remux_segments(&segment_files, &out_ts).await?
         } else {
             let final_mp4 = target_file.with_extension("mp4");
             super::remux::NativeRemuxer::remux_segments(&segment_files, &final_mp4).await?
@@ -449,46 +468,12 @@ impl PackExecutor {
         BitTorrentPack::download_in_process(task, telemetry_cb).await
     }
 
-    /// eD2k Pack: eD2k link resolver & chunk hash allocation
+    /// eD2k Pack: eD2k link resolver
     async fn execute_ed2k(
         task: AdaptiveDownloadTask,
-        telemetry_cb: Option<TelemetryCallback>,
+        _telemetry_cb: Option<TelemetryCallback>,
     ) -> Result<PathBuf, String> {
-        let ed2k = Ed2kPack::parse_link(&task.url)?;
-        let target_file = task.save_dir.join(&task.filename);
-        let mut file = tokio::fs::File::create(&target_file)
-            .await
-            .map_err(|e| format!("Failed to create eD2k target file: {}", e))?;
-
-        let header = format!(
-            "EDM eD2k Task\nFile: {}\nSize: {}\nHash: {}\nChunks: {}\n",
-            ed2k.name, ed2k.size, ed2k.hash_hex, ed2k.num_chunks
-        );
-        file.write_all(header.as_bytes())
-            .await
-            .map_err(|e| e.to_string())?;
-        file.flush().await.map_err(|e| e.to_string())?;
-
-        if let Some(ref cb) = telemetry_cb {
-            cb(AdaptiveTelemetry {
-                download_id: task.id.to_string(),
-                total_bytes: Some(ed2k.size),
-                downloaded_bytes: ed2k.size,
-                progress_pct: 100.0,
-                instant_throughput_bps: 2048,
-                rolling_throughput_bps: 2048,
-                active_connections: 1,
-                target_connections: 1,
-                live_workers: 1,
-                max_allowed_connections: 8,
-                mode: AccelerationMode::Stable,
-                eta_seconds: Some(0),
-                decision_reason: "eD2k Chunk Hash Verified".into(),
-                workers: vec![],
-                updated_at: Utc::now(),
-            });
-        }
-
-        Ok(target_file)
+        let _ed2k = Ed2kPack::parse_link(&task.url)?;
+        Err("eD2k/Kad P2P protocol transfer is not supported in EDM v0.0.7. Please use HTTP/HTTPS, FTP, HLS/DASH, or BitTorrent/Magnet.".into())
     }
 }

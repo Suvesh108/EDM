@@ -227,6 +227,10 @@ impl Store {
                 size_total, size_done, resumable, etag, last_modified,
                 content_type, referer, user_agent, connections, created_at
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+            ON CONFLICT(id) DO UPDATE SET
+                state = excluded.state,
+                connections = excluded.connections,
+                error_msg = NULL
             "#,
             params![
                 dl.id.to_string(),
@@ -311,6 +315,35 @@ impl Store {
         }
         tx.commit()?;
         Ok(())
+    }
+
+    pub fn get_segments(&self, download_id: Uuid) -> std::result::Result<Vec<SegmentRecord>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            r#"
+            SELECT idx, start, "end", pos, state, retries
+            FROM segments
+            WHERE download_id = ?1
+            ORDER BY idx ASC
+            "#,
+        )?;
+        let rows = stmt.query_map(params![download_id.to_string()], |row| {
+            Ok(SegmentRecord {
+                download_id,
+                idx: row.get(0)?,
+                start: row.get(1)?,
+                end: row.get(2)?,
+                pos: row.get(3)?,
+                state: row.get(4)?,
+                retries: row.get(5)?,
+            })
+        })?;
+
+        let mut results = Vec::new();
+        for r in rows {
+            results.push(r?);
+        }
+        Ok(results)
     }
 
     pub fn get_download_state(&self, id: Uuid) -> std::result::Result<Option<String>, StoreError> {

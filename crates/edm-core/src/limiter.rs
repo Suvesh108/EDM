@@ -29,6 +29,10 @@ impl TokenBucketLimiter {
         self.bytes_per_sec.store(bytes_per_sec, Ordering::Relaxed);
     }
 
+    pub fn get_limit(&self) -> u64 {
+        self.bytes_per_sec.load(Ordering::Relaxed)
+    }
+
     /// Acquires permission to transmit `bytes` amount of data.
     /// Sleeps asynchronously if token capacity is exceeded.
     pub async fn acquire(&self, bytes: u64) {

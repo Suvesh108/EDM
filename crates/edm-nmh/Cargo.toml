@@ -21,3 +21,4 @@ tower-http.workspace = true
 url.workspace = true
 windows-registry.workspace = true
 tracing-appender.workspace = true
+reqwest = { workspace = true, features = ["json"] }

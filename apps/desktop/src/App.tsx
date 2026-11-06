@@ -67,6 +67,7 @@ import {
   tauriStartDragging,
   tauriIsWizardCompleted,
   tauriCheckDuplicateDownload,
+  tauriSetSpeedLimit,
 } from "./services/tauriBridge";
 
 export interface WorkerInfo {
@@ -390,33 +391,7 @@ export default function App() {
 
 
 
-  // Keyboard shortcuts
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === "n") {
-        e.preventDefault();
-        setIsAddModalOpen(true);
-      }
-      if ((e.ctrlKey || e.metaKey) && e.key === ",") {
-        e.preventDefault();
-        setActiveView((v) => (v === "settings" ? "downloads" : "settings"));
-      }
-      if (e.key === "Escape") {
-        if (activeView === "settings") {
-          setActiveView("downloads");
-          return;
-        }
-        setIsAddModalOpen(false);
-        setIsInspectorOpen(false);
-        setIsVideoModalOpen(false);
-        setIsLimiterOpen(false);
-        setSelectedDownload(null);
-        setSelectedIds([]);
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [activeView]);
+
 
   const handleUrlInputChange = (val: string) => {
     setUrlInput(val);
@@ -821,6 +796,81 @@ export default function App() {
   });
 
   const activeSelectedDownload = downloads.find((d) => d.id === selectedDownload?.id) || selectedDownload;
+
+  // UI-02: Comprehensive Keyboard shortcuts (Ctrl+N, Ctrl+,, Esc, Space, Delete, Enter, Ctrl+A)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      const isInput =
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.isContentEditable);
+
+      if ((e.ctrlKey || e.metaKey) && e.key === "n") {
+        e.preventDefault();
+        setIsAddModalOpen(true);
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === ",") {
+        e.preventDefault();
+        setActiveView((v) => (v === "settings" ? "downloads" : "settings"));
+        return;
+      }
+      if (e.key === "Escape") {
+        if (activeView === "settings") {
+          setActiveView("downloads");
+          return;
+        }
+        setIsAddModalOpen(false);
+        setIsInspectorOpen(false);
+        setIsVideoModalOpen(false);
+        setIsLimiterOpen(false);
+        setSelectedDownload(null);
+        setSelectedIds([]);
+        return;
+      }
+
+      if (isInput) return;
+
+      if ((e.ctrlKey || e.metaKey) && (e.key === "a" || e.key === "A")) {
+        e.preventDefault();
+        setSelectedIds(filteredDownloads.map((d) => d.id));
+        return;
+      }
+
+      if (e.key === " " || e.code === "Space") {
+        e.preventDefault();
+        const targetId = activeSelectedDownload?.id || selectedIds[0];
+        if (targetId) {
+          toggleDownloadState(targetId);
+        }
+        return;
+      }
+
+      if (e.key === "Delete") {
+        e.preventDefault();
+        if (selectedIds.length > 0) {
+          deleteSelected();
+        } else if (activeSelectedDownload) {
+          tauriDeleteDownload(activeSelectedDownload.id);
+          setDownloads((prev) => prev.filter((d) => d.id !== activeSelectedDownload.id));
+          setSelectedDownload(null);
+        }
+        return;
+      }
+
+      if (e.key === "Enter") {
+        if (activeSelectedDownload) {
+          e.preventDefault();
+          setIsInspectorOpen(true);
+        }
+        return;
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [activeView, activeSelectedDownload, selectedIds, filteredDownloads]);
 
   // Real aggregate network telemetry calculations
   const activeDownloadsList = downloads.filter((d) => d.state === "downloading");
@@ -1733,6 +1783,16 @@ export default function App() {
                       onClick={() => {
                         setSpeedLimit(val);
                         setIsLimiterOpen(false);
+                        const limitMap: Record<string, number | null> = {
+                          "Unlimited": null,
+                          "50 MB/s": 50 * 1024 * 1024,
+                          "20 MB/s": 20 * 1024 * 1024,
+                          "10 MB/s": 10 * 1024 * 1024,
+                          "5 MB/s": 5 * 1024 * 1024,
+                          "2 MB/s": 2 * 1024 * 1024,
+                          "500 KB/s": 500 * 1024,
+                        };
+                        tauriSetSpeedLimit(limitMap[val] ?? null);
                       }}
                       className={`w-full text-left px-2.5 py-1 text-xs rounded-lg transition-colors cursor-pointer ${
                         speedLimit === val

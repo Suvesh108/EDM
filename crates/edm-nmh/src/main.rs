@@ -76,8 +76,8 @@ fn verify_caller_origin() -> bool {
     let start = Instant::now();
     let args: Vec<String> = env::args().collect();
     if args.len() <= 1 {
-        tracing::info!("Origin verified: no external caller args passed (elapsed: {:?})", start.elapsed());
-        return true;
+        tracing::warn!("Origin verification rejected: no external caller args passed");
+        return false;
     }
     for arg in &args[1..] {
         if edm_ipc::extensions::is_allowed_origin(arg) {
@@ -180,17 +180,11 @@ fn find_edm_exe() -> Option<PathBuf> {
         }
     }
 
-    // 3. Registry HKCU\Software\EDM -> AppPath and InstallDir
+    // 3. Registry HKCU\Software\EDM -> InstallDir only (strictly joining known EDM executable names to prevent binary injection)
     #[cfg(windows)]
     {
         use windows_registry::CURRENT_USER;
         if let Ok(key) = CURRENT_USER.open(r"Software\EDM") {
-            if let Ok(app_path) = key.get_string("AppPath") {
-                let p = PathBuf::from(app_path);
-                if p.exists() && p.is_file() {
-                    return Some(p);
-                }
-            }
             if let Ok(install_dir) = key.get_string("InstallDir") {
                 let idir = PathBuf::from(install_dir);
                 for name in &exe_names {
@@ -558,7 +552,54 @@ fn collect_diagnostics(_ext_id: Option<String>) -> DiagnosticsReport {
     }
 }
 
-fn handle_message(msg: ExtensionMessage, store: &Arc<Mutex<Store>>) -> AppReply {
+async fn forward_to_edm_desktop(msg: &ExtensionMessage) -> Option<AppReply> {
+    if !is_ws_server_ready() {
+        return None;
+    }
+    let token = get_ws_token();
+    if token.is_empty() {
+        return None;
+    }
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_millis(1500))
+        .build()
+        .ok()?;
+    let body = serde_json::to_string(msg).ok()?;
+    let resp = client
+        .post("http://127.0.0.1:8998/api")
+        .header("x-edm-token", token)
+        .header("Origin", "chrome-extension://ginpdimhcdbojbhemgjedghkeolbcmgj")
+        .header("Content-Type", "application/json")
+        .body(body)
+        .send()
+        .await
+        .ok()?;
+    if resp.status().is_success() {
+        let bytes = resp.bytes().await.ok()?;
+        serde_json::from_slice::<AppReply>(&bytes).ok()
+    } else {
+        None
+    }
+}
+
+async fn handle_message(msg: ExtensionMessage, store: &Arc<Mutex<Store>>) -> AppReply {
+    // FAKE-05: If live EDM desktop application is running, delegate execution directly to its engine
+    match &msg {
+        ExtensionMessage::GetStatus
+        | ExtensionMessage::ListDownloads { .. }
+        | ExtensionMessage::GetDownload { .. }
+        | ExtensionMessage::AddDownload { .. }
+        | ExtensionMessage::PauseDownload { .. }
+        | ExtensionMessage::ResumeDownload { .. }
+        | ExtensionMessage::CancelDownload { .. }
+        | ExtensionMessage::RetryDownload { .. } => {
+            if let Some(forwarded) = forward_to_edm_desktop(&msg).await {
+                return forwarded;
+            }
+        }
+        _ => {}
+    }
+
     match msg {
         ExtensionMessage::Wake { show_window } => {
             let start = Instant::now();
@@ -688,11 +729,7 @@ fn handle_message(msg: ExtensionMessage, store: &Arc<Mutex<Store>>) -> AppReply 
                 .iter()
                 .filter(|d| d.state == DownloadState::Completed)
                 .count();
-            let agg_speed: u64 = if active > 0 {
-                active as u64 * 4_500_000
-            } else {
-                0
-            };
+            let agg_speed: u64 = 0;
 
             let is_running = is_ws_server_ready();
             let token = if is_running { Some(get_ws_token()) } else { None };
@@ -720,7 +757,7 @@ fn handle_message(msg: ExtensionMessage, store: &Arc<Mutex<Store>>) -> AppReply 
             let mut active_count = 0;
             let mut queued_count = 0;
             let mut completed_count = 0;
-            let mut aggregate_speed = 0u64;
+            let aggregate_speed = 0u64;
 
             for r in records {
                 let is_active = r.state == DownloadState::Downloading;
@@ -729,7 +766,6 @@ fn handle_message(msg: ExtensionMessage, store: &Arc<Mutex<Store>>) -> AppReply 
 
                 if is_active {
                     active_count += 1;
-                    aggregate_speed += 3_500_000;
                 }
                 if is_queued {
                     queued_count += 1;
@@ -965,28 +1001,7 @@ fn handle_message(msg: ExtensionMessage, store: &Arc<Mutex<Store>>) -> AppReply 
             if let Ok(records) = s.list_all_downloads() {
                 if let Some(r) = records.into_iter().find(|d| d.id == id) {
                     let file_path = PathBuf::from(&r.save_dir).join(&r.filename);
-                    if file_path.exists() {
-                        let ext = r
-                            .filename
-                            .split('.')
-                            .next_back()
-                            .unwrap_or("")
-                            .to_lowercase();
-                        // Security guard: never directly execute hazardous executable files. Reveal in Explorer safely instead.
-                        let is_executable = [
-                            "exe", "bat", "cmd", "scr", "vbs", "ps1", "msi", "reg", "com", "pif",
-                        ]
-                        .contains(&ext.as_str());
-                        if is_executable {
-                            let _ = std::process::Command::new("explorer.exe")
-                                .arg(format!("/select,{}", file_path.to_string_lossy()))
-                                .spawn();
-                        } else {
-                            let _ = std::process::Command::new("explorer.exe")
-                                .arg(file_path)
-                                .spawn();
-                        }
-                    }
+                    edm_core::security::open_file_safely(&file_path);
                 }
             }
             AppReply::Success {
@@ -1155,7 +1170,7 @@ async fn main() -> io::Result<()> {
                             }
                         }
 
-                        let reply = handle_message(msg, &s);
+                        let reply = handle_message(msg, &s).await;
                         Ok(Json(reply))
                     },
                 ),
@@ -1197,7 +1212,7 @@ async fn main() -> io::Result<()> {
         match res {
             Ok(msg) => {
                 let msg_start = Instant::now();
-                let reply = handle_message(msg, &store);
+                let reply = handle_message(msg, &store).await;
                 if let Err(e) = write_reply(&mut writer, &reply) {
                     tracing::error!("Failed to write reply: {:?}", e);
                     break;

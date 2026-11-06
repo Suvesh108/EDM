@@ -483,6 +483,17 @@ impl AdaptiveWorker {
                 // Normal write within boundary
                 if let Err(e) = writer.write_at(write_offset, &next_chunk) {
                     error!("Worker {} disk write error: {}", self.idx, e);
+                    let err_str = e.to_string().to_lowercase();
+                    if err_str.contains("112") || err_str.contains("disk is full") || err_str.contains("space") {
+                        self.set_status(WorkerStatus::Failed);
+                        let _ = event_tx
+                            .send(AdaptiveWorkerEvent::Failed {
+                                idx: self.idx,
+                                reason: "Insufficient disk space: Disk is full".into(),
+                            })
+                            .await;
+                        return;
+                    }
                     read_failed = true;
                     break;
                 }
@@ -509,7 +520,10 @@ impl AdaptiveWorker {
             let pos_after = self.pos.load(Ordering::SeqCst);
             let end_after = self.end.load(Ordering::SeqCst);
 
-            if !read_failed && pos_after > end_after {
+            // Complete if all planned bytes downloaded OR if dynamic stream reached EOF normally
+            let is_completed = !read_failed && (pos_after > end_after || end_after >= u64::MAX - 2);
+
+            if is_completed {
                 self.set_status(WorkerStatus::Completed);
                 let _ = event_tx
                     .send(AdaptiveWorkerEvent::Done { idx: self.idx })

@@ -830,3 +830,15 @@ export async function tauriProbeMediaPage(mediaUrl: string): Promise<{ variants:
   }
   return { variants: [], is_drm: false };
 }
+
+export async function tauriSetSpeedLimit(bytesPerSec: number | null): Promise<void> {
+  if (isTauri()) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("set_speed_limit", { bytesPerSec });
+    } catch (err) {
+      console.warn("Tauri set_speed_limit failed:", err);
+    }
+  }
+}
+
