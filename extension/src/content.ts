@@ -212,6 +212,168 @@ function removeYoutubePill() {
   document.querySelectorAll(".edm-yt-pill-wrapper").forEach((el) => el.remove());
 }
 
+function ensureYoutubeCustomStyles() {
+  if (document.getElementById("edm-yt-styles")) return;
+  const style = document.createElement("style");
+  style.id = "edm-yt-styles";
+  style.textContent = `
+    #edm-yt-download-pill {
+      position: relative !important;
+      display: inline-flex !important;
+      align-items: center !important;
+      vertical-align: middle !important;
+      margin-left: 10px !important;
+      max-width: none !important;
+    }
+
+    #edm-yt-download-pill .edm-yt-dropdown-menu {
+      position: absolute !important;
+      top: 44px !important;
+      left: 0 !important;
+      z-index: 2147483647 !important;
+      width: 310px !important;
+      min-width: 310px !important;
+      max-width: 310px !important;
+      box-sizing: border-box !important;
+      contain: paint layout !important;
+      overflow-x: hidden !important;
+      overflow-y: auto !important;
+      max-height: 460px !important;
+      background: linear-gradient(180deg, #181c24 0%, #0d1017 100%) !important;
+      border: 1px solid rgba(255, 255, 255, 0.16) !important;
+      border-radius: 12px !important;
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.8), inset 0 1px 0 rgba(255, 255, 255, 0.15) !important;
+      padding: 10px !important;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif !important;
+    }
+
+    #edm-yt-download-pill .edm-yt-dropdown-menu::-webkit-scrollbar {
+      width: 5px !important;
+    }
+    #edm-yt-download-pill .edm-yt-dropdown-menu::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.22) !important;
+      border-radius: 4px !important;
+    }
+
+    #edm-yt-download-pill .edm-yt-header {
+      width: 100% !important;
+      max-width: 288px !important;
+      box-sizing: border-box !important;
+      overflow: hidden !important;
+      padding: 4px 8px 8px 8px !important;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1) !important;
+      margin-bottom: 4px !important;
+    }
+
+    #edm-yt-download-pill .edm-yt-title-text {
+      display: block !important;
+      width: 100% !important;
+      max-width: 284px !important;
+      min-width: 0 !important;
+      white-space: nowrap !important;
+      overflow: hidden !important;
+      text-overflow: ellipsis !important;
+      font-size: 12px !important;
+      font-weight: 700 !important;
+      color: #ffffff !important;
+      line-height: 1.3 !important;
+      box-sizing: border-box !important;
+      cursor: default !important;
+    }
+
+    #edm-yt-download-pill .edm-yt-subtitle {
+      font-size: 10px !important;
+      color: #3b82f6 !important;
+      font-weight: 600 !important;
+      margin-top: 2px !important;
+      display: block !important;
+      white-space: nowrap !important;
+      overflow: hidden !important;
+      text-overflow: ellipsis !important;
+    }
+
+    #edm-yt-download-pill .edm-yt-sec-header {
+      font-size: 9.5px !important;
+      font-weight: 700 !important;
+      text-transform: uppercase !important;
+      letter-spacing: 0.05em !important;
+      color: #71717a !important;
+      padding: 5px 8px 3px 8px !important;
+      display: block !important;
+      box-sizing: border-box !important;
+    }
+
+    #edm-yt-download-pill .edm-yt-menu-item {
+      display: flex !important;
+      align-items: center !important;
+      gap: 10px !important;
+      padding: 7px 10px !important;
+      border-radius: 7px !important;
+      cursor: pointer !important;
+      background: transparent !important;
+      width: 100% !important;
+      max-width: 288px !important;
+      box-sizing: border-box !important;
+      min-width: 0 !important;
+      overflow: hidden !important;
+      transition: background 0.15s ease, transform 0.1s ease !important;
+    }
+
+    #edm-yt-download-pill .edm-yt-menu-item:hover {
+      background: rgba(59, 130, 246, 0.15) !important;
+      transform: translateX(2px) !important;
+    }
+
+    #edm-yt-download-pill .edm-yt-item-text {
+      flex: 1 1 0% !important;
+      min-width: 0 !important;
+      max-width: 228px !important;
+      overflow: hidden !important;
+      box-sizing: border-box !important;
+    }
+
+    #edm-yt-download-pill .edm-yt-item-title {
+      font-size: 12px !important;
+      font-weight: 600 !important;
+      color: #f4f4f5 !important;
+      white-space: nowrap !important;
+      overflow: hidden !important;
+      text-overflow: ellipsis !important;
+      max-width: 228px !important;
+      display: block !important;
+      line-height: 1.3 !important;
+    }
+
+    #edm-yt-download-pill .edm-yt-item-subtitle {
+      font-size: 10px !important;
+      color: #8fa0be !important;
+      white-space: nowrap !important;
+      overflow: hidden !important;
+      text-overflow: ellipsis !important;
+      max-width: 228px !important;
+      display: block !important;
+      line-height: 1.2 !important;
+      margin-top: 1px !important;
+    }
+  `;
+  (document.head || document.documentElement).appendChild(style);
+}
+
+function formatBytes(bytes?: number | string): string {
+  if (!bytes) return "";
+  const n = typeof bytes === "string" ? parseInt(bytes, 10) : bytes;
+  if (!n || isNaN(n) || n <= 0) return "";
+  if (n >= 1024 * 1024 * 1024) {
+    return `~${(n / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+  }
+  if (n >= 1024 * 1024) {
+    return `~${Math.round(n / (1024 * 1024))} MB`;
+  }
+  return `~${Math.round(n / 1024)} KB`;
+}
+
+let cachedStreamData: any = null;
+
 function injectYoutubePillIfNeeded() {
   if (!isYoutubePillEnabled) return;
   const isYouTube = window.location.hostname.includes("youtube.com");
@@ -298,20 +460,23 @@ function injectYoutubePillIfNeeded() {
     btn.style.transform = "translateY(0)";
   });
 
-  // Dropdown menu (Compact fixed width matching reference ~320px)
+  ensureYoutubeCustomStyles();
+
+  // Dropdown menu (Strict 310px fixed width matching reference design)
   const menu = document.createElement("div");
   menu.className = "edm-yt-dropdown-menu";
   menu.style.position = "absolute";
   menu.style.top = "44px";
   menu.style.left = "0";
   menu.style.zIndex = "2147483647";
-  menu.style.width = "320px";
-  menu.style.maxWidth = "320px";
-  menu.style.minWidth = "320px";
-  menu.style.setProperty("width", "320px", "important");
-  menu.style.setProperty("max-width", "320px", "important");
-  menu.style.setProperty("min-width", "320px", "important");
-  menu.style.boxSizing = "border-box";
+  menu.style.setProperty("width", "310px", "important");
+  menu.style.setProperty("min-width", "310px", "important");
+  menu.style.setProperty("max-width", "310px", "important");
+  menu.style.setProperty("box-sizing", "border-box", "important");
+  menu.style.setProperty("contain", "paint layout", "important");
+  menu.style.setProperty("overflow-x", "hidden", "important");
+  menu.style.setProperty("overflow-y", "auto", "important");
+  menu.style.setProperty("max-height", "460px", "important");
   menu.style.background = "linear-gradient(180deg, #181c24 0%, #0d1017 100%)";
   menu.style.border = "1px solid rgba(255, 255, 255, 0.16)";
   menu.style.borderRadius = "12px";
@@ -322,7 +487,6 @@ function injectYoutubePillIfNeeded() {
   menu.style.gap = "6px";
   menu.style.color = "#f4f4f5";
   menu.style.backdropFilter = "blur(14px)";
-  menu.style.overflow = "hidden";
 
   function getCleanVideoTitle(): string {
     const titleEl =
@@ -347,7 +511,7 @@ function injectYoutubePillIfNeeded() {
       setTimeout(() => {
         window.removeEventListener("message", handler);
         resolve(null);
-      }, 800);
+      }, 900);
 
       try {
         const script = document.createElement("script");
@@ -388,46 +552,44 @@ function injectYoutubePillIfNeeded() {
       label.style.color = "#60a5fa";
     }
 
-    let downloadUrl = window.location.href + (formatTag ? "#" + formatTag : "");
+    let downloadUrl = window.location.href.split("#")[0] + (formatTag ? "#" + formatTag : "");
 
     try {
-      const streamData = await requestPageStreamData();
+      const streamData = cachedStreamData || (await requestPageStreamData());
       if (streamData) {
+        cachedStreamData = streamData;
         const formats: any[] = Array.isArray(streamData.formats) ? streamData.formats : [];
         const adaptive: any[] = Array.isArray(streamData.adaptiveFormats) ? streamData.adaptiveFormats : [];
         const all = [...formats, ...adaptive];
 
-        let targetStreamUrl: string | null = null;
         if (isAudio) {
           const audioFormats = all.filter((f) => f.mimeType && f.mimeType.startsWith("audio/") && f.url);
           if (formatTag.includes("m4a")) {
             const m4a = audioFormats.find((f) => f.mimeType && f.mimeType.includes("mp4a"));
-            targetStreamUrl = m4a?.url || audioFormats[0]?.url || null;
-          } else {
-            targetStreamUrl = audioFormats[0]?.url || null;
+            if (m4a?.url) downloadUrl = m4a.url;
+            else if (audioFormats[0]?.url) downloadUrl = audioFormats[0].url;
+          } else if (audioFormats[0]?.url) {
+            downloadUrl = audioFormats[0].url;
           }
-        } else if (formatTag === "1080p") {
-          const f1080 = all.find((f) => (f.qualityLabel?.includes("1080") || f.height === 1080) && f.url);
-          targetStreamUrl = f1080?.url || null;
-        } else if (formatTag === "720p") {
-          const f720 = all.find((f) => (f.qualityLabel?.includes("720") || f.height === 720) && f.url);
-          targetStreamUrl = f720?.url || null;
-        } else if (formatTag === "480p") {
-          const f480 = all.find((f) => (f.qualityLabel?.includes("480") || f.qualityLabel?.includes("360") || f.height === 480 || f.height === 360) && f.url);
-          targetStreamUrl = f480?.url || null;
         } else {
-          // Best available
-          const muxed = formats.find((f) => f.url && f.qualityLabel);
-          const bestAdaptive = adaptive.filter((f) => f.url && f.mimeType?.startsWith("video/")).pop();
-          targetStreamUrl = muxed?.url || bestAdaptive?.url || null;
-        }
-
-        if (targetStreamUrl) {
-          downloadUrl = targetStreamUrl;
+          // For video: if muxed format matches tag, direct stream is complete (has audio).
+          // Otherwise, keeping the watch URL with hashtag (#2160p, #1440p, #1080p, #720p)
+          // allows EDM engine to download both high-res video + audio streams and merge them cleanly.
+          if (formatTag === "720p" || formatTag === "480p" || !formatTag) {
+            const muxed = formats.find(
+              (f) =>
+                f.url &&
+                f.qualityLabel &&
+                (!formatTag || f.qualityLabel.includes(formatTag.replace("p", "")))
+            );
+            if (muxed?.url && !formatTag) {
+              downloadUrl = muxed.url;
+            }
+          }
         }
       }
     } catch {
-      // Fall back to watch page url with format fragment
+      // Fall back safely to watch page url with format fragment
     }
 
     if (label) {
@@ -463,38 +625,22 @@ function injectYoutubePillIfNeeded() {
 
   function createMenuItem(iconSvg: string, title: string, subtitle: string, onClick: () => void): HTMLDivElement {
     const item = document.createElement("div");
-    item.style.display = "flex";
-    item.style.alignItems = "center";
-    item.style.gap = "10px";
-    item.style.padding = "7px 10px";
-    item.style.borderRadius = "7px";
-    item.style.cursor = "pointer";
-    item.style.transition = "background 0.15s ease, transform 0.1s ease";
-    item.style.background = "transparent";
-    item.style.width = "100%";
-    item.style.boxSizing = "border-box";
-    item.style.minWidth = "0";
-    item.style.overflow = "hidden";
+    item.className = "edm-yt-menu-item";
+    item.style.setProperty("width", "100%", "important");
+    item.style.setProperty("max-width", "288px", "important");
+    item.style.setProperty("box-sizing", "border-box", "important");
+    item.style.setProperty("min-width", "0", "important");
+    item.style.setProperty("overflow", "hidden", "important");
 
     item.innerHTML = `
       <div style="width: 26px; height: 26px; border-radius: 6px; background: rgba(255,255,255,0.06); display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
         ${iconSvg}
       </div>
-      <div style="flex: 1; min-width: 0; overflow: hidden;">
-        <div style="font-size: 12px; font-weight: 600; color: #f4f4f5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${title}</div>
-        <div style="font-size: 10px; color: #8fa0be; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${subtitle}</div>
+      <div class="edm-yt-item-text" style="flex: 1 1 0%; min-width: 0; max-width: 228px; overflow: hidden; box-sizing: border-box;">
+        <span class="edm-yt-item-title" title="${title}" style="display: block; font-size: 12px; font-weight: 600; color: #f4f4f5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 228px;">${title}</span>
+        <span class="edm-yt-item-subtitle" title="${subtitle}" style="display: block; font-size: 10px; color: #8fa0be; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 228px; margin-top: 1px;">${subtitle}</span>
       </div>
     `;
-
-    item.addEventListener("mouseenter", () => {
-      item.style.background = "rgba(59, 130, 246, 0.15)";
-      item.style.transform = "translateX(2px)";
-    });
-
-    item.addEventListener("mouseleave", () => {
-      item.style.background = "transparent";
-      item.style.transform = "translateX(0)";
-    });
 
     item.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -504,40 +650,32 @@ function injectYoutubePillIfNeeded() {
     return item;
   }
 
-  function renderMenuContent() {
+  function renderMenuContent(streamData?: any) {
     menu.innerHTML = "";
 
-    // Header (Compact layout strictly within 320px container)
+    // Header (Compact layout strictly within 310px container)
     const header = document.createElement("div");
-    header.style.padding = "4px 8px 8px 8px";
-    header.style.borderBottom = "1px solid rgba(255, 255, 255, 0.1)";
-    header.style.marginBottom = "4px";
-    header.style.width = "100%";
-    header.style.maxWidth = "100%";
-    header.style.boxSizing = "border-box";
-    header.style.minWidth = "0";
-    header.style.overflow = "hidden";
+    header.className = "edm-yt-header";
+    header.style.setProperty("width", "100%", "important");
+    header.style.setProperty("max-width", "288px", "important");
+    header.style.setProperty("box-sizing", "border-box", "important");
+    header.style.setProperty("overflow", "hidden", "important");
 
+    const rawTitle = getCleanVideoTitle();
     const titleEl = document.createElement("div");
-    titleEl.style.fontSize = "12px";
-    titleEl.style.fontWeight = "700";
-    titleEl.style.color = "#ffffff";
-    titleEl.style.whiteSpace = "nowrap";
-    titleEl.style.overflow = "hidden";
-    titleEl.style.textOverflow = "ellipsis";
-    titleEl.style.width = "100%";
-    titleEl.style.maxWidth = "296px";
-    titleEl.style.minWidth = "0";
-    titleEl.style.boxSizing = "border-box";
-    titleEl.style.display = "block";
-    titleEl.textContent = getCleanVideoTitle();
+    titleEl.className = "edm-yt-title-text";
+    titleEl.style.setProperty("width", "100%", "important");
+    titleEl.style.setProperty("max-width", "284px", "important");
+    titleEl.style.setProperty("min-width", "0", "important");
+    titleEl.style.setProperty("white-space", "nowrap", "important");
+    titleEl.style.setProperty("overflow", "hidden", "important");
+    titleEl.style.setProperty("text-overflow", "ellipsis", "important");
+    titleEl.textContent = rawTitle;
+    titleEl.title = rawTitle; // Tooltip shows full unabbreviated title on hover
     header.appendChild(titleEl);
 
     const subEl = document.createElement("div");
-    subEl.style.fontSize = "10px";
-    subEl.style.color = "#3b82f6";
-    subEl.style.fontWeight = "600";
-    subEl.style.marginTop = "2px";
+    subEl.className = "edm-yt-subtitle";
     subEl.textContent = "EDM Adaptive Engine";
     header.appendChild(subEl);
 
@@ -545,49 +683,89 @@ function injectYoutubePillIfNeeded() {
 
     // Section 1: Video Qualities
     const videoSecTitle = document.createElement("div");
-    videoSecTitle.style.fontSize = "9.5px";
-    videoSecTitle.style.fontWeight = "700";
-    videoSecTitle.style.textTransform = "uppercase";
-    videoSecTitle.style.letterSpacing = "0.05em";
-    videoSecTitle.style.color = "#71717a";
-    videoSecTitle.style.padding = "4px 8px 2px 8px";
+    videoSecTitle.className = "edm-yt-sec-header";
     videoSecTitle.textContent = "Video Qualities";
     menu.appendChild(videoSecTitle);
 
     const videoIcon = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="2.2"><rect x="2" y="2" width="20" height="20" rx="2.18"></rect><line x1="7" y1="2" x2="7" y2="22"></line><line x1="17" y1="2" x2="17" y2="22"></line><line x1="2" y1="12" x2="22" y2="12"></line></svg>`;
 
+    // Always provide Best Available Quality
     menu.appendChild(
       createMenuItem(videoIcon, "Best Available Quality", "Auto-select maximum resolution + audio", () => {
         triggerDownload("", "");
       })
     );
 
-    menu.appendChild(
-      createMenuItem(videoIcon, "1080p Full HD", "Crisp 1080p MP4 with merged audio", () => {
-        triggerDownload("1080p", " [1080p]");
-      })
-    );
+    // Parse streaming formats if available
+    const formats: any[] = streamData && Array.isArray(streamData.formats) ? streamData.formats : [];
+    const adaptive: any[] = streamData && Array.isArray(streamData.adaptiveFormats) ? streamData.adaptiveFormats : [];
+    const allFormats = [...formats, ...adaptive];
 
-    menu.appendChild(
-      createMenuItem(videoIcon, "720p HD", "Standard 720p MP4 (Fast download)", () => {
-        triggerDownload("720p", " [720p]");
-      })
-    );
+    const findFormat = (predicate: (f: any) => boolean) => allFormats.filter(predicate).pop();
 
-    menu.appendChild(
-      createMenuItem(videoIcon, "480p / 360p", "Compressed MP4 (Data saver)", () => {
-        triggerDownload("480p", " [480p]");
-      })
-    );
+    // 4K Ultra HD (2160p)
+    const f2160 = findFormat((f) => f.height >= 2160 || (f.qualityLabel && f.qualityLabel.includes("2160")));
+    if (f2160) {
+      const sizeStr = formatBytes(f2160.contentLength);
+      const sub = sizeStr ? `Ultra-crisp 2160p (${sizeStr})` : "Ultra-crisp 2160p MP4 (Max detail)";
+      menu.appendChild(
+        createMenuItem(videoIcon, "4K Ultra HD (2160p)", sub, () => {
+          triggerDownload("2160p", " [2160p 4K]");
+        })
+      );
+    }
+
+    // 2K Quad HD (1440p)
+    const f1440 = findFormat((f) => (f.height >= 1440 && f.height < 2160) || (f.qualityLabel && f.qualityLabel.includes("1440")));
+    if (f1440) {
+      const sizeStr = formatBytes(f1440.contentLength);
+      const sub = sizeStr ? `Quad HD 1440p (${sizeStr})` : "High-res 1440p MP4 (Sharp detail)";
+      menu.appendChild(
+        createMenuItem(videoIcon, "2K Quad HD (1440p)", sub, () => {
+          triggerDownload("1440p", " [1440p 2K]");
+        })
+      );
+    }
+
+    // 1080p Full HD
+    const f1080 = findFormat((f) => (f.height >= 1080 && f.height < 1440) || (f.qualityLabel && f.qualityLabel.includes("1080")));
+    if (f1080 || !streamData) {
+      const sizeStr = f1080 ? formatBytes(f1080.contentLength) : "";
+      const sub = sizeStr ? `Crisp 1080p MP4 (${sizeStr})` : "Crisp 1080p MP4 with merged audio";
+      menu.appendChild(
+        createMenuItem(videoIcon, "1080p Full HD", sub, () => {
+          triggerDownload("1080p", " [1080p]");
+        })
+      );
+    }
+
+    // 720p HD
+    const f720 = findFormat((f) => (f.height >= 720 && f.height < 1080) || (f.qualityLabel && f.qualityLabel.includes("720")));
+    if (f720 || !streamData) {
+      const sizeStr = f720 ? formatBytes(f720.contentLength) : "";
+      const sub = sizeStr ? `Standard 720p MP4 (${sizeStr})` : "Standard 720p MP4 (Fast download)";
+      menu.appendChild(
+        createMenuItem(videoIcon, "720p HD", sub, () => {
+          triggerDownload("720p", " [720p]");
+        })
+      );
+    }
+
+    // 480p / 360p
+    const f480 = findFormat((f) => (f.height >= 360 && f.height < 720) || (f.qualityLabel && (f.qualityLabel.includes("480") || f.qualityLabel.includes("360"))));
+    if (f480 || !streamData) {
+      const sizeStr = f480 ? formatBytes(f480.contentLength) : "";
+      const sub = sizeStr ? `Compressed MP4 (${sizeStr})` : "Compressed MP4 (Data saver)";
+      menu.appendChild(
+        createMenuItem(videoIcon, "480p / 360p", sub, () => {
+          triggerDownload("480p", " [480p]");
+        })
+      );
+    }
 
     // Section 2: Audio Only
     const audioSecTitle = document.createElement("div");
-    audioSecTitle.style.fontSize = "9.5px";
-    audioSecTitle.style.fontWeight = "700";
-    audioSecTitle.style.textTransform = "uppercase";
-    audioSecTitle.style.letterSpacing = "0.05em";
-    audioSecTitle.style.color = "#71717a";
-    audioSecTitle.style.padding = "6px 8px 2px 8px";
+    audioSecTitle.className = "edm-yt-sec-header";
     audioSecTitle.style.borderTop = "1px solid rgba(255, 255, 255, 0.08)";
     audioSecTitle.style.marginTop = "4px";
     audioSecTitle.textContent = "Audio Only";
@@ -595,28 +773,69 @@ function injectYoutubePillIfNeeded() {
 
     const audioIcon = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#34d399" stroke-width="2.2"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>`;
 
+    const audioStreams = allFormats.filter((f) => f.mimeType && f.mimeType.startsWith("audio/"));
+    const m4aStream = audioStreams.find((f) => f.mimeType && f.mimeType.includes("mp4a"));
+    const bestAudio = audioStreams[0];
+
+    const mp3Size = formatBytes(bestAudio?.contentLength);
+    const m4aSize = formatBytes(m4aStream?.contentLength || bestAudio?.contentLength);
+
     menu.appendChild(
-      createMenuItem(audioIcon, "Extract Audio (MP3)", "Universal MP3 at highest bitrate", () => {
+      createMenuItem(audioIcon, "Extract Audio (MP3)", mp3Size ? `Universal MP3 stream (${mp3Size})` : "Universal MP3 at highest bitrate", () => {
         triggerDownload("audio", "", true);
       })
     );
 
     menu.appendChild(
-      createMenuItem(audioIcon, "Extract Audio (M4A)", "Original AAC/M4A sound stream", () => {
+      createMenuItem(audioIcon, "Extract Audio (M4A)", m4aSize ? `Original AAC sound stream (${m4aSize})` : "Original AAC/M4A sound stream", () => {
         triggerDownload("audio#m4a", "", true);
       })
     );
+  }
+
+  async function updateMenuWithStreamingData() {
+    try {
+      const data = await requestPageStreamData();
+      if (data) {
+        cachedStreamData = data;
+        if (menu.style.display === "flex") {
+          renderMenuContent(data);
+        }
+      }
+    } catch {
+      // Keep existing menu render
+    }
   }
 
   btn.addEventListener("click", (e) => {
     e.stopPropagation();
     e.preventDefault();
     if (menu.style.display === "none" || !menu.style.display) {
-      renderMenuContent();
+      renderMenuContent(cachedStreamData);
       menu.style.display = "flex";
+      updateMenuWithStreamingData();
     } else {
       menu.style.display = "none";
     }
+  });
+
+  btn.addEventListener("mouseenter", () => {
+    btn.style.background = "linear-gradient(180deg, rgba(255, 255, 255, 0.2) 0%, rgba(255, 255, 255, 0.06) 100%), #1e1e1e";
+    btn.style.borderColor = "#3b82f6";
+    btn.style.transform = "translateY(-1px)";
+    if (!cachedStreamData) {
+      requestPageStreamData()
+        .then((data) => {
+          if (data) cachedStreamData = data;
+        })
+        .catch(() => {});
+    }
+  });
+
+  btn.addEventListener("mouseleave", () => {
+    btn.style.background = "linear-gradient(180deg, rgba(255, 255, 255, 0.12) 0%, rgba(255, 255, 255, 0.04) 100%), #141414";
+    btn.style.borderColor = "rgba(255, 255, 255, 0.18)";
+    btn.style.transform = "translateY(0)";
   });
 
   document.addEventListener("click", (e) => {
@@ -635,15 +854,18 @@ function injectYoutubePillIfNeeded() {
 // Watch navigation events in YouTube SPA
 window.addEventListener("yt-navigate-finish", () => {
   cleanupFloatingBadges();
+  cachedStreamData = null;
   setTimeout(injectYoutubePillIfNeeded, 700);
 });
 window.addEventListener("yt-page-data-updated", () => {
   cleanupFloatingBadges();
+  cachedStreamData = null;
   setTimeout(injectYoutubePillIfNeeded, 500);
 });
 window.addEventListener("popstate", () => {
   if (window.location.hostname.includes("youtube.com")) {
     cleanupFloatingBadges();
+    cachedStreamData = null;
     setTimeout(injectYoutubePillIfNeeded, 500);
   }
 });
