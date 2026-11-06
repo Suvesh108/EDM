@@ -9,7 +9,7 @@ This document contains copy, metadata, and graphical specifications for submitti
 - **Name:** EDM — Edge Download Manager
 - **Short Name:** EDM
 - **Category:** Productivity / Tools
-- **Version:** `0.0.7`
+- **Version:** `0.0.8`
 - **Supported Browsers:** Google Chrome, Microsoft Edge, Brave Browser, Mozilla Firefox
 - **Gecko ID (Firefox):** `edm@suvesh.dev`
 - **Pricing:** Free & Open Source (MIT)

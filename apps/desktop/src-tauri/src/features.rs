@@ -353,6 +353,31 @@ pub async fn probe_media(url: &str) -> Result<MediaProbeResult, String> {
         .map_err(|e| e.to_string())?;
 
     use edm_core::packs::extractors::{SiteExtractor, VimeoExtractor, YouTubeExtractor};
+    use edm_core::packs::ytdlp::YtDlpPack;
+
+    if (url.contains("youtube.com") || url.contains("youtu.be")) && YtDlpPack::locate_binary().is_some() {
+        if let Ok(meta) = YtDlpPack::extract_info(url).await {
+            let ipc_variants = meta
+                .formats
+                .into_iter()
+                .map(|f| {
+                    let is_audio = f.vcodec.as_deref() == Some("none");
+                    MediaVariant {
+                        quality: f.resolution.clone().unwrap_or(f.format_id),
+                        url: f.url.unwrap_or_else(|| url.to_string()),
+                        media_type: if is_audio { "audio".into() } else { "direct".into() },
+                        resolution: f.resolution,
+                        bitrate: f.filesize.map(|s| s * 8),
+                    }
+                })
+                .collect();
+            return Ok(MediaProbeResult {
+                variants: ipc_variants,
+                is_drm: false,
+            });
+        }
+    }
+
     let yt = YouTubeExtractor;
     if yt.can_extract(url) {
         if let Ok(meta) = yt.extract(url, &client).await {

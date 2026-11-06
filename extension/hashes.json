@@ -1,15 +1,15 @@
 {
-  "version": "0.0.7",
-  "generated_at": "2026-11-05T14:19:21.741Z",
+  "version": "0.0.8",
+  "generated_at": "2026-11-06T15:51:20.200Z",
   "files": {
-    "manifest.json": "sha256:96070458e1a921ddb8f3372da804c1f216982d9b0a296701fc8381b8bf62e44e",
-    "background.js": "sha256:763fc2ba57d32bdd3b47971c90ef3c377ea16e2c52f5ad4ab473037de0c4bb92",
-    "content.js": "sha256:3adaa640cff0a491468eebaa41f96f1b7062586020cb5a39775a678b637702cd",
-    "popup.html": "sha256:3ef8decdb857078021f6fdf5dc17d3c7439a5eb24396ec3cdf694449977c5160",
-    "popup.css": "sha256:e5608976a73a6536723f08a400dab6e2694fdc0dcd24d3bd92f9e9cc6946fcac",
-    "popup.js": "sha256:f6b0cb76ab7795b3c46a387865ebc8e6407f155f14a6fc38193adba41c76132e",
-    "options.html": "sha256:e752b8c8a8712afe790a5454680158c6f6dd1f70a767df655cf9d0e16b4e5fa2",
-    "options.js": "sha256:a30f82339993baf0732af441bd98f2c55705853f601eaea8f33909e400f6a5c0",
+    "manifest.json": "sha256:e0a61ea31e12738967cbd80ca31f99150e2ef6549d6ddb29174ca0e55574ad78",
+    "background.js": "sha256:3b64fb472bc086ce8ea5bb3d568191e8753786308f9204ed0dd7252b6bfe067c",
+    "content.js": "sha256:13a1e18f46522632c783352c376c3ee1c5cd69a29e63f93fa0c3309fbf47c2df",
+    "popup.html": "sha256:7de556a1f94b4836e659f978d7250e913b78640c7efe545e1d35a36f984e5800",
+    "popup.css": "sha256:5ddad1523fd2e2d2ece87f58c3b52ff9fe87dbe65b0221e05a20b233e71a674b",
+    "popup.js": "sha256:a0ba06de48d486fa66f149524a680071600046bfb9da804e2b1ed439a55058b0",
+    "options.html": "sha256:3c367809a41d51baaece79f88a5020600d57f8355b3b5973629a47a83c960120",
+    "options.js": "sha256:e43078cb72055abb7d5c6a0e344839674d1968474a406f3fb7fdffab9f8ea474",
     "logo.png": "sha256:96a0c2bd1531a265bccf9b552886ffc167679806e0cb7e21fa82932964e9e8fa"
   }
 }

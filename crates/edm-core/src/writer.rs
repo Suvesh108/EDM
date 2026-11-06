@@ -1,7 +1,7 @@
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 use thiserror::Error;
 
 #[cfg(windows)]
@@ -17,7 +17,7 @@ pub enum WriterError {
 
 #[derive(Clone)]
 pub struct FileWriter {
-    file: Arc<Mutex<Option<File>>>,
+    file: Arc<RwLock<Option<File>>>,
     part_path: PathBuf,
     final_path: PathBuf,
     pub total_size: Option<u64>,
@@ -76,7 +76,7 @@ impl FileWriter {
         }
 
         Ok(Self {
-            file: Arc::new(Mutex::new(Some(file))),
+            file: Arc::new(RwLock::new(Some(file))),
             part_path,
             final_path,
             total_size,
@@ -87,7 +87,7 @@ impl FileWriter {
         if data.is_empty() {
             return Ok(());
         }
-        let guard = self.file.lock().unwrap();
+        let guard = self.file.read().unwrap();
         if let Some(ref file) = *guard {
             #[cfg(windows)]
             {
@@ -104,10 +104,15 @@ impl FileWriter {
                 }
             }
 
-            #[cfg(not(windows))]
+            #[cfg(unix)]
             {
-                use std::io::Seek;
-                use std::io::SeekFrom;
+                use std::os::unix::fs::FileExt;
+                file.write_all_at(data, offset)?;
+            }
+
+            #[cfg(not(any(windows, unix)))]
+            {
+                use std::io::{Seek, SeekFrom};
                 let mut file_ref = &*file;
                 (&file_ref).seek(SeekFrom::Start(offset))?;
                 (&file_ref).write_all(data)?;
@@ -118,15 +123,22 @@ impl FileWriter {
     }
 
     pub fn flush(&self) -> Result<(), WriterError> {
-        let guard = self.file.lock().unwrap();
+        let guard = self.file.write().unwrap();
         if let Some(ref file) = *guard {
             file.sync_data()?;
         }
         Ok(())
     }
 
+    /// Explicitly close and release the file handle immediately
+    pub fn close(&self) {
+        if let Ok(mut guard) = self.file.write() {
+            let _ = guard.take();
+        }
+    }
+
     pub fn reset(&self) -> Result<(), WriterError> {
-        let guard = self.file.lock().unwrap();
+        let guard = self.file.write().unwrap();
         if let Some(ref file) = *guard {
             file.set_len(0)?;
             if let Some(size) = self.total_size {
@@ -142,7 +154,7 @@ impl FileWriter {
 
         // Close file handle by taking Option<File> and dropping it immediately to release Windows file lock
         {
-            let mut guard = self.file.lock().unwrap();
+            let mut guard = self.file.write().unwrap();
             let _ = guard.take();
         }
 

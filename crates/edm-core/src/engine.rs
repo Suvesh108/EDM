@@ -172,6 +172,9 @@ impl Engine {
             .finalize(Some(&task.url))
             .map_err(|e| format!("Failed to finalize file: {}", e))?;
 
+        if let Some(tot) = total_size {
+            let _ = self.store.update_download_progress(task.id, tot);
+        }
         let _ = self
             .store
             .update_download_state(task.id, DownloadState::Completed, None);

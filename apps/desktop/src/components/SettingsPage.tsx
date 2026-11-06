@@ -40,7 +40,6 @@ import {
   Copy,
   Check,
   Key,
-  Wrench,
 } from "lucide-react";
 import {
   tauriWindowMinimize,
@@ -52,20 +51,15 @@ import {
   tauriCheckForUpdates,
   tauriInstallUpdate,
   tauriListenOtaProgress,
-  tauriGetBrowserDiagnostics,
-  tauriRepairNativeHostRegistration,
-  tauriPrepareExtensionFiles,
-  tauriGetExtensionFolderPath,
-  tauriOpenBrowserUrl,
+  tauriSelectDownloadDirectory,
+  tauriGetDiskFreeSpace,
+  tauriSetAutostart,
+  DiskFreeSpace,
   UpdateCheckResult,
   OtaProgress,
-  DiagnosticsReport,
 } from "../services/tauriBridge";
 import { EdmSettings, defaultSettings, saveSettings } from "../types/settings";
 import { FEATURE_PACKS } from "../types/featurePacks";
-import { QueuesView } from "./QueuesView";
-import { ExtensionInstallModal } from "./ExtensionInstallModal";
-import { cleanupExtensionFolder } from "../services/extensionInstaller";
 import { formatBytes } from "../utils/format";
 import { motion, AnimatePresence } from "motion/react";
 import { springs, popoverVariants } from "../utils/motion";
@@ -78,11 +72,9 @@ interface SettingsPageProps {
   speedLimit?: string;
   onSpeedLimitChange?: (val: string) => void;
   selectedDownload?: DownloadItem | null;
-  onInspectDownload?: () => void;
   totalSpeed?: string;
   activeThreads?: number;
   totalSessionBytes?: number;
-  onOpenWizard?: () => void;
 }
 
 type SettingsSection =
@@ -90,7 +82,6 @@ type SettingsSection =
   | "downloads"
   | "packs"
   | "network"
-  | "queues"
   | "automation"
   | "engine"
   | "about";
@@ -123,11 +114,9 @@ export default function SettingsPage({
   speedLimit = "Unlimited",
   onSpeedLimitChange,
   selectedDownload,
-  onInspectDownload,
   totalSpeed = "0 B/s",
   activeThreads = 0,
   totalSessionBytes = 0,
-  onOpenWizard,
 }: SettingsPageProps) {
   const [activeSection, setActiveSection] = useState<SettingsSection>("general");
   const [searchQuery, setSearchQuery] = useState("");
@@ -146,22 +135,22 @@ export default function SettingsPage({
   const [lastCheckedTime, setLastCheckedTime] = useState<string>("Not checked yet");
   const [wsToken, setWsToken] = useState<string>("");
   const [copiedToken, setCopiedToken] = useState<boolean>(false);
-  const [diagReport, setDiagReport] = useState<DiagnosticsReport | null>(null);
-  const [isRepairingDiag, setIsRepairingDiag] = useState<boolean>(false);
-  const [copiedDiag, setCopiedDiag] = useState<boolean>(false);
-  const [diagFeedback, setDiagFeedback] = useState<string | null>(null);
-  const [extFolderPath, setExtFolderPath] = useState<string>("");
-  const [copiedExtPath, setCopiedExtPath] = useState<boolean>(false);
-  const [isProvisioningExt, setIsProvisioningExt] = useState<boolean>(false);
-  const [extFeedback, setExtFeedback] = useState<string | null>(null);
-  const [isExtModalOpen, setIsExtModalOpen] = useState<boolean>(false);
-  const [extModalBrowser, setExtModalBrowser] = useState<"chrome" | "edge" | "brave">("chrome");
+  const [diskSpace, setDiskSpace] = useState<DiskFreeSpace | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const isProgrammaticScrollRef = useRef(false);
 
   useEffect(() => {
-    tauriGetExtensionFolderPath().then(setExtFolderPath);
-  }, []);
+    tauriGetDiskFreeSpace(settings.downloads.defaultDirectory).then((res) => {
+      if (res) setDiskSpace(res);
+    });
+  }, [settings.downloads.defaultDirectory]);
+
+  const handleBrowseFolder = async () => {
+    const chosen = await tauriSelectDownloadDirectory(settings.downloads.defaultDirectory);
+    if (chosen) {
+      update("downloads", { defaultDirectory: chosen });
+    }
+  };
 
   useEffect(() => {
     tauriGetAppVersion().then((v) => {
@@ -170,7 +159,6 @@ export default function SettingsPage({
     tauriGetExtensionToken().then((t) => {
       if (t) setWsToken(t);
     });
-    tauriGetBrowserDiagnostics().then(setDiagReport).catch(console.error);
 
     let unlistenFn: (() => void) | undefined;
     tauriListenOtaProgress((prog) => {
@@ -194,30 +182,6 @@ export default function SettingsPage({
       navigator.clipboard.writeText(wsToken);
       setCopiedToken(true);
       setTimeout(() => setCopiedToken(false), 2000);
-    }
-  };
-
-  const handleCopyDiag = () => {
-    if (diagReport) {
-      navigator.clipboard.writeText(JSON.stringify(diagReport, null, 2));
-      setCopiedDiag(true);
-      setTimeout(() => setCopiedDiag(false), 2000);
-    }
-  };
-
-  const handleRepairDiag = async () => {
-    setIsRepairingDiag(true);
-    setDiagFeedback("Repairing registry entries & manifests across browsers...");
-    try {
-      const msg = await tauriRepairNativeHostRegistration();
-      setDiagFeedback(msg);
-      const rep = await tauriGetBrowserDiagnostics();
-      setDiagReport(rep);
-    } catch (e: any) {
-      setDiagFeedback(e?.toString() || "Repair failed");
-    } finally {
-      setIsRepairingDiag(false);
-      setTimeout(() => setDiagFeedback(null), 3500);
     }
   };
 
@@ -245,12 +209,6 @@ export default function SettingsPage({
       label: "Network & Browser",
       icon: Globe,
       desc: "Browser extension bridge, stream sniffer, proxy protocols",
-    },
-    {
-      id: "queues" as const,
-      label: "Queues & Schedule",
-      icon: Layers,
-      desc: "Active download queues, scheduling rules, bandwidth limits, post-task actions",
     },
     {
       id: "automation" as const,
@@ -318,14 +276,6 @@ export default function SettingsPage({
     }
     setActiveSection(current);
   }, [navItems]);
-
-  useEffect(() => {
-    if (window.location.hash === "#section-queues" || window.location.hash === "#queues") {
-      setTimeout(() => {
-        scrollToSection("queues");
-      }, 150);
-    }
-  }, []);
 
   const update = <K extends keyof EdmSettings>(section: K, patch: Partial<EdmSettings[K]>) => {
     const updated = {
@@ -472,51 +422,6 @@ export default function SettingsPage({
     saveSettings(updated);
   };
 
-  const handleCopyExtPath = async () => {
-    try {
-      let p = extFolderPath;
-      if (!p) {
-        p = await tauriGetExtensionFolderPath();
-        setExtFolderPath(p);
-      }
-      await navigator.clipboard.writeText(p);
-      setCopiedExtPath(true);
-      setTimeout(() => setCopiedExtPath(false), 2000);
-    } catch {}
-  };
-
-  const handleReinstallExtension = async () => {
-    setIsProvisioningExt(true);
-    setExtFeedback("Verifying SHA-256 hashes and updating extension files...");
-    try {
-      const p = await tauriPrepareExtensionFiles();
-      setExtFolderPath(p);
-      setExtFeedback("Extension successfully verified and provisioned to user folder! Connected extensions will reload automatically.");
-      setTimeout(() => setExtFeedback(null), 5000);
-    } catch (err: any) {
-      setExtFeedback(`Failed: ${err?.message || String(err)}`);
-    } finally {
-      setIsProvisioningExt(false);
-    }
-  };
-
-  const handleRemoveExtensionFolder = async () => {
-    if (
-      confirm(
-        "Are you sure you want to remove the permanent extension folder from disk? EDM's bundled extension files will be deleted from your user AppData directory. You can recreate them at any time by clicking 'Add Extension'."
-      )
-    ) {
-      try {
-        await cleanupExtensionFolder();
-        setExtFolderPath("");
-        setExtFeedback("Extension folder successfully removed from disk.");
-        setTimeout(() => setExtFeedback(null), 4000);
-      } catch (err: any) {
-        setExtFeedback(`Failed to remove folder: ${err?.message || String(err)}`);
-      }
-    }
-  };
-
   const filteredNavItems = navItems.filter(
     (item) =>
       item.label.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -535,40 +440,45 @@ export default function SettingsPage({
             tauriStartDragging();
           }
         }}
-        className="h-14 px-3 sm:px-6 bg-[var(--bg-header)] border-b border-[var(--border-subtle)] flex items-center justify-between shrink-0 z-20 gap-2 select-none"
+        className="h-13 px-4 sm:px-6 bg-[var(--bg-header)] border-b border-[var(--border-subtle)] flex items-center justify-between shrink-0 z-20 gap-3 select-none"
       >
-        <div className="flex items-center shrink-0">
-          <span className="font-bold text-xs sm:text-sm text-[var(--text-primary)] whitespace-nowrap">
-            EDM Preferences
-          </span>
+        <div className="flex items-center gap-3 shrink-0">
+          <div className="flex items-center gap-2">
+            <span className="font-semibold text-xs sm:text-sm text-[var(--text-primary)] tracking-tight whitespace-nowrap">
+              Preferences
+            </span>
+            <span className="text-[10px] px-1.5 py-0.5 rounded-md font-mono bg-[var(--bg-card)] border border-[var(--border-subtle)] text-[var(--text-muted)] hidden md:inline">
+              v{appVersion}
+            </span>
+          </div>
         </div>
 
         {/* Search & Global Actions */}
-        <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
+        <div className="flex items-center gap-2 shrink-0">
           <div className="relative">
             <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--text-muted)] pointer-events-none" />
             <input
               type="text"
-              placeholder="Search settings..."
+              placeholder="Search settings (Ctrl+K)..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-28 sm:w-44 md:w-56 focus:w-36 sm:focus:w-60 h-8 pl-8 pr-2.5 rounded-lg text-xs bg-[var(--bg-card)] border border-[var(--border-subtle)] text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)] transition-all truncate"
+              className="w-32 sm:w-48 md:w-60 focus:w-40 sm:focus:w-64 h-8 pl-8 pr-2.5 rounded-lg text-xs bg-[var(--bg-card)] border border-[var(--border-subtle)] text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)] transition-all truncate"
             />
           </div>
 
           <button
             onClick={resetCurrentSection}
             className="btn-3d h-8 px-2 sm:px-2.5 rounded-lg text-xs font-medium text-[var(--text-secondary)] hover:text-amber-400 inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0"
-            title="Reset current section to defaults"
+            title="Reset active category to factory defaults"
           >
             <RotateCcw className="w-3.5 h-3.5" />
-            <span className="hidden md:inline">Reset Section</span>
+            <span className="hidden lg:inline">Reset Section</span>
           </button>
 
           <button
             onClick={handleExport}
             className="btn-3d h-8 px-2 sm:px-2.5 rounded-lg text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0"
-            title="Export full settings to JSON"
+            title="Export settings JSON"
           >
             <Download className="w-3.5 h-3.5" />
             <span className="hidden sm:inline">Export</span>
@@ -679,91 +589,73 @@ export default function SettingsPage({
                 </p>
               </div>
 
-              {/* Setup Wizard Card */}
-              <div className="card-3d p-4 rounded-xl flex items-center justify-between flex-wrap gap-3">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <Sparkles className="w-4 h-4 text-[var(--accent)]" />
-                    <label className="text-xs font-semibold text-[var(--text-primary)] block">
-                      Browser Setup Wizard
-                    </label>
-                  </div>
-                  <p className="text-[11px] text-[var(--text-muted)] mt-0.5">
-                    Run setup again to configure browsers and test native host integration.
-                  </p>
-                </div>
-                {onOpenWizard && (
-                  <motion.button
-                    whileTap={{ scale: 0.95 }}
-                    onClick={onOpenWizard}
-                    className="btn-3d btn-primary h-8 px-3 rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer shrink-0"
-                  >
-                    <Sparkles className="w-3.5 h-3.5" />
-                    <span>Run setup again</span>
-                  </motion.button>
-                )}
-              </div>
 
               {/* Theme & Palette Card */}
-              <div className="card-3d p-4 rounded-xl space-y-4">
-                <div className="flex items-center justify-between">
+              <div className="card-3d p-5 rounded-2xl space-y-5">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-[var(--border-subtle)]">
                   <div>
                     <label className="text-xs font-semibold text-[var(--text-primary)] block">Theme Mode</label>
                     <span className="text-[11px] text-[var(--text-muted)]">
-                      A high-contrast dark theme will be used if the system theme is unknown.
+                      High-contrast dark theme or system automatic synchronization.
                     </span>
+                  </div>
+                  {/* Mode Segmented Pills */}
+                  <div className="inline-flex rounded-xl p-1 bg-[var(--bg-chassis)] border border-[var(--border-subtle)] gap-1 shrink-0">
+                    {[
+                      { id: "dark" as const, label: "Dark", icon: Moon },
+                      { id: "light" as const, label: "Light", icon: Sun },
+                      { id: "system" as const, label: "System", icon: Laptop },
+                    ].map((m) => {
+                      const Icon = m.icon;
+                      const isSel = settings.general.theme === m.id;
+                      return (
+                        <button
+                          key={m.id}
+                          onClick={() => update("general", { theme: m.id })}
+                          className={`py-1.5 px-3 rounded-lg text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-all ${
+                            isSel
+                              ? "btn-primary-3d text-[var(--accent-on)] shadow-sm"
+                              : "text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-white/5"
+                          }`}
+                        >
+                          <Icon className="w-3.5 h-3.5" />
+                          <span>{m.label}</span>
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
 
-                {/* Mode Segmented Pills */}
-                <div className="grid grid-cols-3 gap-2 max-w-md">
-                  {[
-                    { id: "dark" as const, label: "Dark", icon: Moon },
-                    { id: "light" as const, label: "Light", icon: Sun },
-                    { id: "system" as const, label: "System", icon: Laptop },
-                  ].map((m) => {
-                    const Icon = m.icon;
-                    const isSel = settings.general.theme === m.id;
-                    return (
-                      <button
-                        key={m.id}
-                        onClick={() => update("general", { theme: m.id })}
-                        className={`py-2 px-3 rounded-lg border text-xs font-semibold flex items-center justify-center gap-2 cursor-pointer transition-all ${
-                          isSel
-                            ? "bg-[var(--accent)] text-[var(--accent-on)] border-[var(--accent)] shadow-sm"
-                            : "bg-[var(--bg-chassis)] border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--border-strong)]"
-                        }`}
-                      >
-                        <Icon className="w-3.5 h-3.5" />
-                        <span>{m.label}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-
                 {/* Accent Color Palettes */}
-                <div className="pt-2 border-t border-[var(--border-subtle)]">
-                  <label className="text-xs font-semibold text-[var(--text-primary)] block mb-2">
-                    Accent Color Palette
-                  </label>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+                <div className="space-y-2.5 pb-4 border-b border-[var(--border-subtle)]">
+                  <div>
+                    <label className="text-xs font-semibold text-[var(--text-primary)] block">
+                      Accent Color Palette
+                    </label>
+                    <span className="text-[11px] text-[var(--text-muted)]">
+                      Select your preferred accent tone across progress indicators, buttons, and telemetry.
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 pt-1">
                     {paletteOptions.map((p) => {
                       const isSel = settings.general.palette === p.id;
                       return (
                         <button
                           key={p.id}
                           onClick={() => update("general", { palette: p.id as any })}
-                          className={`p-2 rounded-lg border text-left cursor-pointer transition-all flex items-center gap-2 ${
+                          className={`p-2.5 rounded-xl border text-left cursor-pointer transition-all flex items-center gap-2.5 ${
                             isSel
-                              ? "bg-[var(--bg-active)] border-[var(--accent)] ring-1 ring-[var(--accent-glow)]"
-                              : "bg-[var(--bg-chassis)] border-[var(--border-subtle)] hover:border-[var(--border-strong)]"
+                              ? "bg-[var(--bg-active)] border-[var(--accent)] ring-1 ring-[var(--accent-glow)] shadow-sm"
+                              : "bg-[var(--bg-chassis)] border-[var(--border-subtle)] hover:border-[var(--border-strong)] hover:bg-white/[0.02]"
                           }`}
                         >
                           <span
-                            className="w-3.5 h-3.5 rounded-full shrink-0 shadow-sm"
+                            className="w-3.5 h-3.5 rounded-full shrink-0 shadow-sm ring-1 ring-white/20"
                             style={{ backgroundColor: p.color }}
                           />
-                          <span className="text-[11px] font-medium truncate">{p.label}</span>
+                          <span className={`text-[11px] font-medium truncate ${isSel ? "text-[var(--text-primary)] font-semibold" : "text-[var(--text-secondary)]"}`}>
+                            {p.label}
+                          </span>
                         </button>
                       );
                     })}
@@ -771,26 +663,26 @@ export default function SettingsPage({
                 </div>
 
                 {/* UI Style / Density */}
-                <div className="pt-2 border-t border-[var(--border-subtle)] flex items-center justify-between">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div>
-                    <label className="text-xs font-semibold text-[var(--text-primary)] block">UI Style & Density</label>
+                    <label className="text-xs font-semibold text-[var(--text-primary)] block">UI Density & Visual Spacing</label>
                     <span className="text-[11px] text-[var(--text-muted)]">
-                      Control spacing density and information visual hierarchy.
+                      Configure row padding and information visual density.
                     </span>
                   </div>
-                  <div className="flex rounded-lg p-0.5 bg-[var(--bg-chassis)] border border-[var(--border-subtle)]">
+                  <div className="inline-flex rounded-xl p-1 bg-[var(--bg-chassis)] border border-[var(--border-subtle)] gap-1 shrink-0">
                     {[
-                      { id: "pro" as const, label: "Pro High-Density" },
+                      { id: "pro" as const, label: "Pro Density" },
                       { id: "compact" as const, label: "Compact" },
                       { id: "modern" as const, label: "Comfortable" },
                     ].map((s) => (
                       <button
                         key={s.id}
                         onClick={() => update("general", { uiStyle: s.id })}
-                        className={`px-2.5 py-1 text-xs rounded-md font-medium transition-all cursor-pointer ${
+                        className={`px-3 py-1.5 text-xs rounded-lg font-medium transition-all cursor-pointer ${
                           settings.general.uiStyle === s.id
                             ? "bg-[var(--accent)] text-[var(--accent-on)] font-semibold shadow-sm"
-                            : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+                            : "text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-white/5"
                         }`}
                       >
                         {s.label}
@@ -801,19 +693,19 @@ export default function SettingsPage({
               </div>
 
               {/* Language & Localization Card */}
-              <div className="card-3d p-4 rounded-xl space-y-3">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="card-3d p-5 rounded-2xl space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                   <div>
                     <label className="text-xs font-semibold text-[var(--text-primary)] block">Display Language</label>
                     <span className="text-[11px] text-[var(--text-muted)]">
-                      Select your preferred language interface.
+                      Select your primary interface language and regional date/numeric formatting.
                     </span>
                   </div>
-                  <div className="w-full sm:w-64">
+                  <div className="w-full sm:w-64 shrink-0">
                     <select
                       value={settings.general.language}
                       onChange={(e) => update("general", { language: e.target.value })}
-                      className="w-full h-8 px-2.5 rounded-lg bg-[var(--bg-chassis)] border border-[var(--border-subtle)] text-xs text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)] cursor-pointer"
+                      className="w-full h-8 px-3 rounded-xl bg-[var(--bg-chassis)] border border-[var(--border-subtle)] text-xs text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)] cursor-pointer"
                     >
                       {languageOptions.map((lang) => (
                         <option key={lang.code} value={lang.code} className="bg-[var(--bg-card)]">
@@ -824,171 +716,154 @@ export default function SettingsPage({
                   </div>
                 </div>
 
-                <div className="flex items-center justify-between p-2.5 rounded-lg bg-[var(--bg-chassis)] border border-[var(--border-subtle)] text-xs">
+                <div className="flex items-center justify-between p-3 rounded-xl bg-[var(--bg-chassis)] border border-[var(--border-subtle)] text-xs">
                   <span className="text-[var(--text-secondary)] text-[11px]">
-                    Your language is not listed or the translation isn't complete?
+                    Your language is not listed or the translation is incomplete?
                   </span>
                   <button
                     onClick={() => setShowTranslatorNotice(true)}
                     className="text-[var(--accent)] hover:underline font-semibold text-[11px] cursor-pointer whitespace-nowrap ml-2"
                   >
-                    Let's fix it!
+                    Help Translate
                   </button>
                 </div>
               </div>
 
               {/* Startup & Lifecycle Options Card */}
-              <div className="card-3d p-4 rounded-xl space-y-3">
-                <label className="text-xs font-semibold text-[var(--text-primary)] block">
-                  Application Lifecycle Options
-                </label>
-
-                <div className="space-y-2.5">
-                  <label className="flex items-center gap-3 cursor-pointer group">
-                    <input
-                      type="checkbox"
-                      checked={settings.general.launchAtStartup}
-                      onChange={(e) => update("general", { launchAtStartup: e.target.checked })}
-                      className="w-[18px] h-[18px] rounded accent-[var(--accent)] cursor-pointer align-middle transition-transform active:scale-90"
-                    />
-                    <div className="text-xs">
-                      <span className="font-medium text-[var(--text-primary)] group-hover:text-[var(--accent)] transition-colors">
-                        Launch EDM automatically at Windows startup
-                      </span>
-                    </div>
+              <div className="card-3d p-5 rounded-2xl divide-y divide-[var(--border-subtle)]">
+                <div className="pb-3">
+                  <label className="text-xs font-semibold text-[var(--text-primary)] block">
+                    System & Background Lifecycle
                   </label>
+                  <p className="text-[11px] text-[var(--text-muted)] mt-0.5">
+                    Control system tray residence, auto-start behavior, and memory-saving listener sleep.
+                  </p>
+                </div>
 
-                  {/* Dependent Sub-option */}
-                  <label className="flex items-center gap-3 cursor-pointer group pl-6">
+                {/* Structured 2-Column Row Items */}
+                <div className="py-3 flex items-center justify-between gap-4">
+                  <div>
+                    <span className="font-medium text-xs text-[var(--text-primary)] block">Launch at Windows Startup</span>
+                    <span className="text-[11px] text-[var(--text-muted)]">Open EDM automatically when signing into Windows.</span>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={settings.general.launchAtStartup}
+                    onChange={(e) => {
+                      const val = e.target.checked;
+                      update("general", { launchAtStartup: val });
+                      tauriSetAutostart(val);
+                    }}
+                    className="edm-checkbox"
+                  />
+                </div>
+
+                {/* Sub-option */}
+                {settings.general.launchAtStartup && (
+                  <div className="py-3 pl-4 flex items-center justify-between gap-4 bg-white/[0.01]">
+                    <div>
+                      <span className="font-medium text-xs text-[var(--text-primary)] block">Start Minimized</span>
+                      <span className="text-[11px] text-[var(--text-muted)]">Launch directly into the notification tray without opening the window.</span>
+                    </div>
                     <input
                       type="checkbox"
                       checked={settings.general.startMinimized}
-                      disabled={!settings.general.launchAtStartup}
                       onChange={(e) => update("general", { startMinimized: e.target.checked })}
-                      className="w-[18px] h-[18px] rounded accent-[var(--accent)] cursor-pointer align-middle transition-transform active:scale-90 disabled:opacity-40"
+                      className="edm-checkbox"
                     />
-                    <div className="text-xs">
-                      <span
-                        className={`font-medium ${
-                          settings.general.launchAtStartup
-                            ? "text-[var(--text-primary)] group-hover:text-[var(--accent)]"
-                            : "text-[var(--text-muted)]"
-                        } transition-colors`}
-                      >
-                        Start minimized in system notification tray
-                      </span>
-                    </div>
-                  </label>
-
-                  <label className="flex items-center gap-3 cursor-pointer group">
-                    <input
-                      type="checkbox"
-                      checked={settings.general.minimizeToTray}
-                      onChange={(e) => update("general", { minimizeToTray: e.target.checked })}
-                      className="w-[18px] h-[18px] rounded accent-[var(--accent)] cursor-pointer align-middle transition-transform active:scale-90"
-                    />
-                    <div className="text-xs">
-                      <span className="font-medium text-[var(--text-primary)] group-hover:text-[var(--accent)] transition-colors">
-                        Minimize to system tray on window close (keeps downloads running in background)
-                      </span>
-                    </div>
-                  </label>
-
-                  <label className="flex items-center gap-3 cursor-pointer group">
-                    <input
-                      type="checkbox"
-                      checked={settings.general.restoreDownloadsOnLaunch}
-                      onChange={(e) => update("general", { restoreDownloadsOnLaunch: e.target.checked })}
-                      className="w-[18px] h-[18px] rounded accent-[var(--accent)] cursor-pointer align-middle transition-transform active:scale-90"
-                    />
-                    <div className="text-xs">
-                      <span className="font-medium text-[var(--text-primary)] group-hover:text-[var(--accent)] transition-colors">
-                        Automatically restore unfinished downloads on application launch
-                      </span>
-                    </div>
-                  </label>
-
-                  <label className="flex items-center gap-3 cursor-pointer group">
-                    <input
-                      type="checkbox"
-                      checked={settings.general.confirmBeforeExit}
-                      onChange={(e) => update("general", { confirmBeforeExit: e.target.checked })}
-                      className="w-[18px] h-[18px] rounded accent-[var(--accent)] cursor-pointer align-middle transition-transform active:scale-90"
-                    />
-                    <div className="text-xs">
-                      <span className="font-medium text-[var(--text-primary)] group-hover:text-[var(--accent)] transition-colors">
-                        Confirm before exiting while active downloads are in progress
-                      </span>
-                    </div>
-                  </label>
-
-                  {/* Complete Sleep & Lifecycle Controls */}
-                  <div className="pt-3 mt-3 border-t border-[var(--border-subtle)] space-y-3">
-                    <label className="flex items-center gap-3 cursor-pointer group">
-                      <input
-                        type="checkbox"
-                        checked={settings.general.keepAwake ?? false}
-                        onChange={(e) => update("general", { keepAwake: e.target.checked })}
-                        className="w-[18px] h-[18px] rounded accent-[var(--accent)] cursor-pointer align-middle transition-transform active:scale-90"
-                      />
-                      <div className="text-xs">
-                        <span className="font-medium text-[var(--text-primary)] group-hover:text-[var(--accent)] transition-colors">
-                          Keep awake (prevent entering listener sleep or idle exit)
-                        </span>
-                        <p className="text-[11px] text-[var(--text-muted)] mt-0.5">
-                          When disabled, EDM steps down to listener sleep and frees WebView2 RAM (~500 MB) when idle.
-                        </p>
-                      </div>
-                    </label>
-
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pl-7">
-                      <div>
-                        <label className="text-xs font-medium text-[var(--text-primary)] block">
-                          Exit completely after idle
-                        </label>
-                        <span className="text-[11px] text-[var(--text-muted)]">
-                          Browser extension wakes EDM automatically when a download starts.
-                        </span>
-                      </div>
-                      <select
-                        value={
-                          settings.general.idleExitMinutes === null || settings.general.idleExitMinutes === undefined
-                            ? "never"
-                            : String(settings.general.idleExitMinutes)
-                        }
-                        disabled={settings.general.keepAwake}
-                        onChange={(e) => {
-                          const val = e.target.value === "never" ? null : parseInt(e.target.value, 10);
-                          update("general", { idleExitMinutes: val });
-                        }}
-                        className="h-8 px-2.5 rounded-lg bg-[var(--bg-chassis)] border border-[var(--border-subtle)] text-xs text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)] cursor-pointer disabled:opacity-40"
-                      >
-                        <option value="never">Never (Stay in Listener Sleep)</option>
-                        <option value="0">Immediately after Listener Sleep</option>
-                        <option value="5">After 5 minutes idle</option>
-                        <option value="15">After 15 minutes idle (Default)</option>
-                        <option value="30">After 30 minutes idle</option>
-                        <option value="60">After 60 minutes idle</option>
-                      </select>
-                    </div>
-
-                    <label className="flex items-center gap-3 cursor-pointer group pt-2 border-t border-[var(--border-subtle)]">
-                      <input
-                        type="checkbox"
-                        checked={settings.general.showConnectionBoundaries ?? false}
-                        onChange={(e) => update("general", { showConnectionBoundaries: e.target.checked })}
-                        className="w-[18px] h-[18px] rounded accent-[var(--accent)] cursor-pointer align-middle transition-transform active:scale-90"
-                      />
-                      <div className="text-xs">
-                        <span className="font-medium text-[var(--text-primary)] group-hover:text-[var(--accent)] transition-colors">
-                          Show connection stream boundaries on progress bar
-                        </span>
-                        <p className="text-[11px] text-[var(--text-muted)] mt-0.5">
-                          When enabled, displays faint overlays marking active parallel worker byte boundaries. Off by default for continuous seamless fill.
-                        </p>
-                      </div>
-                    </label>
                   </div>
+                )}
+
+                <div className="py-3 flex items-center justify-between gap-4">
+                  <div>
+                    <span className="font-medium text-xs text-[var(--text-primary)] block">Minimize to System Tray</span>
+                    <span className="text-[11px] text-[var(--text-muted)]">Closing the window keeps downloads active in the background.</span>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={settings.general.minimizeToTray}
+                    onChange={(e) => update("general", { minimizeToTray: e.target.checked })}
+                    className="edm-checkbox"
+                  />
+                </div>
+
+                <div className="py-3 flex items-center justify-between gap-4">
+                  <div>
+                    <span className="font-medium text-xs text-[var(--text-primary)] block">Auto-Restore Unfinished Downloads</span>
+                    <span className="text-[11px] text-[var(--text-muted)]">Automatically resume paused or incomplete tasks upon launch.</span>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={settings.general.restoreDownloadsOnLaunch}
+                    onChange={(e) => update("general", { restoreDownloadsOnLaunch: e.target.checked })}
+                    className="edm-checkbox"
+                  />
+                </div>
+
+                <div className="py-3 flex items-center justify-between gap-4">
+                  <div>
+                    <span className="font-medium text-xs text-[var(--text-primary)] block">Confirm Before Exit</span>
+                    <span className="text-[11px] text-[var(--text-muted)]">Prompt for confirmation if active downloads are transferring.</span>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={settings.general.confirmBeforeExit}
+                    onChange={(e) => update("general", { confirmBeforeExit: e.target.checked })}
+                    className="edm-checkbox"
+                  />
+                </div>
+
+                <div className="py-3 flex items-center justify-between gap-4">
+                  <div>
+                    <span className="font-medium text-xs text-[var(--text-primary)] block">Keep Engine Awake</span>
+                    <span className="text-[11px] text-[var(--text-muted)]">Prevent EDM from dropping into listener sleep and releasing WebView2 RAM.</span>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={settings.general.keepAwake ?? false}
+                    onChange={(e) => update("general", { keepAwake: e.target.checked })}
+                    className="edm-checkbox"
+                  />
+                </div>
+
+                <div className="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div>
+                    <span className="font-medium text-xs text-[var(--text-primary)] block">Idle Exit Timeout</span>
+                    <span className="text-[11px] text-[var(--text-muted)]">Completely exit background processes after a period of inactivity.</span>
+                  </div>
+                  <select
+                    value={
+                      settings.general.idleExitMinutes === null || settings.general.idleExitMinutes === undefined
+                        ? "never"
+                        : String(settings.general.idleExitMinutes)
+                    }
+                    disabled={settings.general.keepAwake}
+                    onChange={(e) => {
+                      const val = e.target.value === "never" ? null : parseInt(e.target.value, 10);
+                      update("general", { idleExitMinutes: val });
+                    }}
+                    className="h-8 px-2.5 rounded-lg bg-[var(--bg-chassis)] border border-[var(--border-subtle)] text-xs text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)] cursor-pointer disabled:opacity-40 shrink-0"
+                  >
+                    <option value="never">Never (Stay in Listener Sleep)</option>
+                    <option value="0">Immediately after Listener Sleep</option>
+                    <option value="5">After 5 minutes idle</option>
+                    <option value="15">After 15 minutes idle (Default)</option>
+                    <option value="30">After 30 minutes idle</option>
+                    <option value="60">After 60 minutes idle</option>
+                  </select>
+                </div>
+
+                <div className="pt-3 flex items-center justify-between gap-4">
+                  <div>
+                    <span className="font-medium text-xs text-[var(--text-primary)] block">Show Connection Stream Boundaries</span>
+                    <span className="text-[11px] text-[var(--text-muted)]">Render subtle boundary indicators for parallel workers on progress tracks.</span>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={settings.general.showConnectionBoundaries ?? false}
+                    onChange={(e) => update("general", { showConnectionBoundaries: e.target.checked })}
+                    className="edm-checkbox"
+                  />
                 </div>
               </div>
             </section>
@@ -1009,161 +884,164 @@ export default function SettingsPage({
                 </p>
               </div>
 
-              {/* Default Download Folder (Signature Dual Card Selector) */}
-              <div className="card-3d p-4 rounded-xl space-y-4">
-                <div className="flex items-center justify-between">
-                  <label className="text-xs font-semibold text-[var(--text-primary)] block">
-                    Default Download Folder Strategy
-                  </label>
-                  <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-[var(--accent-badge-bg)] text-[var(--accent-badge-text)] font-semibold border border-[var(--accent-badge-border)]">
+              {/* Default Download Folder Strategy */}
+              <div className="card-3d p-5 rounded-2xl space-y-4">
+                <div className="flex items-center justify-between pb-3 border-b border-[var(--border-subtle)]">
+                  <div>
+                    <label className="text-xs font-semibold text-[var(--text-primary)] block">
+                      Download Directory & Storage Strategy
+                    </label>
+                    <span className="text-[11px] text-[var(--text-muted)]">
+                      Choose between category-based automated sorting or a fixed custom directory.
+                    </span>
+                  </div>
+                  <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded-md bg-[var(--accent-badge-bg)] text-[var(--accent-badge-text)] font-semibold border border-[var(--accent-badge-border)]">
                     Smart Engine
                   </span>
                 </div>
 
-                {/* Option 1: Automatic Folder Routing Card */}
-                <div
-                  onClick={() => update("storage", { folderMode: "auto" })}
-                  className={`p-3.5 rounded-xl border transition-all cursor-pointer ${
-                    settings.storage.folderMode === "auto"
-                      ? "bg-[var(--bg-active)] border-[var(--accent)] ring-1 ring-[var(--accent-glow)] shadow-md"
-                      : "bg-[var(--bg-chassis)] border-[var(--border-subtle)] hover:border-[var(--border-strong)]"
-                  }`}
-                >
-                  <div className="flex items-start gap-3">
-                    <div
-                      className={`w-4 h-4 rounded-full border mt-0.5 flex items-center justify-center shrink-0 ${
-                        settings.storage.folderMode === "auto"
-                          ? "border-[var(--accent)] bg-[var(--accent)]"
-                          : "border-[var(--border-subtle)] bg-[var(--bg-card)]"
-                      }`}
-                    >
-                      {settings.storage.folderMode === "auto" && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="font-semibold text-xs text-[var(--text-primary)]">
-                          Choose default download folder automatically
-                        </span>
-                        <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {/* Option 1: Automatic Folder Routing Card */}
+                  <div
+                    onClick={() => update("storage", { folderMode: "auto" })}
+                    className={`p-4 rounded-xl border transition-all cursor-pointer flex flex-col justify-between ${
+                      settings.storage.folderMode === "auto"
+                        ? "bg-[var(--bg-active)] border-[var(--accent)] ring-1 ring-[var(--accent-glow)] shadow-md"
+                        : "bg-[var(--bg-chassis)] border-[var(--border-subtle)] hover:border-[var(--border-strong)] hover:bg-white/[0.02]"
+                    }`}
+                  >
+                    <div>
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <div
+                            className={`w-4 h-4 rounded-full border flex items-center justify-center shrink-0 ${
+                              settings.storage.folderMode === "auto"
+                                ? "border-[var(--accent)] bg-[var(--accent)]"
+                                : "border-[var(--border-subtle)] bg-[var(--bg-card)]"
+                            }`}
+                          >
+                            {settings.storage.folderMode === "auto" && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
+                          </div>
+                          <span className="font-semibold text-xs text-[var(--text-primary)]">
+                            Intelligent Categorization
+                          </span>
+                        </div>
+                        <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
                           Recommended
                         </span>
                       </div>
-                      <p className="text-[11px] text-[var(--text-muted)] mt-0.5">
-                        EDM inspects MIME headers and source domain to intelligently organize files into dedicated categories.
+                      <p className="text-[11px] text-[var(--text-muted)] mt-2">
+                        Inspects MIME signatures to auto-sort into Programs, Videos, Music, Documents, and Archives.
                       </p>
+                    </div>
 
-                      {/* Sub-Checkboxes for Auto Routing */}
-                      <div className="mt-3 space-y-2 pt-2 border-t border-[var(--border-subtle)]/60">
-                        <label
-                          className="flex items-center gap-2.5 cursor-pointer"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={settings.storage.suggestFoldersByType}
-                            onChange={(e) => update("storage", { suggestFoldersByType: e.target.checked })}
-                            className="w-[18px] h-[18px] rounded accent-[var(--accent)] cursor-pointer align-middle transition-transform active:scale-90"
-                          />
-                          <span className="text-xs text-[var(--text-secondary)] font-medium">
-                            Suggest subfolders based on file category (Programs, Video, Audio, Archives, Documents)
-                          </span>
-                        </label>
-
-                        <label
-                          className="flex items-center gap-2.5 cursor-pointer"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={settings.storage.suggestFoldersByDomain}
-                            onChange={(e) => update("storage", { suggestFoldersByDomain: e.target.checked })}
-                            className="w-[18px] h-[18px] rounded accent-[var(--accent)] cursor-pointer align-middle transition-transform active:scale-90"
-                          />
-                          <span className="text-xs text-[var(--text-secondary)] font-medium">
-                            Suggest subfolders based on download URL hostname (e.g. \Downloads\github.com\)
-                          </span>
-                        </label>
-                      </div>
+                    <div className="mt-3 pt-3 border-t border-[var(--border-subtle)]/70 space-y-2">
+                      <label
+                        className="flex items-center gap-2.5 cursor-pointer"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={settings.storage.suggestFoldersByType}
+                          onChange={(e) => update("storage", { suggestFoldersByType: e.target.checked })}
+                          className="edm-checkbox"
+                        />
+                        <span className="text-[11px] text-[var(--text-secondary)] font-medium">
+                          Sort into category subfolders
+                        </span>
+                      </label>
+                      <label
+                        className="flex items-center gap-2.5 cursor-pointer"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={settings.storage.suggestFoldersByDomain}
+                          onChange={(e) => update("storage", { suggestFoldersByDomain: e.target.checked })}
+                          className="edm-checkbox"
+                        />
+                        <span className="text-[11px] text-[var(--text-secondary)] font-medium">
+                          Group by domain name
+                        </span>
+                      </label>
                     </div>
                   </div>
-                </div>
 
-                {/* Option 2: Fixed Folder Card */}
-                <div
-                  onClick={() => update("storage", { folderMode: "fixed" })}
-                  className={`p-3.5 rounded-xl border transition-all cursor-pointer ${
-                    settings.storage.folderMode === "fixed"
-                      ? "bg-[var(--bg-active)] border-[var(--accent)] ring-1 ring-[var(--accent-glow)] shadow-md"
-                      : "bg-[var(--bg-chassis)] border-[var(--border-subtle)] hover:border-[var(--border-strong)]"
-                  }`}
-                >
-                  <div className="flex items-start gap-3">
-                    <div
-                      className={`w-4 h-4 rounded-full border mt-0.5 flex items-center justify-center shrink-0 ${
-                        settings.storage.folderMode === "fixed"
-                          ? "border-[var(--accent)] bg-[var(--accent)]"
-                          : "border-[var(--border-subtle)] bg-[var(--bg-card)]"
-                      }`}
-                    >
-                      {settings.storage.folderMode === "fixed" && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <span className="font-semibold text-xs text-[var(--text-primary)]">
-                        Fixed default download folder
-                      </span>
-                      <p className="text-[11px] text-[var(--text-muted)] mt-0.5">
-                        All files will be saved directly into a single designated directory.
+                  {/* Option 2: Fixed Folder Card */}
+                  <div
+                    onClick={() => update("storage", { folderMode: "fixed" })}
+                    className={`p-4 rounded-xl border transition-all cursor-pointer flex flex-col justify-between ${
+                      settings.storage.folderMode === "fixed"
+                        ? "bg-[var(--bg-active)] border-[var(--accent)] ring-1 ring-[var(--accent-glow)] shadow-md"
+                        : "bg-[var(--bg-chassis)] border-[var(--border-subtle)] hover:border-[var(--border-strong)] hover:bg-white/[0.02]"
+                    }`}
+                  >
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <div
+                          className={`w-4 h-4 rounded-full border flex items-center justify-center shrink-0 ${
+                            settings.storage.folderMode === "fixed"
+                              ? "border-[var(--accent)] bg-[var(--accent)]"
+                              : "border-[var(--border-subtle)] bg-[var(--bg-card)]"
+                          }`}
+                        >
+                          {settings.storage.folderMode === "fixed" && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
+                        </div>
+                        <span className="font-semibold text-xs text-[var(--text-primary)]">
+                          Fixed Target Directory
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-[var(--text-muted)] mt-2">
+                        Saves all incoming files directly into a specific designated folder without subdirectories.
                       </p>
+                    </div>
 
-                      {/* Folder Directory Input with Browse Button */}
-                      <div className="mt-2.5 flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                    <div className="mt-3 pt-3 border-t border-[var(--border-subtle)]/70 space-y-2" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex items-center gap-2">
                         <div className="flex-1 relative">
-                          <Folder className="w-4 h-4 absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--text-muted)] pointer-events-none" />
+                          <Folder className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--text-muted)] pointer-events-none" />
                           <input
                             type="text"
                             value={settings.downloads.defaultDirectory}
                             onChange={(e) => update("downloads", { defaultDirectory: e.target.value })}
-                            className="w-full h-8 pl-8 pr-3 rounded-lg text-xs font-mono bg-[var(--bg-card)] border border-[var(--border-subtle)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
+                            className="w-full h-8 pl-8 pr-2.5 rounded-lg text-xs font-mono bg-[var(--bg-card)] border border-[var(--border-subtle)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
                           />
                         </div>
                         <button
-                          onClick={() => {
-                            alert("Native folder picker opened: Folder location confirmed.");
-                          }}
-                          className="btn-3d h-8 px-3 rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer shrink-0"
+                          onClick={handleBrowseFolder}
+                          className="btn-3d h-8 px-2.5 rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer shrink-0"
+                          title="Choose folder"
                         >
                           <FolderOpen className="w-3.5 h-3.5 text-[var(--accent)]" />
-                          <span>Browse...</span>
+                          <span>Browse</span>
                         </button>
                       </div>
 
-                      {/* Storage Quota Bar */}
-                      <div className="mt-2 flex items-center justify-between text-[10px] text-[var(--text-muted)] font-mono">
+                      <div className="flex items-center justify-between text-[10px] text-[var(--text-muted)] font-mono pt-0.5">
                         <div className="flex items-center gap-1.5">
                           <HardDrive className="w-3 h-3 text-emerald-400" />
-                          <span>NTFS Volume (C:) • 412.8 GB Available of 1.0 TB</span>
+                          <span>Volume ({diskSpace?.drive || "C:"})</span>
                         </div>
-                        <span className="text-emerald-400 font-semibold">59% Free</span>
+                        <span className="text-emerald-400 font-semibold">
+                          {diskSpace && diskSpace.total_bytes > 0 ? `${diskSpace.pct_free}% Free` : "Online"}
+                        </span>
                       </div>
                     </div>
                   </div>
                 </div>
 
                 {/* Sub-option: Ask Every Time */}
-                <div className="pt-2 border-t border-[var(--border-subtle)]">
-                  <label className="flex items-center gap-3 cursor-pointer group">
-                    <input
-                      type="checkbox"
-                      checked={settings.storage.askForSaveLocation}
-                      onChange={(e) => update("storage", { askForSaveLocation: e.target.checked })}
-                      className="w-[18px] h-[18px] rounded accent-[var(--accent)] cursor-pointer align-middle transition-transform active:scale-90"
-                    />
-                    <div className="text-xs">
-                      <span className="font-medium text-[var(--text-primary)] group-hover:text-[var(--accent)] transition-colors">
-                        Always display pre-download dialog to confirm folder location and filename
-                      </span>
-                    </div>
-                  </label>
+                <div className="pt-3 border-t border-[var(--border-subtle)] flex items-center justify-between gap-4">
+                  <div>
+                    <span className="font-medium text-xs text-[var(--text-primary)] block">Pre-Download Location Confirmation</span>
+                    <span className="text-[11px] text-[var(--text-muted)]">Always display confirmation dialog to confirm target directory and filename before starting.</span>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={settings.storage.askForSaveLocation}
+                    onChange={(e) => update("storage", { askForSaveLocation: e.target.checked })}
+                    className="edm-checkbox"
+                  />
                 </div>
               </div>
 
@@ -1418,12 +1296,12 @@ export default function SettingsPage({
               </div>
 
               {/* Category Filter Pills */}
-              <div className="flex flex-wrap items-center gap-1.5 p-1 rounded-xl bg-[var(--bg-chassis)] border border-[var(--border-subtle)]">
+              <div className="flex flex-wrap items-center gap-1.5 p-1 rounded-2xl bg-[var(--bg-chassis)] border border-[var(--border-subtle)]">
                 {(
                   [
                     { id: "all", label: "All Packs", count: 9 },
                     { id: "core", label: "Core HTTP", count: 1 },
-                    { id: "p2p", label: "P2P & Torrents", count: 2 },
+                    { id: "p2p", label: "P2P & Swarm", count: 2 },
                     { id: "media", label: "Media & Streams", count: 3 },
                     { id: "mirrors", label: "AI & Hub Mirrors", count: 2 },
                     { id: "network", label: "FTP Protocols", count: 1 },
@@ -1434,16 +1312,16 @@ export default function SettingsPage({
                     <button
                       key={tab.id}
                       onClick={() => setPackCategoryFilter(tab.id)}
-                      className={`px-3 py-1 rounded-lg text-xs font-medium transition-all cursor-pointer flex items-center gap-1.5 ${
+                      className={`px-3 py-1.5 rounded-xl text-xs font-medium transition-all cursor-pointer flex items-center gap-2 ${
                         isActive
                           ? "btn-primary-3d text-white font-semibold shadow-sm"
-                          : "text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]"
+                          : "text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-white/5"
                       }`}
                     >
                       <span>{tab.label}</span>
                       <span
-                        className={`text-[10px] px-1.5 py-0.2 rounded-full ${
-                          isActive ? "bg-white/20 text-white" : "bg-[var(--bg-card)] text-[var(--text-muted)]"
+                        className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
+                          isActive ? "bg-white/20 text-white font-semibold" : "bg-[var(--bg-card)] text-[var(--text-muted)]"
                         }`}
                       >
                         {tab.count}
@@ -1454,21 +1332,20 @@ export default function SettingsPage({
               </div>
 
               {/* Feature Packs Grid */}
-              <div className="grid grid-cols-1 xl:grid-cols-2 gap-3.5">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
                 {FEATURE_PACKS.filter((p) => packCategoryFilter === "all" || p.category === packCategoryFilter).map((pack) => {
                   return (
                     <motion.div
                       key={pack.id}
-                      whileHover={{ y: -3, scale: 1.01 }}
-                      whileTap={{ scale: 0.985 }}
+                      whileHover={{ y: -2 }}
                       transition={springs.interactive}
-                      className="card-3d p-4 rounded-xl space-y-3 transition-colors relative overflow-hidden flex flex-col justify-between cursor-pointer"
+                      className="card-3d p-4 rounded-2xl space-y-3 transition-colors relative overflow-hidden flex flex-col justify-between"
                     >
                       {/* Top Header */}
                       <div className="space-y-2">
                         <div className="flex items-start justify-between gap-3">
                           <div className="flex items-center gap-2.5 min-w-0">
-                            <div className="p-2 rounded-lg icon-box-3d shrink-0">
+                            <div className="p-2 rounded-xl icon-box-3d shrink-0">
                               {pack.id === "http_pack" && <Globe className="w-4 h-4 text-blue-400" />}
                               {pack.id === "bittorrent_pack" && <Share2 className="w-4 h-4 text-emerald-400" />}
                               {pack.id === "ftp_pack" && <Server className="w-4 h-4 text-amber-400" />}
@@ -1482,12 +1359,12 @@ export default function SettingsPage({
                             <div className="min-w-0">
                               <div className="flex items-center gap-2 flex-wrap">
                                 <h3 className="text-xs font-bold text-[var(--text-primary)] truncate">{pack.name}</h3>
-                                <span className="font-mono text-[10px] text-[var(--text-muted)] bg-[var(--bg-chassis)] px-1.5 py-0.5 rounded border border-[var(--border-subtle)]">
+                                <span className="font-mono text-[10px] text-[var(--text-muted)] bg-[var(--bg-chassis)] px-1.5 py-0.5 rounded-md border border-[var(--border-subtle)]">
                                   {pack.id}
                                 </span>
                               </div>
                               <span
-                                className="inline-block text-[9px] font-bold px-2 py-0.2 rounded-full uppercase tracking-wider mt-0.5"
+                                className="inline-block text-[9px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider mt-0.5"
                                 style={{
                                   color: pack.color,
                                   backgroundColor: `${pack.color}15`,
@@ -1562,59 +1439,61 @@ export default function SettingsPage({
               </div>
 
               {/* Browser Extension Companion Status Card */}
-              <div className="card-3d p-4 rounded-xl space-y-3">
-                <div className="flex items-center justify-between">
-                  <label className="text-xs font-semibold text-[var(--text-primary)] block">
-                    Browser Extension Bridge
-                  </label>
-                  <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono font-medium bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+              <div className="card-3d p-5 rounded-2xl space-y-4">
+                <div className="flex items-center justify-between pb-3 border-b border-[var(--border-subtle)]">
+                  <div>
+                    <label className="text-xs font-semibold text-[var(--text-primary)] block">
+                      Browser Interception Engine
+                    </label>
+                    <span className="text-[11px] text-[var(--text-muted)]">
+                      Connects Chromium, Edge, Brave, and Firefox via Native Messaging Host.
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono font-medium bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 shrink-0">
                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                    Native Messaging Host v{appVersion} Connected
+                    Host v{appVersion} Ready
                   </div>
                 </div>
 
-                <div className="space-y-2.5 pt-1">
-                  <label className="flex items-center gap-3 cursor-pointer group">
+                <div className="divide-y divide-[var(--border-subtle)]">
+                  <div className="py-3 flex items-center justify-between gap-4">
+                    <div>
+                      <span className="font-medium text-xs text-[var(--text-primary)] block">Auto-Intercept Browser Downloads</span>
+                      <span className="text-[11px] text-[var(--text-muted)]">Capture single-click and right-click download events from connected browsers.</span>
+                    </div>
                     <input
                       type="checkbox"
                       checked={settings.browser.integrationEnabled}
                       onChange={(e) => update("browser", { integrationEnabled: e.target.checked })}
-                      className="w-[18px] h-[18px] rounded accent-[var(--accent)] cursor-pointer align-middle transition-transform active:scale-90"
+                      className="edm-checkbox"
                     />
-                    <div className="text-xs">
-                      <span className="font-medium text-[var(--text-primary)] group-hover:text-[var(--accent)] transition-colors">
-                        Automatically intercept download clicks in Chrome, Edge, Brave, and Firefox
-                      </span>
-                    </div>
-                  </label>
+                  </div>
 
-                  <label className="flex items-center gap-3 cursor-pointer group">
+                  <div className="py-3 flex items-center justify-between gap-4">
+                    <div>
+                      <span className="font-medium text-xs text-[var(--text-primary)] block">Streaming Media Sniffer</span>
+                      <span className="text-[11px] text-[var(--text-muted)]">Sniff and capture HLS (.m3u8), MPEG-DASH, and direct video/audio URLs.</span>
+                    </div>
                     <input
                       type="checkbox"
                       checked={settings.browser.interceptMediaStreams}
                       onChange={(e) => update("browser", { interceptMediaStreams: e.target.checked })}
-                      className="w-[18px] h-[18px] rounded accent-[var(--accent)] cursor-pointer align-middle transition-transform active:scale-90"
+                      className="edm-checkbox"
                     />
-                    <div className="text-xs">
-                      <span className="font-medium text-[var(--text-primary)] group-hover:text-[var(--accent)] transition-colors">
-                        Detect and capture streaming video/audio media (HLS, DASH, MP4)
-                      </span>
-                    </div>
-                  </label>
+                  </div>
 
-                  <label className="flex items-center gap-3 cursor-pointer group">
+                  <div className="py-3 flex items-center justify-between gap-4">
+                    <div>
+                      <span className="font-medium text-xs text-[var(--text-primary)] block">Clipboard URL Monitoring</span>
+                      <span className="text-[11px] text-[var(--text-muted)]">Automatically prompt to download when copying media or file URLs.</span>
+                    </div>
                     <input
                       type="checkbox"
                       checked={settings.browser.clipboardMonitoringEnabled}
                       onChange={(e) => update("browser", { clipboardMonitoringEnabled: e.target.checked })}
-                      className="w-[18px] h-[18px] rounded accent-[var(--accent)] cursor-pointer align-middle transition-transform active:scale-90"
+                      className="edm-checkbox"
                     />
-                    <div className="text-xs">
-                      <span className="font-medium text-[var(--text-primary)] group-hover:text-[var(--accent)] transition-colors">
-                        Monitor system clipboard for downloadable URLs and open Add Task dialog
-                      </span>
-                    </div>
-                  </label>
+                  </div>
                 </div>
 
                 {/* Local WebSocket Bridge Token Card */}
@@ -1633,7 +1512,7 @@ export default function SettingsPage({
                   </div>
 
                   <p className="text-[11px] text-[var(--text-muted)] leading-relaxed">
-                    This security token authenticates your browser extension with the desktop WebSocket engine. Paste this token into your extension options to enable live progress synchronization and download interception.
+                    This security token authenticates your browser extension with the desktop WebSocket engine for live progress synchronization.
                   </p>
 
                   <div className="flex items-center gap-2 pt-0.5">
@@ -1660,287 +1539,6 @@ export default function SettingsPage({
                         </>
                       )}
                     </motion.button>
-                  </div>
-                </div>
-              </div>
-
-              {/* App-Managed Extension Reinstallation & Updates Card */}
-              <div className="card-3d p-4 rounded-xl space-y-4">
-                <div className="flex items-center justify-between flex-wrap gap-2">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <Package className="w-4 h-4 text-[var(--accent)]" />
-                      <label className="text-xs font-semibold text-[var(--text-primary)] block">
-                        App-Managed Extension Files &amp; Reinstall
-                      </label>
-                    </div>
-                    <p className="text-[11px] text-[var(--text-muted)] mt-0.5">
-                      Extension code is integrity-checked against shipped SHA-256 hashes and kept in your user folder. The extension auto-reloads safely when idle.
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-2 shrink-0 flex-wrap">
-                    <button
-                      onClick={() => {
-                        setExtModalBrowser("chrome");
-                        setIsExtModalOpen(true);
-                      }}
-                      className="h-7 px-3 rounded-lg text-[11px] font-semibold bg-gradient-to-b from-[#FFFFFF] to-[#D8DBE0] text-[#0A0B0E] hover:from-[#FFFFFF] hover:to-[#EBEEF3] shadow-[0_1px_3px_rgba(0,0,0,0.4),inset_0_1px_0_rgba(255,255,255,0.9)] inline-flex items-center gap-1.5 cursor-pointer transition-all"
-                    >
-                      <Sparkles className="w-3 h-3 text-[#0A0B0E]" />
-                      <span>Add Extension</span>
-                    </button>
-                    <motion.button
-                      whileTap={{ scale: 0.95 }}
-                      onClick={handleCopyExtPath}
-                      className="btn-3d h-7 px-2.5 rounded-lg text-[11px] font-semibold inline-flex items-center gap-1.5 cursor-pointer"
-                    >
-                      {copiedExtPath ? (
-                        <>
-                          <Check className="w-3 h-3 text-emerald-400" />
-                          <span className="text-emerald-400">Copied!</span>
-                        </>
-                      ) : (
-                        <>
-                          <Copy className="w-3 h-3" />
-                          <span>Copy Path</span>
-                        </>
-                      )}
-                    </motion.button>
-                    <motion.button
-                      whileTap={{ scale: 0.95 }}
-                      onClick={handleReinstallExtension}
-                      disabled={isProvisioningExt}
-                      className="btn-3d h-7 px-2.5 rounded-lg text-[11px] font-semibold inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-                    >
-                      <RefreshCw className={`w-3 h-3 ${isProvisioningExt ? "animate-spin" : ""}`} />
-                      <span>{isProvisioningExt ? "Verifying..." : "Verify / Sync"}</span>
-                    </motion.button>
-                    <button
-                      onClick={handleRemoveExtensionFolder}
-                      className="h-7 px-2.5 rounded-lg text-[11px] font-semibold text-rose-400 hover:text-rose-300 hover:bg-rose-500/10 border border-rose-500/20 inline-flex items-center gap-1.5 cursor-pointer transition-colors"
-                      title="Remove extension folder from user AppData"
-                    >
-                      <Trash2 className="w-3 h-3" />
-                      <span>Remove Extension Folder</span>
-                    </button>
-                  </div>
-                </div>
-
-                {extFeedback && (
-                  <div className="px-3 py-2 rounded-lg text-[11px] font-medium bg-white/[0.04] text-white border border-white/10">
-                    {extFeedback}
-                  </div>
-                )}
-
-                <div className="p-2.5 rounded-lg bg-[var(--bg-chassis)] border border-[var(--border-subtle)] space-y-1">
-                  <div className="text-[10px] text-[var(--text-muted)] flex justify-between items-center">
-                    <span>Target Extension Directory:</span>
-                    <span className="text-emerald-400 font-medium">User Protected</span>
-                  </div>
-                  <code className="text-xs font-mono text-[var(--accent)] block truncate">
-                    {extFolderPath || "%AppData%\\EDM\\extension"}
-                  </code>
-                </div>
-
-                {/* Direct Unpacked Extensions Page Launches */}
-                <div className="space-y-2 pt-1">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[11px] font-semibold text-[var(--text-secondary)]">Offline Bundled Extension:</span>
-                    <span className="text-[10px] text-[var(--text-muted)]">No external servers or Chrome Web Store required</span>
-                  </div>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <button
-                      onClick={() => {
-                        setExtModalBrowser("chrome");
-                        setIsExtModalOpen(true);
-                      }}
-                      className="px-2.5 py-1 rounded bg-[var(--bg-chassis)] hover:bg-[var(--bg-card)] border border-[var(--border-subtle)] text-[11px] font-medium cursor-pointer inline-flex items-center gap-1.5"
-                    >
-                      <span>Install in Chrome</span>
-                    </button>
-                    <button
-                      onClick={() => {
-                        setExtModalBrowser("edge");
-                        setIsExtModalOpen(true);
-                      }}
-                      className="px-2.5 py-1 rounded bg-[var(--bg-chassis)] hover:bg-[var(--bg-card)] border border-[var(--border-subtle)] text-[11px] font-medium cursor-pointer inline-flex items-center gap-1.5"
-                    >
-                      <span>Install in Edge</span>
-                    </button>
-                    <button
-                      onClick={() => {
-                        setExtModalBrowser("brave");
-                        setIsExtModalOpen(true);
-                      }}
-                      className="px-2.5 py-1 rounded bg-[var(--bg-chassis)] hover:bg-[var(--bg-card)] border border-[var(--border-subtle)] text-[11px] font-medium cursor-pointer inline-flex items-center gap-1.5"
-                    >
-                      <span>Install in Brave</span>
-                    </button>
-                    <button
-                      onClick={() => tauriOpenBrowserUrl("firefox", "http://127.0.0.1:14370/firefox.xpi")}
-                      className="px-2.5 py-1 rounded bg-[var(--bg-chassis)] hover:bg-[var(--bg-card)] border border-[var(--border-subtle)] text-[11px] font-medium cursor-pointer text-orange-400 inline-flex items-center gap-1.5"
-                    >
-                      <span>Firefox (.xpi)</span>
-                    </button>
-                  </div>
-                  <div className="flex items-center gap-2 pt-1 flex-wrap text-[10.5px] text-[var(--text-muted)]">
-                    <span>Manage browser extensions page directly:</span>
-                    <button
-                      onClick={() => tauriOpenBrowserUrl("chrome", "chrome://extensions")}
-                      className="hover:text-[var(--text-primary)] underline cursor-pointer"
-                    >
-                      chrome://extensions
-                    </button>
-                    <span>&bull;</span>
-                    <button
-                      onClick={() => tauriOpenBrowserUrl("edge", "edge://extensions")}
-                      className="hover:text-[var(--text-primary)] underline cursor-pointer"
-                    >
-                      edge://extensions
-                    </button>
-                    <span>&bull;</span>
-                    <button
-                      onClick={() => tauriOpenBrowserUrl("brave", "brave://extensions")}
-                      className="hover:text-[var(--text-primary)] underline cursor-pointer"
-                    >
-                      brave://extensions
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              {/* Native Messaging & Wake Diagnostics Card */}
-              <div className="card-3d p-4 rounded-xl space-y-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <ShieldCheck className="w-4 h-4 text-[var(--accent)]" />
-                      <label className="text-xs font-semibold text-[var(--text-primary)] block">
-                        Browser Host &amp; Extension Wake Diagnostics
-                      </label>
-                    </div>
-                    <p className="text-[11px] text-[var(--text-muted)] mt-0.5">
-                      Inspects HKCU manifests, helper binary paths, and allowed extension IDs across all installed browsers.
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <motion.button
-                      whileTap={{ scale: 0.95 }}
-                      onClick={handleCopyDiag}
-                      className="btn-3d h-7 px-2.5 rounded-lg text-[11px] font-semibold inline-flex items-center gap-1.5 cursor-pointer"
-                    >
-                      {copiedDiag ? (
-                        <>
-                          <Check className="w-3 h-3 text-emerald-400" />
-                          <span className="text-emerald-400">Copied!</span>
-                        </>
-                      ) : (
-                        <>
-                          <Copy className="w-3 h-3" />
-                          <span>Copy Report</span>
-                        </>
-                      )}
-                    </motion.button>
-                    <motion.button
-                      whileTap={{ scale: 0.95 }}
-                      onClick={handleRepairDiag}
-                      disabled={isRepairingDiag}
-                      className="btn-3d btn-primary h-7 px-2.5 rounded-lg text-[11px] font-semibold inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-                    >
-                      <Wrench className="w-3 h-3" />
-                      <span>{isRepairingDiag ? "Repairing..." : "Repair Registration"}</span>
-                    </motion.button>
-                  </div>
-                </div>
-
-                {diagFeedback && (
-                  <div className="px-3 py-2 rounded-lg text-[11px] font-medium bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
-                    {diagFeedback}
-                  </div>
-                )}
-
-                {/* Core Status Summary */}
-                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 pt-1">
-                  <div className="p-2.5 rounded-lg bg-[var(--bg-chassis)] border border-[var(--border-subtle)] space-y-1">
-                    <span className="text-[10px] text-[var(--text-muted)] block">Helper Binary</span>
-                    <span className={`text-[11px] font-mono font-semibold ${diagReport?.helper_path ? "text-emerald-400" : "text-rose-400"}`}>
-                      {diagReport?.helper_path ? "Detected" : "Missing"}
-                    </span>
-                  </div>
-                  <div className="p-2.5 rounded-lg bg-[var(--bg-chassis)] border border-[var(--border-subtle)] space-y-1">
-                    <span className="text-[10px] text-[var(--text-muted)] block">App Executable</span>
-                    <span className={`text-[11px] font-mono font-semibold ${diagReport?.app_installed ? "text-emerald-400" : "text-rose-400"}`}>
-                      {diagReport?.app_installed ? "Ready" : "Missing"}
-                    </span>
-                  </div>
-                  <div className="p-2.5 rounded-lg bg-[var(--bg-chassis)] border border-[var(--border-subtle)] space-y-1">
-                    <span className="text-[10px] text-[var(--text-muted)] block">Cold-Start Timing</span>
-                    <span className="text-[11px] font-mono font-semibold text-cyan-400">
-                      {diagReport?.time_to_ready_ms != null ? `${diagReport.time_to_ready_ms} ms` : "Instant / Idle"}
-                    </span>
-                  </div>
-                  <div className="p-2.5 rounded-lg bg-[var(--bg-chassis)] border border-[var(--border-subtle)] space-y-1">
-                    <span className="text-[10px] text-[var(--text-muted)] block">Last Wake Status</span>
-                    <span className={`text-[11px] font-mono font-semibold ${diagReport?.last_wake_error ? "text-rose-400" : "text-emerald-400"}`}>
-                      {diagReport?.last_wake_error ? "Failed" : "Healthy (ACK)"}
-                    </span>
-                  </div>
-                  <div className="p-2.5 rounded-lg bg-[var(--bg-chassis)] border border-[var(--border-subtle)] space-y-1 col-span-2 sm:col-span-1">
-                    <span className="text-[10px] text-[var(--text-muted)] block">Connected Ext ID</span>
-                    <span className={`text-[11px] font-mono font-semibold truncate block ${diagReport?.connected_extension_id ? "text-cyan-400" : "text-[var(--text-muted)]"}`} title={diagReport?.connected_extension_id || "None"}>
-                      {diagReport?.connected_extension_id || "None (Waiting)"}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Per-Browser Status Cards */}
-                <div className="space-y-2 pt-1">
-                  <div className="text-[11px] font-semibold text-[var(--text-secondary)] uppercase tracking-wider">
-                    Browser Registration Checks (HKCU)
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    {(diagReport?.browsers || [
-                      { browser: "edge", helper_registered: true, manifest_exists: true, helper_exists: true, origin_matched: true },
-                      { browser: "chrome", helper_registered: true, manifest_exists: true, helper_exists: true, origin_matched: true },
-                      { browser: "brave", helper_registered: true, manifest_exists: true, helper_exists: true, origin_matched: true },
-                      { browser: "firefox", helper_registered: true, manifest_exists: true, helper_exists: true, origin_matched: true }
-                    ]).map((b: any) => {
-                      const allOk = b.helper_registered && b.manifest_exists && b.helper_exists;
-                      return (
-                        <div key={b.browser} className="p-2.5 rounded-lg bg-[var(--bg-chassis)] border border-[var(--border-subtle)] space-y-2">
-                          <div className="flex items-center justify-between">
-                            <span className="text-xs font-bold text-[var(--text-primary)] uppercase">{b.browser}</span>
-                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold ${allOk ? "bg-emerald-500/15 text-emerald-400 border border-emerald-500/30" : "bg-rose-500/15 text-rose-400 border border-rose-500/30"}`}>
-                              {allOk ? "REGISTERED" : "UNREGISTERED"}
-                            </span>
-                          </div>
-                          <div className="text-[10.5px] space-y-1 font-mono text-[var(--text-muted)]">
-                            <div className="flex justify-between">
-                              <span>Registry Key:</span>
-                              <span className={b.helper_registered ? "text-emerald-400" : "text-rose-400"}>{b.helper_registered ? "Present" : "Missing"}</span>
-                            </div>
-                            <div className="flex justify-between">
-                              <span>Manifest File:</span>
-                              <span className={b.manifest_exists ? "text-emerald-400" : "text-rose-400"}>{b.manifest_exists ? "Exists" : "Missing"}</span>
-                            </div>
-                            <div className="flex justify-between">
-                              <span>Host Binary:</span>
-                              <span className={b.helper_exists ? "text-emerald-400" : "text-rose-400"}>{b.helper_exists ? "Valid" : "Missing"}</span>
-                            </div>
-                            <div className="flex justify-between">
-                              <span>Origin ID:</span>
-                              <span className={b.origin_matched ? "text-emerald-400" : "text-amber-400"}>{b.origin_matched ? "Matched" : "Unmatched"}</span>
-                            </div>
-                            {b.connected_extension_id && (
-                              <div className="flex justify-between">
-                                <span>Connected ID:</span>
-                                <span className="text-cyan-400 truncate max-w-[150px]" title={b.connected_extension_id}>{b.connected_extension_id}</span>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
                   </div>
                 </div>
               </div>
@@ -2010,27 +1608,6 @@ export default function SettingsPage({
                     </div>
                   </div>
                 )}
-              </div>
-            </section>
-          )}
-
-          {/* ═════════════════════════════════════════════════════════
-              SECTION: QUEUES & SCHEDULE
-          ══════════════════════════════════════════════════════════ */}
-          {isSectionVisible("queues") && (
-            <section id="section-queues" className="space-y-4 pt-1 pb-8 border-b border-[var(--border-subtle)]">
-              <div>
-                <div className="flex items-center gap-2">
-                  <Layers className="w-5 h-5 text-[var(--accent)]" />
-                  <h2 className="text-base font-bold text-[var(--text-primary)]">Queue Scheduler &amp; Rules</h2>
-                </div>
-                <p className="text-xs text-[var(--text-muted)] mt-1">
-                  Automate download windows, bandwidth caps, and post-task actions per queue.
-                </p>
-              </div>
-
-              <div className="rounded-xl overflow-hidden border border-[var(--border-subtle)] bg-[var(--bg-card)] shadow-sm">
-                <QueuesView embedded={true} />
               </div>
             </section>
           )}
@@ -2570,15 +2147,6 @@ export default function SettingsPage({
                     : 0}{" "}
                   TCP Threads
                 </span>
-                {onInspectDownload && (
-                  <button
-                    onClick={onInspectDownload}
-                    className="ml-1 text-xs text-[var(--accent)] hover:underline hidden sm:flex items-center gap-1 cursor-pointer shrink-0"
-                  >
-                    <span>View Segments</span>
-                    <ExternalLink className="w-3 h-3" />
-                  </button>
-                )}
               </div>
             ) : (
               <span className="text-[var(--text-muted)] truncate">No download selected</span>
@@ -2608,12 +2176,6 @@ export default function SettingsPage({
           </div>
         </div>
       </footer>
-
-      <ExtensionInstallModal
-        isOpen={isExtModalOpen}
-        onClose={() => setIsExtModalOpen(false)}
-        initialBrowserId={extModalBrowser}
-      />
     </div>
   );
 }

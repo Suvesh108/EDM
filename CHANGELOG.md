@@ -2,6 +2,37 @@
 
 All notable changes to Edge Download Manager (EDM) are documented in this file.
 
+## [v0.0.8] - 2026-11-06
+
+### 🚀 Adaptive Engine V2.0, Media Extraction, Security Hardening & Optimization Overhaul
+
+#### 1. Adaptive Engine V2.0 & High-Throughput Concurrency
+- **Win32 `seek_write` Concurrency**: Upgraded `FileWriter` to use non-blocking reader locks on Windows, allowing concurrent parallel workers to write into the pre-allocated `.edmpart` file simultaneously without lock serialization.
+- **BBR Congestion Probing & PSP Plateau Locking**: Dynamic scaling algorithm with probe-up, plateau detection, and automatic connection lock to prevent network saturation and packet loss.
+- **Micro-Chunk Tail Sniping**: Sub-segments under 5 MiB in the final download phase are dynamically sniped by idle workers to eliminate long trailing tail bottlenecks.
+- **Explicit File Handle Lifecycle**: Added `FileWriter::close()` to explicitly release OS file handles on cancellation, pause, and failure.
+
+#### 2. Universal Media & YouTube Integration
+- **Host yt-dlp Prioritization & Node.js JS Runtime**: Automatically detects host Node.js binary and passes `--js-runtimes node` to yt-dlp to solve YouTube InnerTube JavaScript challenges.
+- **Native In-Process Fallback**: Provides seamless fallback to in-process cipher-free Android InnerTube extractor when yt-dlp is unavailable.
+- **YouTube Quick Download Pill**: Injected directly next to YouTube's Subscribe button with dropdown quality selection (1080p, 720p, 480p) and audio-only extraction (MP3 / M4A).
+- **SPA Navigation & Slow-Mount Resiliency**: Retries and mutation awareness for YouTube's dynamic client-side DOM rendering.
+
+#### 3. Enterprise Security Hardening
+- **Constant-Time Token Verification**: Timing-attack resilient WebSocket token verification powered by `subtle::ConstantTimeEq`.
+- **SSRF & Metadata Defense**: Blocks IPv4 link-local (`169.254.0.0/16`) and AWS/cloud IPv6 IMDS endpoints (`[fd00:ec2::254]`), in addition to domain and loopback filters.
+- **Safe Explorer Argument Quoting**: Hardened folder and file opening with Windows `raw_arg` syntax `/select,"<path>"` protecting against paths with spaces or special characters.
+
+#### 4. Low-Memory & High-Performance Optimization
+- **Active Task Eviction**: `state.tasks` map automatically purges completed, cancelled, and failed tasks, releasing telemetry buffers from memory.
+- **Throttled SQLite Persistence**: Progress updates to SQLite are batched to 1.5-second intervals or 1 MiB deltas, reducing disk I/O and mutex contention by over 80%.
+- **Throttled WebSocket Emission**: Real-time progress updates are throttled to 250ms, eliminating `tokio::spawn` task storms.
+- **Extension Memory Management**: Enforces FIFO-capped intercept maps (max 500 entries) and purges detected media cache on tab removal and navigation.
+
+#### 5. Extension Tactile UI & Connection Resilience
+- **Dual-Bevel 3D Design System**: Popup and options redesigned to match the desktop application's visual density, custom scrollbars, and tactile buttons.
+- **Connection Recovery Lifecycle**: Non-destructive token caching, automatic loopback HTTP handshake, and Native Messaging Host wake fallback.
+
 ## [v0.0.7] - 2026-11-02
 
 ### 🚀 Store-Ready Extension & One-Click "Add to <browser>" Flow

@@ -15,6 +15,8 @@ let currentTheme = "dark";
 let currentPalette = "blue";
 const pendingAcks = /* @__PURE__ */ new Map();
 const popupPorts = /* @__PURE__ */ new Set();
+const previousTaskStates = /* @__PURE__ */ new Map();
+const detectedMediaByTab = /* @__PURE__ */ new Map();
 let activeHandoffsCount = 0;
 let isWaking = false;
 let pendingReload = false;
@@ -382,13 +384,48 @@ async function connectWebSocket() {
           }
           const epoch = data.epoch || "";
           const rev = typeof data.rev === "number" ? data.rev : 0;
+          let tasksUpdated = false;
           if (epoch !== currentEpoch) {
             currentEpoch = epoch;
             currentRev = rev;
-            if (Array.isArray(data.tasks)) latestTasks = data.tasks;
+            if (Array.isArray(data.tasks)) {
+              latestTasks = data.tasks;
+              tasksUpdated = true;
+            }
           } else if (rev >= currentRev) {
             currentRev = rev;
-            if (Array.isArray(data.tasks)) latestTasks = data.tasks;
+            if (Array.isArray(data.tasks)) {
+              latestTasks = data.tasks;
+              tasksUpdated = true;
+            }
+          }
+          if (tasksUpdated && Array.isArray(latestTasks)) {
+            chrome.storage.local.get(["edm_notify_complete", "edm_notify_fail"]).then((st) => {
+              const notifyComplete = st.edm_notify_complete !== false;
+              const notifyFail = st.edm_notify_fail !== false;
+              for (const t of latestTasks) {
+                const prev = previousTaskStates.get(t.id);
+                if (prev && prev !== t.state) {
+                  const state = t.state;
+                  if (state === "completed" && notifyComplete) {
+                    chrome.notifications.create({
+                      type: "basic",
+                      iconUrl: "logo.png",
+                      title: "EDM: Download Completed",
+                      message: `${t.filename || "File"} has finished downloading.`
+                    });
+                  } else if ((state === "error" || state === "failed") && notifyFail) {
+                    chrome.notifications.create({
+                      type: "basic",
+                      iconUrl: "logo.png",
+                      title: "EDM: Download Error",
+                      message: `${t.filename || "File"} failed or was interrupted.`
+                    });
+                  }
+                }
+                previousTaskStates.set(t.id, t.state);
+              }
+            });
           }
           if (data.theme) {
             currentTheme = data.theme;
@@ -429,6 +466,19 @@ async function connectWebSocket() {
               ok: !!data.ok,
               id: data.id,
               error: data.error
+            });
+          }
+          break;
+        }
+        case "media_variants": {
+          if (data.req_id && pendingAcks.has(data.req_id)) {
+            const pending = pendingAcks.get(data.req_id);
+            clearTimeout(pending.timer);
+            pendingAcks.delete(data.req_id);
+            pending.resolve({
+              ok: true,
+              variants: data.variants || [],
+              is_drm: !!data.is_drm
             });
           }
           break;
@@ -474,8 +524,10 @@ async function connectWebSocket() {
     stopPingInterval();
     notifyPopupPorts();
     console.debug("[EDM Extension] WebSocket connection closed.");
-    if (!wasConnected) {
-      await chrome.storage.local.remove("edm_ws_token");
+    const store = await chrome.storage.local.get("edm_auto_reconnect");
+    if (store && store.edm_auto_reconnect === false) {
+      console.debug("[EDM Extension] Auto-reconnect disabled in settings. Staying idle.");
+      return;
     }
     const st = await checkIfEdmRunning();
     if (st.running) {
@@ -540,6 +592,10 @@ async function sendWsTaskAction(id, action, delete_file, req_id) {
     latestTasks = latestTasks.filter((t) => t.id !== id);
     notifyPopupPorts();
   }
+  if (connectionStatus === "asleep" || !socket || socket.readyState !== WebSocket.OPEN) {
+    const wake = await wakeDesktop(false);
+    if (!wake.ok) return { ok: false, error: wake.error || "EDM Desktop is not running" };
+  }
   return new Promise((resolve) => {
     if (!socket || socket.readyState !== WebSocket.OPEN) {
       return resolve({ ok: false, error: "WebSocket not connected to EDM Desktop" });
@@ -547,7 +603,7 @@ async function sendWsTaskAction(id, action, delete_file, req_id) {
     const timer = setTimeout(() => {
       pendingAcks.delete(rId);
       resolve({ ok: false, error: "Action timeout waiting for EDM Desktop" });
-    }, 3e3);
+    }, 4e3);
     pendingAcks.set(rId, { resolve, timer });
     socket.send(
       JSON.stringify({
@@ -556,6 +612,58 @@ async function sendWsTaskAction(id, action, delete_file, req_id) {
         id,
         action,
         delete_file: !!delete_file
+      })
+    );
+  });
+}
+async function sendWsRefreshTask(taskId, newUrl, reqId) {
+  const rId = reqId || crypto.randomUUID();
+  if (connectionStatus === "asleep" || !socket || socket.readyState !== WebSocket.OPEN) {
+    const wake = await wakeDesktop(false);
+    if (!wake.ok) return { ok: false, error: wake.error || "EDM Desktop is not running" };
+  }
+  return new Promise((resolve) => {
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      return resolve({ ok: false, error: "WebSocket not connected to EDM Desktop" });
+    }
+    const timer = setTimeout(() => {
+      pendingAcks.delete(rId);
+      resolve({ ok: false, error: "Refresh task timeout waiting for EDM Desktop" });
+    }, 5e3);
+    pendingAcks.set(rId, { resolve, timer });
+    socket.send(
+      JSON.stringify({
+        type: "refresh_task",
+        req_id: rId,
+        task_id: taskId,
+        new_url: newUrl
+      })
+    );
+  });
+}
+async function sendWsProbeMedia(url, reqId) {
+  const rId = reqId || crypto.randomUUID();
+  if (connectionStatus === "asleep" || !socket || socket.readyState !== WebSocket.OPEN) {
+    const wake = await wakeDesktop(false);
+    if (!wake.ok) return { ok: false, error: wake.error || "EDM Desktop is not running" };
+  }
+  return new Promise((resolve) => {
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      return resolve({ ok: false, error: "WebSocket not connected to EDM Desktop" });
+    }
+    const timer = setTimeout(() => {
+      pendingAcks.delete(rId);
+      resolve({ ok: false, error: "Probe timeout waiting for EDM Desktop" });
+    }, 12e3);
+    pendingAcks.set(rId, {
+      resolve: (ack) => resolve(ack),
+      timer
+    });
+    socket.send(
+      JSON.stringify({
+        type: "probe_media",
+        req_id: rId,
+        media_url: url
       })
     );
   });
@@ -586,6 +694,14 @@ chrome.runtime.onConnect.addListener((port) => {
       } else if (msg.type === "create_task") {
         const req_id = msg.req_id || crypto.randomUUID();
         sendWsCreateTask({ ...msg, req_id }).then((ack) => {
+          try {
+            port.postMessage({ type: "ack", ...ack, req_id });
+          } catch {
+          }
+        });
+      } else if (msg.type === "refresh_task") {
+        const req_id = msg.req_id || crypto.randomUUID();
+        sendWsRefreshTask(msg.task_id, msg.new_url, req_id).then((ack) => {
           try {
             port.postMessage({ type: "ack", ...ack, req_id });
           } catch {
@@ -648,10 +764,22 @@ chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
   }
   activeHandoffsCount++;
   (async () => {
-    const store = await chrome.storage.local.get("edm_interception_enabled");
+    const store = await chrome.storage.local.get([
+      "edm_interception_enabled",
+      "edm_min_size",
+      "edm_excluded_domains",
+      "edm_file_extensions"
+    ]);
     if (store && store.edm_interception_enabled === false) {
       safeSuggest();
       return;
+    }
+    const minSizeKb = Number(store?.edm_min_size || 0);
+    if (minSizeKb > 0 && typeof item.fileSize === "number" && item.fileSize > 0) {
+      if (item.fileSize < minSizeKb * 1024) {
+        safeSuggest();
+        return;
+      }
     }
     if (bypassNextDownload) {
       bypassNextDownload = false;
@@ -662,6 +790,19 @@ chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
     if (!url || !url.startsWith("http://") && !url.startsWith("https://")) {
       safeSuggest();
       return;
+    }
+    if (store?.edm_excluded_domains) {
+      try {
+        const host = new URL(url).hostname.toLowerCase();
+        const domains = String(store.edm_excluded_domains).split("\n").map((d) => d.trim().toLowerCase()).filter(Boolean);
+        if (domains.some(
+          (d) => host === d || host.endsWith("." + d) || d.startsWith("*.") && host.endsWith(d.slice(1))
+        )) {
+          safeSuggest();
+          return;
+        }
+      } catch {
+      }
     }
     handledDownloadIds.add(item.id);
     if (handledDownloadIds.size > 500) {
@@ -683,6 +824,16 @@ chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
           filename = decodeURIComponent(last);
         }
       } catch {
+      }
+    }
+    if (store?.edm_file_extensions && filename) {
+      const allowed = String(store.edm_file_extensions).split(",").map((x) => x.trim().toLowerCase().replace(/^\./, "")).filter(Boolean);
+      if (allowed.length > 0) {
+        const fileExt = filename.split(".").pop()?.toLowerCase() || "";
+        if (!allowed.includes(fileExt)) {
+          safeSuggest();
+          return;
+        }
       }
     }
     let cookies = [];
@@ -876,6 +1027,58 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     });
     return true;
   }
+  if (msg.action === "refresh_task") {
+    sendWsRefreshTask(msg.task_id, msg.new_url).then((res) => {
+      sendResponse(res);
+    });
+    return true;
+  }
+  if (msg.action === "create_task") {
+    const req_id = crypto.randomUUID();
+    sendWsCreateTask({
+      type: "create_task",
+      req_id,
+      url: msg.url,
+      filename: msg.filename,
+      referrer: msg.referrer,
+      user_agent: navigator.userAgent,
+      cookies: []
+    }).then((res) => {
+      sendResponse(res);
+    });
+    return true;
+  }
+  if (msg.action === "media_detected") {
+    const tabId = _sender.tab?.id;
+    if (tabId && Array.isArray(msg.media)) {
+      detectedMediaByTab.set(tabId, msg.media);
+      try {
+        chrome.action.setBadgeText({
+          text: msg.media.length > 0 ? String(msg.media.length) : "",
+          tabId
+        });
+        chrome.action.setBadgeBackgroundColor({
+          color: "#2563eb",
+          tabId
+        });
+      } catch {
+      }
+    }
+    sendResponse({ ok: true });
+    return true;
+  }
+  if (msg.action === "get_detected_media") {
+    const tabId = msg.tabId;
+    const media = (tabId ? detectedMediaByTab.get(tabId) : []) || [];
+    sendResponse({ ok: true, media });
+    return true;
+  }
+  if (msg.action === "probe_media") {
+    sendWsProbeMedia(msg.url).then((res) => {
+      sendResponse(res);
+    });
+    return true;
+  }
   if (msg.action === "check_update") {
     try {
       chrome.runtime.requestUpdateCheck((status, details) => {
@@ -886,7 +1089,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             ok: true,
             status,
             // "throttled" | "no_update" | "update_available"
-            version: details?.version || "0.0.5"
+            version: details?.version || chrome.runtime.getManifest().version
           });
         }
       });
@@ -905,6 +1108,18 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       }
     }, 150);
     return true;
+  }
+});
+chrome.tabs.onRemoved.addListener((tabId) => {
+  detectedMediaByTab.delete(tabId);
+});
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.url) {
+    detectedMediaByTab.delete(tabId);
+    try {
+      chrome.action.setBadgeText({ text: "", tabId });
+    } catch {
+    }
   }
 });
 chrome.runtime.onInstalled.addListener((details) => {
@@ -926,6 +1141,18 @@ chrome.runtime.onInstalled.addListener((details) => {
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   const targetUrl = info.linkUrl || info.srcUrl;
   if (!targetUrl) return;
+  if (!socket || socket.readyState !== WebSocket.OPEN || connectionStatus !== "connected") {
+    const wakeRes = await wakeDesktop(false);
+    if (!wakeRes.ok) {
+      chrome.notifications.create({
+        type: "basic",
+        iconUrl: "logo.png",
+        title: "EDM Offline",
+        message: "Could not wake EDM Desktop to handle context menu download."
+      });
+      return;
+    }
+  }
   const req_id = crypto.randomUUID();
   let cookies = [];
   try {

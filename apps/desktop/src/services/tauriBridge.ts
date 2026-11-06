@@ -835,9 +835,60 @@ export async function tauriSetSpeedLimit(bytesPerSec: number | null): Promise<vo
   if (isTauri()) {
     try {
       const { invoke } = await import("@tauri-apps/api/core");
-      await invoke("set_speed_limit", { bytesPerSec });
+      await invoke("set_speed_limit", { bytesPerSec, bytes_per_sec: bytesPerSec });
     } catch (err) {
       console.warn("Tauri set_speed_limit failed:", err);
+    }
+  }
+}
+
+export async function tauriSelectDownloadDirectory(defaultPath?: string): Promise<string | null> {
+  if (isTauri()) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return await invoke<string | null>("select_download_directory", {
+        defaultPath: defaultPath || null,
+        default_path: defaultPath || null,
+      });
+    } catch (err) {
+      console.warn("Tauri select_download_directory failed:", err);
+    }
+  }
+  return null;
+}
+
+export interface DiskFreeSpace {
+  drive: string;
+  total_bytes: number;
+  free_bytes: number;
+  pct_free: number;
+}
+
+export async function tauriGetDiskFreeSpace(path?: string): Promise<DiskFreeSpace | null> {
+  if (isTauri()) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return await invoke<DiskFreeSpace>("get_disk_free_space", {
+        path: path || null,
+      });
+    } catch (err) {
+      console.warn("Tauri get_disk_free_space failed:", err);
+    }
+  }
+  return null;
+}
+
+export async function tauriSetAutostart(enable: boolean): Promise<void> {
+  if (isTauri()) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      if (enable) {
+        await invoke("plugin:autostart|enable");
+      } else {
+        await invoke("plugin:autostart|disable");
+      }
+    } catch (err) {
+      console.warn("Tauri autostart toggle failed:", err);
     }
   }
 }

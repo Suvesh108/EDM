@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import {
   Download,
   Pause,
@@ -20,10 +20,10 @@ import {
   LayoutList,
   LayoutGrid,
   ChevronDown,
+  ChevronUp,
   Video,
   Cpu,
   Wifi,
-  ExternalLink,
   Compass,
   Gauge,
   Activity,
@@ -32,6 +32,8 @@ import {
   Settings,
   Minus,
   RotateCcw,
+  Copy,
+  Check,
 } from "lucide-react";
 import SettingsPage from "./components/SettingsPage";
 import SetupWizard from "./components/SetupWizard";
@@ -54,6 +56,7 @@ import {
   tauriStartDownload,
   tauriPauseDownload,
   tauriResumeDownload,
+  tauriCancelDownload,
   tauriDeleteDownload,
   tauriOpenFile,
   tauriOpenFolder,
@@ -68,6 +71,7 @@ import {
   tauriIsWizardCompleted,
   tauriCheckDuplicateDownload,
   tauriSetSpeedLimit,
+  tauriSelectDownloadDirectory,
 } from "./services/tauriBridge";
 
 export interface WorkerInfo {
@@ -212,6 +216,172 @@ export default function App() {
   const [isVideoModalOpen, setIsVideoModalOpen] = useState(false);
   const [isLimiterOpen, setIsLimiterOpen] = useState(false);
   const [speedLimit, setSpeedLimit] = useState<string>("Unlimited");
+  const notifiedCompletedIdsRef = useRef<Set<string>>(new Set());
+
+  const handleSpeedLimitChange = (val: string) => {
+    setSpeedLimit(val);
+    const limitMap: Record<string, number | null> = {
+      "Unlimited": null,
+      "50 MB/s": 50 * 1024 * 1024,
+      "20 MB/s": 20 * 1024 * 1024,
+      "10 MB/s": 10 * 1024 * 1024,
+      "5 MB/s": 5 * 1024 * 1024,
+      "2 MB/s": 2 * 1024 * 1024,
+      "500 KB/s": 500 * 1024,
+    };
+    tauriSetSpeedLimit(limitMap[val] ?? null);
+  };
+
+  const triggerCompletionNotification = (filename: string, id: string) => {
+    if (notifiedCompletedIdsRef.current.has(id)) return;
+    notifiedCompletedIdsRef.current.add(id);
+
+    // Audio chime if enabled
+    if (settings.notifications.playSound) {
+      try {
+        const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+        if (AudioCtx) {
+          const ctx = new AudioCtx();
+          const now = ctx.currentTime;
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+
+          osc.type = "sine";
+          osc.frequency.setValueAtTime(587.33, now); // D5
+          osc.frequency.exponentialRampToValueAtTime(880, now + 0.12); // A5
+
+          gain.gain.setValueAtTime(0.08, now);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.45);
+
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+
+          osc.start(now);
+          osc.stop(now + 0.45);
+        }
+      } catch {}
+    }
+
+    // OS Notification banner if enabled
+    if (settings.notifications.downloadCompleted && typeof window !== "undefined" && "Notification" in window) {
+      try {
+        if (Notification.permission === "granted") {
+          new Notification("EDM Download Complete", {
+            body: `${filename} has finished downloading.`,
+          });
+        } else if (Notification.permission !== "denied") {
+          Notification.requestPermission().then((perm) => {
+            if (perm === "granted") {
+              new Notification("EDM Download Complete", {
+                body: `${filename} has finished downloading.`,
+              });
+            }
+          });
+        }
+      } catch {}
+    }
+  };
+
+  type SortField = "dateAdded" | "name" | "size" | "progress" | "speed";
+  const [sortField, setSortField] = useState<SortField>("dateAdded");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
+
+  const [addCategory, setAddCategory] = useState<string>("auto");
+  const [addConnections, setAddConnections] = useState<number>(settings.downloads.maxConnectionsPerFile || 8);
+  const [addSaveDir, setAddSaveDir] = useState<string>("");
+
+  interface ContextMenuState {
+    visible: boolean;
+    x: number;
+    y: number;
+    item: DownloadItem | null;
+  }
+  const [contextMenu, setContextMenu] = useState<ContextMenuState>({
+    visible: false,
+    x: 0,
+    y: 0,
+    item: null,
+  });
+  const [copiedContextMenuId, setCopiedContextMenuId] = useState<string | null>(null);
+
+  const handleSort = (field: SortField) => {
+    if (sortField === field) {
+      setSortDirection((prev) => (prev === "asc" ? "desc" : "asc"));
+    } else {
+      setSortField(field);
+      setSortDirection("asc");
+    }
+  };
+
+  const handleContextMenu = (e: React.MouseEvent, item: DownloadItem) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setSelectedDownload(item);
+    if (!selectedIds.includes(item.id)) {
+      setSelectedIds([item.id]);
+    }
+    setContextMenu({
+      visible: true,
+      x: Math.min(e.clientX, window.innerWidth - 230),
+      y: Math.min(e.clientY, window.innerHeight - 270),
+      item,
+    });
+  };
+
+  const handleBrowseAddDir = async () => {
+    const chosen = await tauriSelectDownloadDirectory(addSaveDir || settings.downloads.defaultDirectory);
+    if (chosen) setAddSaveDir(chosen);
+  };
+
+  const resumeSelected = () => {
+    if (selectedIds.length === 0) return;
+    selectedIds.forEach((id) => {
+      const item = downloads.find((d) => d.id === id);
+      if (item && item.state === "paused") {
+        tauriResumeDownload(id);
+      }
+    });
+    setDownloads((prev) =>
+      prev.map((d) => (selectedIds.includes(d.id) && d.state === "paused" ? { ...d, state: "downloading" } : d))
+    );
+  };
+
+  const pauseSelected = () => {
+    if (selectedIds.length === 0) return;
+    selectedIds.forEach((id) => {
+      const item = downloads.find((d) => d.id === id);
+      if (item && item.state === "downloading") {
+        tauriPauseDownload(id);
+      }
+    });
+    setDownloads((prev) =>
+      prev.map((d) => (selectedIds.includes(d.id) && d.state === "downloading" ? { ...d, state: "paused", speed: "0 B/s" } : d))
+    );
+  };
+
+  const stopSelected = () => {
+    if (selectedIds.length === 0) return;
+    selectedIds.forEach((id) => {
+      const item = downloads.find((d) => d.id === id);
+      if (item && item.state === "downloading") {
+        tauriCancelDownload(id);
+      }
+    });
+    setDownloads((prev) =>
+      prev.map((d) => (selectedIds.includes(d.id) && d.state === "downloading" ? { ...d, state: "paused", speed: "0 B/s" } : d))
+    );
+  };
+
+  useEffect(() => {
+    const handleCloseContext = () => {
+      setContextMenu((prev) => (prev.visible ? { ...prev, visible: false } : prev));
+    };
+    window.addEventListener("click", handleCloseContext);
+    return () => {
+      window.removeEventListener("click", handleCloseContext);
+    };
+  }, []);
+
   const [searchQuery, setSearchQuery] = useState("");
   const [urlInput, setUrlInput] = useState("");
   const [fileNameInput, setFileNameInput] = useState("");
@@ -219,7 +389,33 @@ export default function App() {
     if (typeof window !== "undefined") {
       try {
         const saved = localStorage.getItem("edm_downloads_v1");
-        if (saved) return JSON.parse(saved);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed)) {
+            return parsed.map((item: DownloadItem) => {
+              if (item.state === "completed" || item.progress >= 100 || (item.sizeTotal > 0 && item.sizeDone >= item.sizeTotal)) {
+                const total = item.sizeTotal || item.sizeDone || 0;
+                return {
+                  ...item,
+                  state: "completed" as const,
+                  progress: 100,
+                  sizeDone: total,
+                  sizeTotal: total,
+                  speed: "0 B/s",
+                  eta: "Finished",
+                  connections: 0,
+                  workers: item.workers?.map((w) => ({
+                    ...w,
+                    pos: w.end,
+                    speed: "0 B/s",
+                    status: "Chunk verified • Complete",
+                  })),
+                };
+              }
+              return item;
+            });
+          }
+        }
       } catch (e) {
         console.warn("Failed to read edm_downloads_v1", e);
       }
@@ -295,7 +491,14 @@ export default function App() {
             }
           })();
 
-          const itemState = stateMap[b.state] || (existing?.state || "downloading");
+          const rawState = stateMap[b.state] || (existing?.state || "downloading");
+          const isCompleted = rawState === "completed" || pct >= 100 || (total > 0 && done >= total);
+          if (existing && existing.state !== "completed" && isCompleted) {
+            triggerCompletionNotification(b.filename, b.id);
+          }
+          const itemState = isCompleted ? ("completed" as const) : rawState;
+          const finalTotal = isCompleted && total === 0 && done > 0 ? done : total;
+          const finalDone = isCompleted && finalTotal > 0 ? finalTotal : done;
           const isDownloading = itemState === "downloading";
           const currentBps = isDownloading ? speedVal : 0;
           const history = existing?.speedHistory
@@ -303,7 +506,7 @@ export default function App() {
             : [currentBps];
 
           // Single source of truth: preserve live smoothed ETA and connections from telemetry
-          const eta = itemState === "completed"
+          const eta = isCompleted
             ? "Finished"
             : itemState === "failed"
             ? (b.error_msg || "Download Failed")
@@ -313,22 +516,31 @@ export default function App() {
                 ? existing.eta
                 : (b.eta_seconds ? formatEta(b.eta_seconds) : "Calculating..."));
 
+          const finalWorkers = isCompleted && existing?.workers
+            ? existing.workers.map((w) => ({
+                ...w,
+                pos: w.end,
+                speed: "0 B/s",
+                status: "Chunk verified • Complete",
+              }))
+            : existing?.workers;
+
           return {
             id: b.id,
             name: b.filename,
             category,
-            sizeTotal: total,
-            sizeDone: done,
+            sizeTotal: finalTotal,
+            sizeDone: finalDone,
             error_msg: b.error_msg || existing?.error_msg || null,
             speed: isDownloading ? (existing?.speed || formatSpeed(speedVal)) : "0 B/s",
             eta,
             connections: isDownloading ? (existing?.connections || b.connections || 1) : 0,
             state: itemState,
-            progress: itemState === "completed" ? 100 : pct,
+            progress: isCompleted ? 100 : pct,
             url: b.url,
             domain,
             dateAdded: b.created_at ? new Date(b.created_at).toLocaleDateString() : (existing?.dateAdded || "Today"),
-            workers: existing?.workers,
+            workers: finalWorkers,
             speedHistory: history,
             peakSpeedBps: Math.max(existing?.peakSpeedBps || 0, speedVal),
           };
@@ -478,11 +690,14 @@ export default function App() {
       if (!proceed) return;
     }
 
-    const conns = settings.downloads.maxConnectionsPerFile || 8;
+    const conns = addConnections || settings.downloads.maxConnectionsPerFile || 8;
+    const targetDir = addSaveDir.trim() || settings.downloads.defaultDirectory;
+    const finalCategory = addCategory !== "auto" ? (addCategory as DownloadItem["category"]) : categoryName;
+
     const backendRes = await tauriStartDownload({
       url: urlInput,
       filename: name,
-      saveDir: settings.downloads.defaultDirectory,
+      saveDir: targetDir,
       maxConnections: conns,
     });
 
@@ -505,7 +720,7 @@ export default function App() {
     const newItem: DownloadItem = {
       id: backendRes.id || Date.now().toString(),
       name,
-      category: categoryName,
+      category: finalCategory,
       sizeTotal: realTotal,
       sizeDone: 0,
       speed: "0 B/s",
@@ -527,6 +742,7 @@ export default function App() {
     setUrlInput("");
     setFileNameInput("");
     setProbeResult(null);
+    setAddCategory("auto");
   };
 
   const downloadsRef = useRef(downloads);
@@ -576,10 +792,12 @@ export default function App() {
           }
 
           if (telem) {
-            const sizeDone = telem.downloaded_bytes;
+            const rawDone = telem.downloaded_bytes;
             const sizeTotal = telem.total_bytes || task.sizeTotal;
-            const progress = sizeTotal > 0 ? Math.min(100, Math.floor((sizeDone / sizeTotal) * 100)) : 0;
-            const isFinished = progress >= 100;
+            const rawProgress = sizeTotal > 0 ? Math.min(100, Math.floor((rawDone / sizeTotal) * 100)) : 0;
+            const isFinished = rawProgress >= 100 || (sizeTotal > 0 && rawDone >= sizeTotal);
+            const sizeDone = isFinished && sizeTotal > 0 ? sizeTotal : rawDone;
+            const progress = isFinished ? 100 : rawProgress;
             const now = Date.now();
 
             smooth.elapsedSeconds += 0.25;
@@ -639,13 +857,13 @@ export default function App() {
                 idx: w.idx,
                 start: w.start,
                 end: w.end,
-                pos: w.pos,
-                speed: formatSpeed(Math.floor(w.speed_bps / 8)),
+                pos: isFinished ? w.end : w.pos,
+                speed: isFinished ? "0 B/s" : formatSpeed(Math.floor(w.speed_bps / 8)),
                 status:
-                  w.status === "downloading"
-                    ? "Receiving chunk (HTTP 206)..."
-                    : w.status === "completed"
+                  isFinished || w.status === "completed"
                     ? "Chunk verified • Complete"
+                    : w.status === "downloading"
+                    ? "Receiving chunk (HTTP 206)..."
                     : w.status === "stalled"
                     ? "Worker stalled • Reconnecting..."
                     : w.status === "connecting"
@@ -781,19 +999,45 @@ export default function App() {
     setSelectedDownload(null);
   };
 
-  const filteredDownloads = downloads.filter((item) => {
-    const matchesSearch =
-      item.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      item.domain.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesStatus =
-      statusFilter === "all" ||
-      (statusFilter === "downloading" && item.state === "downloading") ||
-      (statusFilter === "completed" && item.state === "completed") ||
-      (statusFilter === "paused" && item.state === "paused") ||
-      (statusFilter === "queued" && item.state === "queued");
-    const matchesCategory = categoryFilter === "all" || item.category.toLowerCase() === categoryFilter.toLowerCase();
-    return matchesSearch && matchesStatus && matchesCategory;
-  });
+  const filteredDownloads = useMemo(() => {
+    const q = searchQuery.toLowerCase().trim();
+    const list = downloads.filter((item) => {
+      const matchesSearch =
+        !q ||
+        item.name.toLowerCase().includes(q) ||
+        item.domain.toLowerCase().includes(q) ||
+        item.category.toLowerCase().includes(q) ||
+        item.url.toLowerCase().includes(q);
+      const matchesStatus =
+        statusFilter === "all" ||
+        (statusFilter === "downloading" && item.state === "downloading") ||
+        (statusFilter === "completed" && item.state === "completed") ||
+        (statusFilter === "paused" && item.state === "paused") ||
+        (statusFilter === "queued" && item.state === "queued") ||
+        (statusFilter === "failed" && item.state === "failed");
+      const matchesCategory =
+        categoryFilter === "all" || item.category.toLowerCase() === categoryFilter.toLowerCase();
+      return matchesSearch && matchesStatus && matchesCategory;
+    });
+
+    return [...list].sort((a, b) => {
+      let cmp = 0;
+      if (sortField === "name") {
+        cmp = a.name.localeCompare(b.name);
+      } else if (sortField === "size") {
+        cmp = (a.sizeTotal || a.sizeDone) - (b.sizeTotal || b.sizeDone);
+      } else if (sortField === "progress") {
+        cmp = a.progress - b.progress;
+      } else if (sortField === "speed") {
+        const speedA = a.state === "downloading" ? (a.peakSpeedBps || 0) : 0;
+        const speedB = b.state === "downloading" ? (b.peakSpeedBps || 0) : 0;
+        cmp = speedA - speedB;
+      } else {
+        cmp = a.id.localeCompare(b.id);
+      }
+      return sortDirection === "asc" ? cmp : -cmp;
+    });
+  }, [downloads, searchQuery, statusFilter, categoryFilter, sortField, sortDirection]);
 
   const activeSelectedDownload = downloads.find((d) => d.id === selectedDownload?.id) || selectedDownload;
 
@@ -818,6 +1062,7 @@ export default function App() {
         return;
       }
       if (e.key === "Escape") {
+        setContextMenu((p) => ({ ...p, visible: false }));
         if (activeView === "settings") {
           setActiveView("downloads");
           return;
@@ -863,7 +1108,11 @@ export default function App() {
       if (e.key === "Enter") {
         if (activeSelectedDownload) {
           e.preventDefault();
-          setIsInspectorOpen(true);
+          if (activeSelectedDownload.state === "completed" || activeSelectedDownload.progress >= 100) {
+            tauriOpenFile(activeSelectedDownload.id);
+          } else {
+            setIsInspectorOpen(true);
+          }
         }
         return;
       }
@@ -1019,13 +1268,11 @@ export default function App() {
                 window.location.hash = "";
               }}
               speedLimit={speedLimit}
-              onSpeedLimitChange={setSpeedLimit}
+              onSpeedLimitChange={handleSpeedLimitChange}
               selectedDownload={activeSelectedDownload}
-              onInspectDownload={() => setIsInspectorOpen(true)}
               totalSpeed={totalSpeedDisplay}
               activeThreads={totalActiveThreads}
               totalSessionBytes={totalSessionBytes}
-              onOpenWizard={() => setIsWizardOpen(true)}
             />
           </motion.div>
         ) : (
@@ -1045,6 +1292,11 @@ export default function App() {
             onMouseDown={(e) => {
               if (e.button === 0 && !(e.target as HTMLElement).closest("button, input, select, a, textarea")) {
                 tauriStartDragging();
+              }
+            }}
+            onDoubleClick={(e) => {
+              if (!(e.target as HTMLElement).closest("button, input, select, a, textarea")) {
+                tauriWindowToggleMaximize();
               }
             }}
             className="h-14 px-3 sm:px-4 header-3d flex items-center justify-between gap-2 shrink-0 z-20 select-none relative"
@@ -1069,21 +1321,7 @@ export default function App() {
               <div className="flex items-center gap-1 shrink-0 pl-2 border-l border-[var(--border-subtle)]">
                 <button
                   disabled={selectedIds.length === 0}
-                  onClick={() => {
-                    if (selectedIds.length === 0) return;
-                    setDownloads((prev) =>
-                      prev.map((d) =>
-                        selectedIds.includes(d.id) && d.state === "paused"
-                          ? { ...d, state: "downloading", speed: "12.4 MB/s" }
-                          : d
-                      )
-                    );
-                    setSelectedDownload((prev) =>
-                      prev && selectedIds.includes(prev.id) && prev.state === "paused"
-                        ? { ...prev, state: "downloading", speed: "12.4 MB/s" }
-                        : prev
-                    );
-                  }}
+                  onClick={resumeSelected}
                   className={`btn-3d h-8 w-8 rounded-lg flex items-center justify-center shrink-0 transition-all ${
                     selectedIds.length > 0
                       ? "text-[var(--text-secondary)] hover:text-emerald-400 cursor-pointer"
@@ -1096,21 +1334,7 @@ export default function App() {
 
                 <button
                   disabled={selectedIds.length === 0}
-                  onClick={() => {
-                    if (selectedIds.length === 0) return;
-                    setDownloads((prev) =>
-                      prev.map((d) =>
-                        selectedIds.includes(d.id) && d.state === "downloading"
-                          ? { ...d, state: "paused", speed: "0 B/s" }
-                          : d
-                      )
-                    );
-                    setSelectedDownload((prev) =>
-                      prev && selectedIds.includes(prev.id) && prev.state === "downloading"
-                        ? { ...prev, state: "paused", speed: "0 B/s" }
-                        : prev
-                    );
-                  }}
+                  onClick={pauseSelected}
                   className={`btn-3d h-8 w-8 rounded-lg flex items-center justify-center shrink-0 transition-all ${
                     selectedIds.length > 0
                       ? "text-[var(--text-secondary)] hover:text-amber-400 cursor-pointer"
@@ -1123,11 +1347,7 @@ export default function App() {
 
                 <button
                   disabled={selectedIds.length === 0}
-                  onClick={() => {
-                    if (selectedIds.length === 0) return;
-                    setDownloads((prev) => prev.map((d) => ({ ...d, state: "paused", speed: "0 B/s" })));
-                    setSelectedDownload((prev) => (prev ? { ...prev, state: "paused", speed: "0 B/s" } : null));
-                  }}
+                  onClick={stopSelected}
                   className={`btn-3d h-8 w-8 rounded-lg flex items-center justify-center shrink-0 transition-all ${
                     selectedIds.length > 0
                       ? "text-[var(--text-secondary)] hover:text-rose-400 cursor-pointer"
@@ -1140,10 +1360,7 @@ export default function App() {
 
                 <button
                   disabled={selectedIds.length === 0}
-                  onClick={() => {
-                    if (selectedIds.length === 0) return;
-                    deleteSelected();
-                  }}
+                  onClick={deleteSelected}
                   className={`btn-3d h-8 w-8 rounded-lg flex items-center justify-center shrink-0 transition-all ${
                     selectedIds.length > 0
                       ? "text-[var(--text-secondary)] hover:text-rose-400 cursor-pointer"
@@ -1158,13 +1375,14 @@ export default function App() {
 
             {/* Center: Command Deck Pinned to Exact Geometric Center */}
             <div className="absolute left-1/2 -translate-x-1/2 flex items-center gap-1.5 sm:gap-2 shrink-0 z-10" data-tauri-drag-region>
-              {/* Primary Action: Add URL (Icon Only) */}
+              {/* Primary Action: Add URL */}
               <button
                 onClick={() => setIsAddModalOpen(true)}
-                className="btn-primary-3d h-8 w-8 rounded-lg flex items-center justify-center shrink-0 cursor-pointer"
+                className="btn-primary-3d h-8 px-2.5 rounded-lg flex items-center gap-1.5 shrink-0 cursor-pointer text-xs font-semibold"
                 title="Add Download URL (Ctrl+N)"
               >
                 <Plus className="w-4 h-4 stroke-[2.5]" />
+                <span className="hidden sm:inline">Add URL</span>
               </button>
 
               {/* Search Box */}
@@ -1172,11 +1390,19 @@ export default function App() {
                 <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--text-muted)] pointer-events-none icon-3d" />
                 <input
                   type="text"
-                  placeholder="Search..."
+                  placeholder="Filter tasks..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-28 sm:w-36 md:w-48 focus:w-36 sm:focus:w-56 h-8 pl-8 pr-2.5 rounded-lg text-xs input-3d text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none transition-all truncate"
+                  className="w-28 sm:w-44 md:w-56 focus:w-36 sm:focus:w-52 md:focus:w-64 h-8 pl-8 pr-7 rounded-lg text-xs input-3d text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none transition-all truncate"
                 />
+                {searchQuery && (
+                  <button
+                    onClick={() => setSearchQuery("")}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                )}
               </div>
 
               {/* View Mode Toggle */}
@@ -1272,6 +1498,12 @@ export default function App() {
                   count: downloads.filter((d) => d.state === "queued").length,
                   icon: Clock,
                 },
+                {
+                  id: "failed",
+                  label: "Failed / Expired",
+                  count: downloads.filter((d) => d.state === "failed").length,
+                  icon: RotateCcw,
+                },
               ].map((item) => {
                 const Icon = item.icon;
                 const isActive = statusFilter === item.id;
@@ -1280,13 +1512,19 @@ export default function App() {
                     key={item.id}
                     onClick={() => setStatusFilter(item.id)}
                     title={`${item.label} (${item.count})`}
-                    className={`w-8 h-8 mx-auto flex items-center justify-center rounded-lg text-xs font-medium transition-all duration-150 cursor-pointer ${
+                    className={`w-8 h-8 mx-auto relative flex items-center justify-center rounded-lg text-xs font-medium transition-all duration-150 cursor-pointer ${
                       isActive
                         ? "sidebar-item-active-3d text-[var(--accent)] font-semibold shadow-sm"
                         : "sidebar-item-inactive-3d text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
                     }`}
                   >
                     <Icon className="w-3.5 h-3.5" />
+                    {item.count > 0 && item.id === "downloading" && (
+                      <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-[var(--accent)] animate-pulse" />
+                    )}
+                    {item.count > 0 && item.id === "failed" && (
+                      <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-rose-400" />
+                    )}
                   </button>
                 );
               })}
@@ -1306,6 +1544,7 @@ export default function App() {
                     icon: getCategoryLucideIcon(c.name),
                     color: getCategoryColor(c.name),
                   })),
+                { id: "other", label: "Other", icon: FileText, color: "text-zinc-400" },
               ].map((item) => {
                 const Icon = item.icon;
                 const isActive = categoryFilter === item.id;
@@ -1352,10 +1591,42 @@ export default function App() {
                         className="edm-checkbox transition-transform active:scale-90"
                       />
                     </th>
-                    <th className="py-2 px-3 w-[38%] xl:w-[42%] min-w-[180px] whitespace-nowrap">File Name</th>
-                    <th className="py-2 px-2 w-20 sm:w-24 text-center whitespace-nowrap">Size</th>
-                    <th className="py-2 px-3 w-[28%] md:w-[26%] xl:w-[24%] min-w-[200px] whitespace-nowrap">Progress</th>
-                    <th className="py-2 px-2 w-24 md:w-28 text-center whitespace-nowrap">Transfer Rate</th>
+                    <th
+                      onClick={() => handleSort("name")}
+                      className="py-2 px-3 w-[38%] xl:w-[42%] min-w-[180px] whitespace-nowrap cursor-pointer select-none hover:text-[var(--text-primary)]"
+                    >
+                      <div className="flex items-center gap-1">
+                        <span>File Name</span>
+                        {sortField === "name" && (sortDirection === "asc" ? <ChevronUp className="w-3 h-3 text-[var(--accent)]" /> : <ChevronDown className="w-3 h-3 text-[var(--accent)]" />)}
+                      </div>
+                    </th>
+                    <th
+                      onClick={() => handleSort("size")}
+                      className="py-2 px-2 w-20 sm:w-24 text-center whitespace-nowrap cursor-pointer select-none hover:text-[var(--text-primary)]"
+                    >
+                      <div className="flex items-center justify-center gap-1">
+                        <span>Size</span>
+                        {sortField === "size" && (sortDirection === "asc" ? <ChevronUp className="w-3 h-3 text-[var(--accent)]" /> : <ChevronDown className="w-3 h-3 text-[var(--accent)]" />)}
+                      </div>
+                    </th>
+                    <th
+                      onClick={() => handleSort("progress")}
+                      className="py-2 px-3 w-[28%] md:w-[26%] xl:w-[24%] min-w-[200px] whitespace-nowrap cursor-pointer select-none hover:text-[var(--text-primary)]"
+                    >
+                      <div className="flex items-center gap-1">
+                        <span>Progress</span>
+                        {sortField === "progress" && (sortDirection === "asc" ? <ChevronUp className="w-3 h-3 text-[var(--accent)]" /> : <ChevronDown className="w-3 h-3 text-[var(--accent)]" />)}
+                      </div>
+                    </th>
+                    <th
+                      onClick={() => handleSort("speed")}
+                      className="py-2 px-2 w-24 md:w-28 text-center whitespace-nowrap cursor-pointer select-none hover:text-[var(--text-primary)]"
+                    >
+                      <div className="flex items-center justify-center gap-1">
+                        <span>Transfer Rate</span>
+                        {sortField === "speed" && (sortDirection === "asc" ? <ChevronUp className="w-3 h-3 text-[var(--accent)]" /> : <ChevronDown className="w-3 h-3 text-[var(--accent)]" />)}
+                      </div>
+                    </th>
                     <th className="py-2 px-2 w-24 sm:w-28 text-center whitespace-nowrap">Actions</th>
                   </tr>
                 </thead>
@@ -1366,7 +1637,14 @@ export default function App() {
                       <tr
                         key={item.id}
                         onClick={() => selectRow(item)}
-                        onDoubleClick={() => setIsInspectorOpen(true)}
+                        onDoubleClick={() => {
+                          if (item.state === "completed" || item.progress >= 100) {
+                            tauriOpenFile(item.id);
+                          } else {
+                            setIsInspectorOpen(true);
+                          }
+                        }}
+                        onContextMenu={(e) => handleContextMenu(e, item)}
                         className={`group cursor-pointer table-row-3d ${
                           isSelected ? "table-row-selected-3d text-[var(--text-primary)]" : ""
                         }`}
@@ -1405,11 +1683,11 @@ export default function App() {
                           <div className="space-y-1 min-w-0">
                             <div className="flex items-center justify-between text-[11px] font-mono tabular-nums min-w-0 gap-1.5">
                               <div className="flex items-center gap-1.5 shrink-0">
-                                {getStatusBadge(item.state, item.error_msg)}
-                                <span className="font-semibold text-[var(--accent)]">{item.progress}%</span>
+                                {getStatusBadge(item.state === "completed" || item.progress >= 100 ? "completed" : item.state, item.error_msg)}
+                                <span className="font-semibold text-[var(--accent)]">{item.state === "completed" || item.progress >= 100 ? 100 : item.progress}%</span>
                               </div>
                               <span className="text-[var(--text-muted)] truncate text-right">
-                                {formatBytes(item.sizeDone)} / {formatBytes(item.sizeTotal)}
+                                {formatBytes(item.state === "completed" || item.progress >= 100 ? (item.sizeTotal || item.sizeDone) : item.sizeDone)} / {formatBytes(item.sizeTotal || item.sizeDone)}
                               </span>
                             </div>
                             {/* Plain Seamless Progress Bar (100% smooth, zero vertical lines) */}
@@ -1417,7 +1695,7 @@ export default function App() {
                               <div
                                 className="h-full rounded bg-[var(--accent)] transition-[width] duration-200 ease-linear"
                                 style={{
-                                  width: `${item.state === "completed" ? 100 : Math.min(100, Math.max(0, item.progress))}%`,
+                                  width: `${item.state === "completed" || item.progress >= 100 ? 100 : Math.min(100, Math.max(0, item.progress))}%`,
                                   opacity: item.state === "paused" ? 0.6 : 1,
                                 }}
                               />
@@ -1513,6 +1791,19 @@ export default function App() {
                             >
                               <FolderOpen className="w-3.5 h-3.5 icon-3d" />
                             </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                tauriDeleteDownload(item.id);
+                                setDownloads((prev) => prev.filter((d) => d.id !== item.id));
+                                setSelectedIds((prev) => prev.filter((id) => id !== item.id));
+                                if (selectedDownload?.id === item.id) setSelectedDownload(null);
+                              }}
+                              className="p-1.5 rounded-lg btn-3d text-[var(--text-muted)] hover:text-rose-400 hover:bg-rose-500/10 cursor-pointer transition-all"
+                              title="Delete Task"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
                           </div>
                         </td>
                       </tr>
@@ -1553,7 +1844,14 @@ export default function App() {
                   <div
                     key={item.id}
                     onClick={() => selectRow(item)}
-                    onDoubleClick={() => setIsInspectorOpen(true)}
+                    onDoubleClick={() => {
+                      if (item.state === "completed" || item.progress >= 100) {
+                        tauriOpenFile(item.id);
+                      } else {
+                        setIsInspectorOpen(true);
+                      }
+                    }}
+                    onContextMenu={(e) => handleContextMenu(e, item)}
                     className={`card-3d p-3.5 rounded-xl flex flex-col gap-2.5 cursor-pointer select-none transition-all ${
                       selectedIds.includes(item.id) ? "border-[var(--accent)] ring-1 ring-[var(--accent-glow)]" : ""
                     }`}
@@ -1587,15 +1885,37 @@ export default function App() {
                       <div className="text-[var(--text-muted)]">•</div>
                       <div>{formatBytes(item.sizeTotal)}</div>
                       <div className="text-[var(--text-muted)]">•</div>
-                      <div className="text-emerald-400">HTTP 206</div>
+                      <div
+                        className={
+                          item.state === "completed" || item.progress >= 100
+                            ? "text-emerald-400 font-semibold"
+                            : item.state === "downloading"
+                            ? "text-cyan-400 font-semibold"
+                            : item.state === "paused"
+                            ? "text-amber-400 font-semibold"
+                            : item.state === "failed"
+                            ? "text-rose-400 font-semibold"
+                            : "text-[var(--text-muted)]"
+                        }
+                      >
+                        {item.state === "completed" || item.progress >= 100
+                          ? "Verified"
+                          : item.state === "downloading"
+                          ? (item.connections > 1 ? "HTTP 206" : "HTTP 200")
+                          : item.state === "paused"
+                          ? "Paused"
+                          : item.state === "failed"
+                          ? "Failed"
+                          : "Queued"}
+                      </div>
                     </div>
 
                     {/* Progress & Micro-Segment Track */}
                     <div className="space-y-1">
                       <div className="flex justify-between text-xs font-mono tabular-nums">
-                        <span className="font-semibold text-[var(--accent)]">{item.progress}%</span>
+                        <span className="font-semibold text-[var(--accent)]">{item.state === "completed" || item.progress >= 100 ? 100 : item.progress}%</span>
                         <span className="text-[var(--text-muted)]">
-                          {formatBytes(item.sizeDone)} / {formatBytes(item.sizeTotal)}
+                          {formatBytes(item.state === "completed" || item.progress >= 100 ? (item.sizeTotal || item.sizeDone) : item.sizeDone)} / {formatBytes(item.sizeTotal || item.sizeDone)}
                         </span>
                       </div>
                       {/* Plain Seamless Progress Bar (100% smooth, zero vertical lines) */}
@@ -1603,7 +1923,7 @@ export default function App() {
                         <div
                           className="h-full rounded bg-[var(--accent)] transition-[width] duration-200 ease-linear"
                           style={{
-                            width: `${item.state === "completed" ? 100 : Math.min(100, Math.max(0, item.progress))}%`,
+                            width: `${item.state === "completed" || item.progress >= 100 ? 100 : Math.min(100, Math.max(0, item.progress))}%`,
                             opacity: item.state === "paused" ? 0.6 : 1,
                           }}
                         />
@@ -1701,6 +2021,19 @@ export default function App() {
                         >
                           <FolderOpen className="w-4 h-4" />
                         </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            tauriDeleteDownload(item.id);
+                            setDownloads((prev) => prev.filter((d) => d.id !== item.id));
+                            setSelectedIds((prev) => prev.filter((id) => id !== item.id));
+                            if (selectedDownload?.id === item.id) setSelectedDownload(null);
+                          }}
+                          className="btn-3d p-1.5 rounded-md text-[var(--text-muted)] hover:text-rose-400 hover:bg-rose-500/10 cursor-pointer transition-all"
+                          title="Delete Task"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -1781,18 +2114,8 @@ export default function App() {
                       whileHover={{ x: 2 }}
                       whileTap={{ scale: 0.97 }}
                       onClick={() => {
-                        setSpeedLimit(val);
+                        handleSpeedLimitChange(val);
                         setIsLimiterOpen(false);
-                        const limitMap: Record<string, number | null> = {
-                          "Unlimited": null,
-                          "50 MB/s": 50 * 1024 * 1024,
-                          "20 MB/s": 20 * 1024 * 1024,
-                          "10 MB/s": 10 * 1024 * 1024,
-                          "5 MB/s": 5 * 1024 * 1024,
-                          "2 MB/s": 2 * 1024 * 1024,
-                          "500 KB/s": 500 * 1024,
-                        };
-                        tauriSetSpeedLimit(limitMap[val] ?? null);
                       }}
                       className={`w-full text-left px-2.5 py-1 text-xs rounded-lg transition-colors cursor-pointer ${
                         speedLimit === val
@@ -1828,13 +2151,6 @@ export default function App() {
                     : 0}{" "}
                   TCP Threads
                 </span>
-                <button
-                  onClick={() => setIsInspectorOpen(true)}
-                  className="ml-1 text-xs text-[var(--accent)] hover:underline hidden sm:flex items-center gap-1 cursor-pointer shrink-0"
-                >
-                  <span>View Segments</span>
-                  <ExternalLink className="w-3 h-3" />
-                </button>
               </div>
             ) : (
               <span className="text-[var(--text-muted)] truncate">No download selected</span>
@@ -1982,7 +2298,7 @@ export default function App() {
                           Start positions and download progress by connections:
                         </span>
                         <span className="font-mono tabular-nums font-bold text-[var(--accent)] text-xs">
-                          {activeSelectedDownload.progress}% ({formatBytes(activeSelectedDownload.sizeDone)} / {formatBytes(activeSelectedDownload.sizeTotal)})
+                          {activeSelectedDownload.state === "completed" || activeSelectedDownload.progress >= 100 ? 100 : activeSelectedDownload.progress}% ({formatBytes(activeSelectedDownload.state === "completed" || activeSelectedDownload.progress >= 100 ? (activeSelectedDownload.sizeTotal || activeSelectedDownload.sizeDone) : activeSelectedDownload.sizeDone)} / {formatBytes(activeSelectedDownload.sizeTotal || activeSelectedDownload.sizeDone)})
                         </span>
                       </div>
                       {/* Continuous Visual Progress Bar (Zero Seams & Merged Spans) */}
@@ -2259,7 +2575,12 @@ export default function App() {
               <div className="grid grid-cols-2 gap-3 text-xs">
                 <div>
                   <label className="block font-medium text-[var(--text-secondary)] mb-1">Category</label>
-                  <select className="w-full px-3 py-2 rounded-lg input-3d text-[var(--text-primary)] focus:outline-none cursor-pointer">
+                  <select
+                    value={addCategory}
+                    onChange={(e) => setAddCategory(e.target.value)}
+                    className="w-full px-3 py-2 rounded-lg input-3d text-[var(--text-primary)] focus:outline-none cursor-pointer"
+                  >
+                    <option value="auto">Auto-Detect from Extension</option>
                     {settings.categories
                       .filter((c) => c.enabled)
                       .map((c) => (
@@ -2272,7 +2593,8 @@ export default function App() {
                 <div>
                   <label className="block font-medium text-[var(--text-secondary)] mb-1">TCP Worker Streams</label>
                   <select
-                    defaultValue={String(settings.downloads.maxConnectionsPerFile || 8)}
+                    value={String(addConnections)}
+                    onChange={(e) => setAddConnections(Number(e.target.value))}
                     className="w-full px-3 py-2 rounded-lg input-3d text-[var(--text-primary)] focus:outline-none cursor-pointer"
                   >
                     <option value="8">8 Parallel Streams (Recommended)</option>
@@ -2290,11 +2612,17 @@ export default function App() {
                 <div className="flex gap-2">
                   <input
                     type="text"
-                    defaultValue={settings.downloads.defaultDirectory}
+                    value={addSaveDir || settings.downloads.defaultDirectory}
+                    onChange={(e) => setAddSaveDir(e.target.value)}
                     className="flex-1 px-3 py-2 rounded-lg text-xs input-3d text-[var(--text-primary)] font-mono"
                   />
-                  <button className="btn-3d px-3 py-2 rounded-lg text-xs font-medium text-[var(--text-secondary)] cursor-pointer">
-                    Browse...
+                  <button
+                    type="button"
+                    onClick={handleBrowseAddDir}
+                    className="btn-3d px-3 py-2 rounded-lg text-xs font-semibold text-[var(--text-secondary)] hover:text-[var(--text-primary)] cursor-pointer inline-flex items-center gap-1.5 shrink-0"
+                  >
+                    <FolderOpen className="w-3.5 h-3.5 text-[var(--accent)]" />
+                    <span>Browse...</span>
                   </button>
                 </div>
               </div>
@@ -2431,6 +2759,126 @@ export default function App() {
       />
 
       <PowerCountdownModal />
+
+      {/* Modern Context Menu */}
+      {contextMenu.visible && contextMenu.item && (
+        <div
+          style={{ top: `${contextMenu.y}px`, left: `${contextMenu.x}px` }}
+          className="fixed z-50 w-56 rounded-xl panel-3d shadow-2xl p-1.5 text-xs border border-[var(--border-subtle)] bg-[var(--bg-card)]/95 backdrop-blur-md select-none"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="px-2.5 py-1.5 border-b border-[var(--border-subtle)]/70 text-[10px] font-mono font-medium text-[var(--text-muted)] truncate">
+            {contextMenu.item.name}
+          </div>
+          <div className="py-1 space-y-0.5">
+            {contextMenu.item.state === "completed" || contextMenu.item.progress >= 100 ? (
+              <button
+                onClick={() => {
+                  tauriOpenFile(contextMenu.item!.id);
+                  setContextMenu((p) => ({ ...p, visible: false }));
+                }}
+                className="w-full px-2.5 py-1.5 rounded-lg flex items-center gap-2 hover:bg-white/5 text-[var(--text-primary)] cursor-pointer transition-colors"
+              >
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Open File</span>
+              </button>
+            ) : contextMenu.item.state === "downloading" ? (
+              <button
+                onClick={() => {
+                  tauriPauseDownload(contextMenu.item!.id);
+                  setDownloads((prev) =>
+                    prev.map((d) => (d.id === contextMenu.item!.id ? { ...d, state: "paused", speed: "0 B/s" } : d))
+                  );
+                  setContextMenu((p) => ({ ...p, visible: false }));
+                }}
+                className="w-full px-2.5 py-1.5 rounded-lg flex items-center gap-2 hover:bg-white/5 text-amber-400 cursor-pointer transition-colors"
+              >
+                <Pause className="w-3.5 h-3.5" />
+                <span>Pause Download</span>
+              </button>
+            ) : (
+              <button
+                onClick={() => {
+                  tauriResumeDownload(contextMenu.item!.id);
+                  setDownloads((prev) =>
+                    prev.map((d) => (d.id === contextMenu.item!.id ? { ...d, state: "downloading" } : d))
+                  );
+                  setContextMenu((p) => ({ ...p, visible: false }));
+                }}
+                className="w-full px-2.5 py-1.5 rounded-lg flex items-center gap-2 hover:bg-white/5 text-emerald-400 cursor-pointer transition-colors"
+              >
+                <Play className="w-3.5 h-3.5" />
+                <span>Resume Download</span>
+              </button>
+            )}
+
+            <button
+              onClick={() => {
+                tauriOpenFolder(contextMenu.item!.id);
+                setContextMenu((p) => ({ ...p, visible: false }));
+              }}
+              className="w-full px-2.5 py-1.5 rounded-lg flex items-center gap-2 hover:bg-white/5 text-[var(--text-secondary)] hover:text-[var(--text-primary)] cursor-pointer transition-colors"
+            >
+              <FolderOpen className="w-3.5 h-3.5 text-[var(--accent)]" />
+              <span>Open Folder</span>
+            </button>
+
+            <button
+              onClick={() => {
+                navigator.clipboard.writeText(contextMenu.item!.url);
+                setCopiedContextMenuId(contextMenu.item!.id);
+                setTimeout(() => {
+                  setCopiedContextMenuId(null);
+                  setContextMenu((p) => ({ ...p, visible: false }));
+                }, 800);
+              }}
+              className="w-full px-2.5 py-1.5 rounded-lg flex items-center gap-2 hover:bg-white/5 text-[var(--text-secondary)] hover:text-[var(--text-primary)] cursor-pointer transition-colors"
+            >
+              {copiedContextMenuId === contextMenu.item.id ? (
+                <>
+                  <Check className="w-3.5 h-3.5 text-emerald-400" />
+                  <span className="text-emerald-400">Copied URL!</span>
+                </>
+              ) : (
+                <>
+                  <Copy className="w-3.5 h-3.5" />
+                  <span>Copy Source URL</span>
+                </>
+              )}
+            </button>
+
+            <button
+              onClick={() => {
+                setSelectedDownload(contextMenu.item);
+                setIsInspectorOpen(true);
+                setContextMenu((p) => ({ ...p, visible: false }));
+              }}
+              className="w-full px-2.5 py-1.5 rounded-lg flex items-center gap-2 hover:bg-white/5 text-[var(--text-secondary)] hover:text-[var(--text-primary)] cursor-pointer transition-colors"
+            >
+              <Layers className="w-3.5 h-3.5 text-[var(--accent)]" />
+              <span>Inspect Streams</span>
+              <span className="ml-auto text-[10px] text-[var(--text-muted)] font-mono">Enter</span>
+            </button>
+          </div>
+
+          <div className="pt-1 mt-1 border-t border-[var(--border-subtle)]/70">
+            <button
+              onClick={() => {
+                tauriDeleteDownload(contextMenu.item!.id);
+                setDownloads((prev) => prev.filter((d) => d.id !== contextMenu.item!.id));
+                setSelectedIds((prev) => prev.filter((id) => id !== contextMenu.item!.id));
+                if (selectedDownload?.id === contextMenu.item!.id) setSelectedDownload(null);
+                setContextMenu((p) => ({ ...p, visible: false }));
+              }}
+              className="w-full px-2.5 py-1.5 rounded-lg flex items-center gap-2 text-rose-400 hover:bg-rose-500/10 cursor-pointer transition-colors"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Delete from List</span>
+              <span className="ml-auto text-[10px] text-rose-400/70 font-mono">Del</span>
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

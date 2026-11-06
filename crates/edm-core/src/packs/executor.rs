@@ -321,7 +321,23 @@ impl PackExecutor {
         telemetry_cb: Option<TelemetryCallback>,
     ) -> Result<PathBuf, String> {
         use super::extractors::{SiteExtractor, VimeoExtractor, YouTubeExtractor};
+        use super::ytdlp::YtDlpPack;
 
+        // 1. If yt-dlp is available on host system, prioritize it!
+        // Solves YouTube JavaScript challenges and merges high-res video + audio streams cleanly.
+        if YtDlpPack::locate_binary().is_some() {
+            match YtDlpPack::download_media(task.clone(), telemetry_cb.clone()).await {
+                Ok(path) => return Ok(path),
+                Err(err) => {
+                    tracing::warn!(
+                        "yt-dlp execution error: {}. Falling back to in-process extractors...",
+                        err
+                    );
+                }
+            }
+        }
+
+        // 2. In-process extractor fallback
         let yt = YouTubeExtractor;
         let vimeo = VimeoExtractor;
 
@@ -330,7 +346,7 @@ impl PackExecutor {
         } else if vimeo.can_extract(&task.url) {
             vimeo.extract(&task.url, &client).await?
         } else {
-            return Err("Site not supported by EDM yet".to_string());
+            return Err("Site not supported by EDM yet. Please install yt-dlp for universal media extraction.".to_string());
         };
 
         let stream_url = extracted
@@ -474,6 +490,6 @@ impl PackExecutor {
         _telemetry_cb: Option<TelemetryCallback>,
     ) -> Result<PathBuf, String> {
         let _ed2k = Ed2kPack::parse_link(&task.url)?;
-        Err("eD2k/Kad P2P protocol transfer is not supported in EDM v0.0.7. Please use HTTP/HTTPS, FTP, HLS/DASH, or BitTorrent/Magnet.".into())
+        Err("eD2k/Kad P2P protocol transfer is not supported in EDM v0.0.8. Please use HTTP/HTTPS, FTP, HLS/DASH, or BitTorrent/Magnet.".into())
     }
 }

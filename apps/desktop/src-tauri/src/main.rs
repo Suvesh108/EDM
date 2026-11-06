@@ -412,14 +412,28 @@ fn validate_url_security(raw_url: &str) -> Result<url::Url, String> {
         ));
     }
 
-    if let Some(host) = parsed.host_str() {
-        let h = host.to_lowercase();
-        if h == "169.254.169.254"
-            || h == "metadata.google.internal"
-            || h == "instance-data"
-            || h.ends_with(".internal")
-        {
-            return Err("Security violation: Blocked access to cloud metadata endpoint".into());
+    if let Some(host) = parsed.host() {
+        match host {
+            url::Host::Ipv4(ip) => {
+                if ip.is_link_local() {
+                    return Err("Security violation: Blocked access to link-local address".into());
+                }
+            }
+            url::Host::Ipv6(ip) => {
+                if ip.is_unicast_link_local() || format!("{}", ip) == "fd00:ec2::254" {
+                    return Err("Security violation: Blocked access to IPv6 metadata or link-local address".into());
+                }
+            }
+            url::Host::Domain(domain) => {
+                let h = domain.to_lowercase();
+                if h == "169.254.169.254"
+                    || h == "metadata.google.internal"
+                    || h == "instance-data"
+                    || h.ends_with(".internal")
+                {
+                    return Err("Security violation: Blocked access to cloud metadata endpoint".into());
+                }
+            }
         }
     }
     Ok(parsed)
@@ -431,12 +445,9 @@ fn open_file(save_dir: &str, filename: &str) {
 }
 
 fn open_folder(save_dir: &str, filename: &str) {
-    let file_path = PathBuf::from(save_dir).join(filename);
-    if file_path.exists() {
-        let _ = std::process::Command::new("explorer.exe")
-            .arg(format!("/select,{}", file_path.to_string_lossy()))
-            .spawn();
-    } else {
+    let save_path = std::path::Path::new(save_dir);
+    if let Err(e) = ws_server::secure_open_folder(save_path, filename) {
+        tracing::warn!("Failed to open folder securely: {}", e);
         let _ = std::process::Command::new("explorer.exe")
             .arg(save_dir)
             .spawn();
@@ -675,6 +686,7 @@ fn execute_download(
     let store_cb = state.store.clone();
     let ws_mgr_cb = state.ws_manager.clone();
     let ws_id_cb = id_str.clone();
+    let tasks_map = state.tasks.clone();
     let save_path_fin = save_path.clone();
     let final_clean_name_fin = final_clean_name.clone();
     let url_fin = url.clone();
@@ -685,26 +697,60 @@ fn execute_download(
     state.rt_handle.spawn(async move {
         let ws_mgr_tick = ws_mgr_cb.clone();
         let ws_id_tick = ws_id_cb.clone();
+        let last_db_bytes = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let last_db_time = Arc::new(std::sync::Mutex::new(std::time::Instant::now()));
+        let last_ws_time = Arc::new(std::sync::Mutex::new(std::time::Instant::now()));
+
         let cb = Arc::new(move |telem: AdaptiveTelemetry| {
             if let Ok(mut lock) = telem_target.lock() {
                 *lock = Some(telem.clone());
             }
-            let _ = store_cb.update_download_progress(id, telem.downloaded_bytes);
-            let ws_mgr = ws_mgr_tick.clone();
-            let id_c = ws_id_tick.clone();
-            let speed_bytes =
-                (telem.rolling_throughput_bps / 8).max(telem.instant_throughput_bps / 8);
-            tokio::spawn(async move {
-                ws_mgr
-                    .update_task_progress(
-                        &id_c,
-                        telem.downloaded_bytes,
-                        telem.total_bytes,
-                        speed_bytes,
-                        "downloading",
-                    )
-                    .await;
-            });
+
+            // Low-overhead throttled database persistence (every 1.5s or >= 1MB delta)
+            let prev_bytes = last_db_bytes.load(Ordering::Relaxed);
+            let should_update_db = {
+                let mut inst = last_db_time.lock().unwrap();
+                if inst.elapsed() >= std::time::Duration::from_millis(1500)
+                    || telem.downloaded_bytes.saturating_sub(prev_bytes) >= 1024 * 1024
+                {
+                    *inst = std::time::Instant::now();
+                    true
+                } else {
+                    false
+                }
+            };
+            if should_update_db {
+                last_db_bytes.store(telem.downloaded_bytes, Ordering::Relaxed);
+                let _ = store_cb.update_download_progress(id, telem.downloaded_bytes);
+            }
+
+            // Low-overhead throttled WebSocket progress broadcast (at most every 250ms)
+            let should_update_ws = {
+                let mut inst = last_ws_time.lock().unwrap();
+                if inst.elapsed() >= std::time::Duration::from_millis(250) {
+                    *inst = std::time::Instant::now();
+                    true
+                } else {
+                    false
+                }
+            };
+            if should_update_ws {
+                let ws_mgr = ws_mgr_tick.clone();
+                let id_c = ws_id_tick.clone();
+                let speed_bytes =
+                    (telem.rolling_throughput_bps / 8).max(telem.instant_throughput_bps / 8);
+                tokio::spawn(async move {
+                    ws_mgr
+                        .update_task_progress(
+                            &id_c,
+                            telem.downloaded_bytes,
+                            telem.total_bytes,
+                            speed_bytes,
+                            "downloading",
+                        )
+                        .await;
+                });
+            }
         });
         let mut client_builder = Client::builder()
             .timeout(std::time::Duration::from_secs(req_timeout_secs))
@@ -788,6 +834,9 @@ fn execute_download(
                 .unwrap_or((0, effective_size)),
             Err(_) => (0, effective_size),
         };
+        // Evict active task handle and telemetry buffers from live memory
+        tasks_map.lock().unwrap().remove(&ws_id_cb);
+
         tokio::spawn(async move {
             if final_state == DownloadState::Failed {
                 ws_mgr_fin
@@ -920,6 +969,14 @@ async fn handle_extension_message(msg: ExtensionMessage, state: &AppState) -> Ap
                 }
                 if is_completed {
                     completed_count += 1;
+                    if let Some(tot) = current_total {
+                        if tot > 0 {
+                            current_done = tot;
+                        }
+                    }
+                    current_speed = 0;
+                    current_connections = 0;
+                    current_eta = None;
                 }
 
                 let matches_filter = match filter_lower.as_str() {
@@ -1269,8 +1326,27 @@ async fn probe_url(url: String) -> Result<serde_json::Value, String> {
         }));
     }
 
-    // 3. Video Stream Probe (Native Extractor or yt-dlp)
+    // 3. Video Stream Probe (Prioritize yt-dlp binary with Node JS solver, then native extractors)
     if pack_target.pack_id == edm_core::FeaturePackId::YtDlpPack {
+        // Prioritize yt-dlp which accurately resolves YouTube title, thumbnail, and stream sizes
+        if edm_core::packs::YtDlpPack::locate_binary().is_some() {
+            if let Ok(info) = edm_core::packs::YtDlpPack::extract_info(&url).await {
+                let best_size = info.formats.iter().filter_map(|f| f.filesize).max();
+                let sanitized = edm_core::sanitizer::Sanitizer::sanitize_filename(&info.title);
+                let final_stream_url = info.best_video_url.unwrap_or_else(|| info.webpage_url.clone());
+                return Ok(serde_json::json!({
+                    "url": url,
+                    "final_url": final_stream_url,
+                    "filename": Some(format!("{}.mp4", sanitized)),
+                    "content_type": Some("video/mp4"),
+                    "size_total": best_size,
+                    "resumable": true,
+                    "etag": null,
+                    "last_modified": null
+                }));
+            }
+        }
+
         use edm_core::packs::extractors::{SiteExtractor, VimeoExtractor, YouTubeExtractor};
         let yt = YouTubeExtractor;
         let vimeo = VimeoExtractor;
@@ -1314,21 +1390,18 @@ async fn probe_url(url: String) -> Result<serde_json::Value, String> {
             }
         }
 
-        if let Ok(info) = edm_core::packs::YtDlpPack::extract_info(&url).await {
-            let best_size = info.formats.iter().filter_map(|f| f.filesize).max();
-            let sanitized = edm_core::sanitizer::Sanitizer::sanitize_filename(&info.title);
-            let final_stream_url = info.best_video_url.unwrap_or(info.webpage_url);
-            return Ok(serde_json::json!({
-                "url": url,
-                "final_url": final_stream_url,
-                "filename": Some(format!("{}.mp4", sanitized)),
-                "content_type": Some("video/mp4"),
-                "size_total": best_size,
-                "resumable": true,
-                "etag": null,
-                "last_modified": null
-            }));
-        }
+        // If extraction is blocked by YouTube, still provide a safe video task structure so user can download
+        let video_name = pack_target.suggested_filename.unwrap_or_else(|| "YouTube_Video.mp4".into());
+        return Ok(serde_json::json!({
+            "url": url,
+            "final_url": url,
+            "filename": Some(video_name),
+            "content_type": Some("video/mp4"),
+            "size_total": pack_target.estimated_size,
+            "resumable": true,
+            "etag": null,
+            "last_modified": null
+        }));
     }
 
     // 4. Standard HTTP / M3U8 / GitHub / HuggingFace Probe
@@ -1465,10 +1538,10 @@ pub(crate) async fn remove_download_task(
     id_str: &str,
     delete_file: bool,
 ) -> Result<(), String> {
-    // 1. Cancel in-memory active task
+    // 1. Cancel and evict in-memory active task
     {
-        let tasks = state.tasks.lock().unwrap();
-        if let Some(t) = tasks.get(id_str) {
+        let mut tasks = state.tasks.lock().unwrap();
+        if let Some(t) = tasks.remove(id_str) {
             t.cancelled.store(true, Ordering::SeqCst);
         }
     }
@@ -2335,6 +2408,93 @@ fn get_system_downloads_dir() -> String {
 }
 
 #[command]
+async fn select_download_directory(default_path: Option<String>) -> Result<Option<String>, String> {
+    tokio::task::spawn_blocking(move || {
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            let initial = default_path.as_deref().unwrap_or("").replace('\'', "''");
+            let script = format!(
+                "Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.FolderBrowserDialog; $d.Description = 'Select EDM Downloads Folder'; if ('{}' -ne '') {{ $d.SelectedPath = '{}' }}; if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{ Write-Output $d.SelectedPath }}",
+                initial, initial
+            );
+            let output = std::process::Command::new("powershell")
+                .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+                .creation_flags(0x08000000)
+                .output()
+                .map_err(|e| e.to_string())?;
+
+            let res = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if res.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(res))
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            Ok(None)
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[command]
+fn get_disk_free_space(path: Option<String>) -> Result<serde_json::Value, String> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        let target_path = path.unwrap_or_else(|| "C:\\".to_string());
+        let root = if target_path.len() >= 2 && target_path.chars().nth(1) == Some(':') {
+            format!("{}:\\", &target_path[0..1])
+        } else {
+            "C:\\".to_string()
+        };
+        let wide: Vec<u16> = std::ffi::OsStr::new(&root).encode_wide().chain(Some(0)).collect();
+
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn GetDiskFreeSpaceExW(
+                lpDirectoryName: *const u16,
+                lpFreeBytesAvailableToCaller: *mut u64,
+                lpTotalNumberOfBytes: *mut u64,
+                lpTotalNumberOfFreeBytes: *mut u64,
+            ) -> i32;
+        }
+
+        let mut free_bytes_avail: u64 = 0;
+        let mut total_bytes: u64 = 0;
+        let mut total_free: u64 = 0;
+
+        let ok = unsafe {
+            GetDiskFreeSpaceExW(
+                wide.as_ptr(),
+                &mut free_bytes_avail,
+                &mut total_bytes,
+                &mut total_free,
+            )
+        };
+
+        if ok != 0 && total_bytes > 0 {
+            let pct_free = ((total_free as f64 / total_bytes as f64) * 100.0).round() as u64;
+            return Ok(serde_json::json!({
+                "drive": root.trim_end_matches('\\'),
+                "total_bytes": total_bytes,
+                "free_bytes": total_free,
+                "pct_free": pct_free
+            }));
+        }
+    }
+    Ok(serde_json::json!({
+        "drive": "C:",
+        "total_bytes": 0,
+        "free_bytes": 0,
+        "pct_free": 50
+    }))
+}
+
+#[command]
 async fn refresh_download_link(
     state: State<'_, AppState>,
     task_id: String,
@@ -3146,6 +3306,8 @@ fn main() {
             is_wizard_completed,
             set_wizard_completed,
             get_system_downloads_dir,
+            select_download_directory,
+            get_disk_free_space,
             refresh_download_link,
             expand_batch_urls,
             add_batch_downloads,

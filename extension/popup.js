@@ -63,6 +63,7 @@ class PopupController {
     __publicField(this, "newUrlInput", "");
     __publicField(this, "newFileNameInput", "");
     __publicField(this, "downloads", []);
+    __publicField(this, "detectedMedia", []);
     __publicField(this, "connectionState", "connecting");
     __publicField(this, "lifecycleState", "active");
     __publicField(this, "nmhHealth", { ok: true });
@@ -71,9 +72,13 @@ class PopupController {
     __publicField(this, "latencyMs", 0);
     __publicField(this, "token", "");
     __publicField(this, "interceptionEnabled", true);
+    __publicField(this, "autoReconnect", true);
+    __publicField(this, "notifyComplete", true);
+    __publicField(this, "notifyFail", true);
+    __publicField(this, "youtubePillEnabled", true);
     __publicField(this, "auditLogs", ["Popup initialized"]);
-    __publicField(this, "currentVersion", "0.0.7");
-    __publicField(this, "expectedVersion", "0.0.7");
+    __publicField(this, "currentVersion", "0.0.8");
+    __publicField(this, "expectedVersion", "0.0.8");
     __publicField(this, "updateStatus", "latest");
     __publicField(this, "detectedBrowser", "browser");
     __publicField(this, "pollInterval", null);
@@ -95,6 +100,8 @@ class PopupController {
     this.init();
   }
   async init() {
+    const proBadge = document.querySelector(".pro-badge");
+    if (proBadge) proBadge.textContent = `v${this.currentVersion}`;
     this.bindHeaderNav();
     this.connectPort();
     await this.loadSettings();
@@ -227,7 +234,11 @@ class PopupController {
       "edm_theme",
       "edm_palette",
       "edm_ws_token",
-      "edm_interception_enabled"
+      "edm_interception_enabled",
+      "edm_auto_reconnect",
+      "edm_notify_complete",
+      "edm_notify_fail",
+      "edm_youtube_pill_enabled"
     ]);
     if (data.edm_refresh_rate) {
       this.refreshRateMs = parseInt(data.edm_refresh_rate, 10);
@@ -239,11 +250,40 @@ class PopupController {
       document.documentElement.setAttribute("data-theme", data.edm_theme);
     }
     this.interceptionEnabled = data.edm_interception_enabled !== false;
+    this.autoReconnect = data.edm_auto_reconnect !== false;
+    this.notifyComplete = data.edm_notify_complete !== false;
+    this.notifyFail = data.edm_notify_fail !== false;
+    this.youtubePillEnabled = data.edm_youtube_pill_enabled !== false;
     if (data.edm_ws_token && data.edm_ws_token.length >= 32 && !data.edm_ws_token.startsWith("ed0000000000")) {
       this.token = data.edm_ws_token;
     } else {
       this.detectTokenSilently();
     }
+    this.fetchDetectedMedia();
+  }
+  fetchDetectedMedia() {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      const activeTab = tabs && tabs[0];
+      if (activeTab && activeTab.id) {
+        chrome.runtime.sendMessage({ action: "get_detected_media", tabId: activeTab.id }, (resp) => {
+          if (resp && resp.ok && Array.isArray(resp.media)) {
+            this.detectedMedia = resp.media;
+            const badge = document.getElementById("mediaBadge");
+            if (badge) {
+              if (this.detectedMedia.length > 0) {
+                badge.textContent = String(this.detectedMedia.length);
+                badge.style.display = "inline-block";
+              } else {
+                badge.style.display = "none";
+              }
+            }
+            if (this.activeTab === "media") {
+              this.render();
+            }
+          }
+        });
+      }
+    });
   }
   async detectTokenSilently() {
     try {
@@ -366,11 +406,115 @@ class PopupController {
     if (this.activeTab === "tasks") {
       app.innerHTML = this.renderTasksTab();
       this.attachTasksEvents();
+    } else if (this.activeTab === "media") {
+      app.innerHTML = this.renderMediaTab();
+      this.attachMediaEvents();
     } else {
       app.innerHTML = this.renderSettingsTab();
       this.attachSettingsEvents();
       this.attachDiagnosticsEvents();
     }
+  }
+  // ─────────────────────────────────────────────────────────────
+  // MEDIA TAB
+  // ─────────────────────────────────────────────────────────────
+  renderMediaTab() {
+    if (!this.detectedMedia || this.detectedMedia.length === 0) {
+      return `
+        <div class="empty-state" style="padding: 40px 20px; text-align: center;">
+          <div class="empty-icon" style="margin-bottom: 12px; opacity: 0.6; display: flex; justify-content: center;">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+              <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect>
+              <line x1="7" y1="2" x2="7" y2="22"></line>
+              <line x1="17" y1="2" x2="17" y2="22"></line>
+              <line x1="2" y1="12" x2="22" y2="12"></line>
+            </svg>
+          </div>
+          <div class="empty-title" style="font-weight: 600; font-size: 13px; color: var(--text-primary); margin-bottom: 4px;">No Media Streams Detected</div>
+          <div class="empty-desc" style="font-size: 11px; color: var(--text-muted); max-width: 280px; margin: 0 auto; line-height: 1.4;">Play any video or audio stream on the active tab to sniff and accelerate via EDM.</div>
+          <button id="btnRescanMedia" class="btn-3d" style="margin-top: 16px; font-size: 11px; padding: 6px 14px;">Rescan Current Tab</button>
+        </div>
+      `;
+    }
+    const itemsHtml = this.detectedMedia.map((m, idx) => {
+      const isAudio = m.type === "audio";
+      const icon = isAudio ? CATEGORY_SVGS.music : CATEGORY_SVGS.video;
+      return `
+        <div class="card-3d" style="padding: 10px 12px; margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between; gap: 10px; background: rgba(255, 255, 255, 0.02); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 8px;">
+          <div style="display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1;">
+            <div style="width: 28px; height: 28px; border-radius: 6px; background: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.25); display: flex; align-items: center; justify-content: center; flex-shrink: 0; color: #60a5fa;">
+              ${icon}
+            </div>
+            <div style="min-width: 0; flex: 1;">
+              <div style="font-size: 12px; font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${escapeHtml(m.title)}">
+                ${escapeHtml(m.title)}
+              </div>
+              <div style="display: flex; align-items: center; gap: 6px; margin-top: 3px;">
+                <span style="font-size: 9.5px; padding: 1px 5px; border-radius: 4px; background: rgba(255, 255, 255, 0.08); color: var(--text-secondary);">${escapeHtml(m.format || m.type.toUpperCase())}</span>
+                ${m.quality ? `<span style="font-size: 9.5px; padding: 1px 5px; border-radius: 4px; background: rgba(16, 185, 129, 0.15); color: #34d399; font-weight: 600;">${escapeHtml(m.quality)}</span>` : ""}
+                ${m.duration ? `<span style="font-size: 9.5px; color: var(--text-muted);">${Math.floor(m.duration / 60)}m ${m.duration % 60}s</span>` : ""}
+              </div>
+            </div>
+          </div>
+          <button class="btn-3d btn-primary act-download-media" data-idx="${idx}" style="flex-shrink: 0; padding: 5px 12px; font-size: 11px; background: #2563EB;">
+            Download
+          </button>
+        </div>
+      `;
+    }).join("");
+    return `
+      <div style="padding: 12px;">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px;">
+          <span style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted);">
+            Detected Streams (${this.detectedMedia.length})
+          </span>
+          <button id="btnRescanMedia" class="btn-3d" style="font-size: 10px; padding: 3px 8px;">Refresh</button>
+        </div>
+        ${itemsHtml}
+      </div>
+    `;
+  }
+  attachMediaEvents() {
+    const rescanBtn = document.getElementById("btnRescanMedia");
+    if (rescanBtn) {
+      rescanBtn.addEventListener("click", () => {
+        this.fetchDetectedMedia();
+      });
+    }
+    document.querySelectorAll(".act-download-media").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const idx = Number(btn.getAttribute("data-idx"));
+        const media = this.detectedMedia[idx];
+        if (media && media.url) {
+          btn.textContent = "Sent...";
+          btn.disabled = true;
+          chrome.runtime.sendMessage(
+            {
+              action: "create_task",
+              url: media.url,
+              filename: media.title
+            },
+            (resp) => {
+              if (resp && resp.ok) {
+                btn.textContent = "Added \u2713";
+                setTimeout(() => {
+                  this.activeTab = "tasks";
+                  document.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("active"));
+                  document.querySelector('.tab-btn[data-tab="tasks"]')?.classList.add("active");
+                  this.render();
+                }, 800);
+              } else {
+                btn.textContent = "Error";
+                setTimeout(() => {
+                  btn.textContent = "Download";
+                  btn.disabled = false;
+                }, 1500);
+              }
+            }
+          );
+        }
+      });
+    });
   }
   // ─────────────────────────────────────────────────────────────
   // 1. TASKS TAB
@@ -836,6 +980,21 @@ class PopupController {
           </div>
         </div>
 
+        <!-- Platform & Site Integrations -->
+        <div class="settings-group" style="padding: 14px; background: #070e1b; border: 1px solid #1a273e; border-radius: 10px;">
+          <div class="settings-group-title" style="font-size: 13.5px; font-weight: 700; color: #FFFFFF; margin-bottom: 6px;">Platform Integrations</div>
+          <div class="setting-row" style="display: flex; justify-content: space-between; align-items: center;">
+            <div>
+              <div class="setting-label" style="font-size: 12px; font-weight: 600;">YouTube Quick Download Pill</div>
+              <div class="setting-desc" style="font-size: 11px; color: #8fa0be;">Show quick download pill next to Subscribe on YouTube with quality &amp; audio extraction</div>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="youtubePillToggle" ${this.youtubePillEnabled ? "checked" : ""}>
+              <span class="slider"></span>
+            </label>
+          </div>
+        </div>
+
         <!-- Desktop Connection & Bridge -->
         <div class="settings-group">
           <div class="settings-group-title">Desktop Connection &amp; Bridge</div>
@@ -852,7 +1011,7 @@ class PopupController {
               <div class="setting-desc">Automatically retry connection on drop</div>
             </div>
             <label class="switch">
-              <input type="checkbox" id="autoReconnectToggle" checked>
+              <input type="checkbox" id="autoReconnectToggle" ${this.autoReconnect ? "checked" : ""}>
               <span class="slider"></span>
             </label>
           </div>
@@ -894,7 +1053,7 @@ class PopupController {
               <div class="setting-desc">Notify when a file finishes downloading</div>
             </div>
             <label class="switch">
-              <input type="checkbox" id="notifyCompleteToggle" checked>
+              <input type="checkbox" id="notifyCompleteToggle" ${this.notifyComplete ? "checked" : ""}>
               <span class="slider"></span>
             </label>
           </div>
@@ -904,7 +1063,7 @@ class PopupController {
               <div class="setting-desc">Notify on network failure or stalled task</div>
             </div>
             <label class="switch">
-              <input type="checkbox" id="notifyFailToggle" checked>
+              <input type="checkbox" id="notifyFailToggle" ${this.notifyFail ? "checked" : ""}>
               <span class="slider"></span>
             </label>
           </div>
@@ -930,6 +1089,34 @@ class PopupController {
       toggleInterception.addEventListener("change", async () => {
         this.interceptionEnabled = toggleInterception.checked;
         await chrome.storage.local.set({ edm_interception_enabled: this.interceptionEnabled });
+      });
+    }
+    const autoReconnectToggle = document.getElementById("autoReconnectToggle");
+    if (autoReconnectToggle) {
+      autoReconnectToggle.addEventListener("change", async () => {
+        this.autoReconnect = autoReconnectToggle.checked;
+        await chrome.storage.local.set({ edm_auto_reconnect: this.autoReconnect });
+      });
+    }
+    const notifyCompleteToggle = document.getElementById("notifyCompleteToggle");
+    if (notifyCompleteToggle) {
+      notifyCompleteToggle.addEventListener("change", async () => {
+        this.notifyComplete = notifyCompleteToggle.checked;
+        await chrome.storage.local.set({ edm_notify_complete: this.notifyComplete });
+      });
+    }
+    const notifyFailToggle = document.getElementById("notifyFailToggle");
+    if (notifyFailToggle) {
+      notifyFailToggle.addEventListener("change", async () => {
+        this.notifyFail = notifyFailToggle.checked;
+        await chrome.storage.local.set({ edm_notify_fail: this.notifyFail });
+      });
+    }
+    const youtubePillToggle = document.getElementById("youtubePillToggle");
+    if (youtubePillToggle) {
+      youtubePillToggle.addEventListener("change", async () => {
+        this.youtubePillEnabled = youtubePillToggle.checked;
+        await chrome.storage.local.set({ edm_youtube_pill_enabled: this.youtubePillEnabled });
       });
     }
     if (btnSave && tokenInput) {
@@ -1228,7 +1415,7 @@ class PopupController {
           ` : ""}
           <div class="diag-row">
             <span class="diag-label">Extension Version</span>
-            <span class="diag-val">v${this.currentVersion || "0.0.7"}</span>
+            <span class="diag-val">v${this.currentVersion || "0.0.8"}</span>
           </div>
           <div class="diag-row">
             <span class="diag-label">Operating System</span>

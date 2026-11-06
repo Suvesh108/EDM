@@ -785,6 +785,11 @@ async fn handle_message(msg: ExtensionMessage, store: &Arc<Mutex<Store>>) -> App
 
                 if matches_filter {
                     let speed = if is_active { 3_500_000 } else { 0 };
+                    let effective_done = if is_completed && r.size_total.unwrap_or(0) > 0 {
+                        r.size_total.unwrap()
+                    } else {
+                        r.size_done
+                    };
                     overviews.push(DownloadOverview {
                         id: r.id,
                         url: r.url,
@@ -793,7 +798,7 @@ async fn handle_message(msg: ExtensionMessage, store: &Arc<Mutex<Store>>) -> App
                         category: r.category,
                         state: r.state,
                         size_total: r.size_total,
-                        size_done: r.size_done,
+                        size_done: effective_done,
                         resumable: r.resumable,
                         speed_bytes_per_sec: speed,
                         connections: r.connections,
@@ -819,6 +824,11 @@ async fn handle_message(msg: ExtensionMessage, store: &Arc<Mutex<Store>>) -> App
             let records = s.list_all_downloads().unwrap_or_default();
             if let Some(r) = records.into_iter().find(|d| d.id == id) {
                 let is_comp = r.state == DownloadState::Completed;
+                let effective_done = if is_comp && r.size_total.unwrap_or(0) > 0 {
+                    r.size_total.unwrap()
+                } else {
+                    r.size_done
+                };
                 AppReply::DownloadDetail {
                     download: DownloadOverview {
                         id: r.id,
@@ -828,7 +838,7 @@ async fn handle_message(msg: ExtensionMessage, store: &Arc<Mutex<Store>>) -> App
                         category: r.category,
                         state: r.state,
                         size_total: r.size_total,
-                        size_done: r.size_done,
+                        size_done: effective_done,
                         resumable: r.resumable,
                         speed_bytes_per_sec: 0,
                         connections: r.connections,

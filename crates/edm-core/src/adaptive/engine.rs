@@ -22,6 +22,7 @@ use crate::writer::FileWriter;
 
 pub type TelemetryCallback = Arc<dyn Fn(AdaptiveTelemetry) + Send + Sync>;
 
+#[derive(Clone)]
 pub struct AdaptiveDownloadTask {
     pub id: Uuid,
     pub url: String,
@@ -44,8 +45,11 @@ impl AdaptiveEngine {
     pub fn new(store: Store) -> Self {
         let client = Client::builder()
             .http1_only()
+            .tcp_nodelay(true)
             .pool_max_idle_per_host(64)
+            .pool_idle_timeout(Some(Duration::from_secs(90)))
             .tcp_keepalive(Some(Duration::from_secs(30)))
+            .connect_timeout(Duration::from_secs(10))
             .redirect(reqwest::redirect::Policy::limited(15))
             .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36 Edg/135.0.0.0")
             .build()
@@ -256,6 +260,7 @@ impl AdaptiveEngine {
                 info!("Download task {} received cancellation signal", task.id);
                 scheduler.cancel_all();
                 let _ = writer.flush();
+                writer.close();
                 let _ = self
                     .store
                     .update_download_progress(task.id, total_downloaded);
@@ -413,14 +418,28 @@ impl AdaptiveEngine {
                         }
                         Some(AdaptiveWorkerEvent::Done { idx }) => {
                             info!("Worker {} completed assigned byte range", idx);
-                            // Dynamic work stealing on completion to keep all connections busy
+                            // Dynamic work stealing or tail latency sniping on completion
                             if is_resumable && controller.mode() != super::types::AccelerationMode::FallbackSingleStream {
-                                scheduler.try_steal_work(
-                                    self.client.clone(),
-                                    writer.clone(),
-                                    task.limiter.clone(),
-                                    event_tx.clone(),
-                                );
+                                let rem_total = total_size
+                                    .map(|tot| tot.saturating_sub(total_downloaded))
+                                    .unwrap_or(u64::MAX);
+
+                                if rem_total <= 5 * 1024 * 1024 {
+                                    scheduler.try_tail_snipe(
+                                        self.client.clone(),
+                                        writer.clone(),
+                                        task.limiter.clone(),
+                                        event_tx.clone(),
+                                        5 * 1024 * 1024,
+                                    );
+                                } else {
+                                    scheduler.try_steal_work(
+                                        self.client.clone(),
+                                        writer.clone(),
+                                        task.limiter.clone(),
+                                        event_tx.clone(),
+                                    );
+                                }
                             }
 
                             // Check completion criteria
@@ -508,6 +527,7 @@ impl AdaptiveEngine {
                                     DownloadState::Failed
                                 };
                                 let _ = self.store.update_download_state(task.id, state, Some(&reason));
+                                writer.close();
                                 return Err(format!("Workers stopped: {}", reason));
                             }
                         }
@@ -535,21 +555,40 @@ impl AdaptiveEngine {
                     // Execute decision
                     if let AdaptiveDecision::ScaleUp { to, .. } = decision {
                         if scheduler.active_count() < to && is_resumable && controller.mode() != super::types::AccelerationMode::FallbackSingleStream {
-                            scheduler.try_steal_work(
-                                self.client.clone(),
-                                writer.clone(),
-                                task.limiter.clone(),
-                                event_tx.clone(),
-                            );
+                            let rem_total = total_size
+                                .map(|tot| tot.saturating_sub(total_downloaded))
+                                .unwrap_or(u64::MAX);
+
+                            if rem_total <= 5 * 1024 * 1024 {
+                                scheduler.try_tail_snipe(
+                                    self.client.clone(),
+                                    writer.clone(),
+                                    task.limiter.clone(),
+                                    event_tx.clone(),
+                                    5 * 1024 * 1024,
+                                );
+                            } else {
+                                scheduler.try_steal_work(
+                                    self.client.clone(),
+                                    writer.clone(),
+                                    task.limiter.clone(),
+                                    event_tx.clone(),
+                                );
+                            }
                         }
                     }
 
-                    // Stall detection check
-                    scheduler.check_stalled_workers(
+                    // Stall detection check (accelerated 2s sensitivity in tail phase)
+                    let is_tail = total_size
+                        .map(|tot| tot.saturating_sub(total_downloaded) <= 5 * 1024 * 1024)
+                        .unwrap_or(false);
+
+                    scheduler.check_stalled_workers_adaptive(
                         &self.client,
                         &writer,
                         task.limiter.clone(),
                         &event_tx,
+                        is_tail,
                     );
 
                     // Emit Telemetry
@@ -682,16 +721,17 @@ impl AdaptiveEngine {
             }
         }
 
+        let final_completed_bytes = total_size.unwrap_or(total_downloaded);
         let _ = self
             .store
-            .update_download_progress(task.id, total_downloaded);
+            .update_download_progress(task.id, final_completed_bytes);
         let _ = self
             .store
             .update_download_state(task.id, DownloadState::Completed, None);
 
         info!(
             "Download completed and verified successfully: {:?} ({} bytes)",
-            final_path, total_downloaded
+            final_path, final_completed_bytes
         );
         Ok(final_path)
     }

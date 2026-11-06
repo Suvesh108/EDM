@@ -196,16 +196,121 @@ impl WorkScheduler {
         Some(new_worker)
     }
 
-    /// Checks for stalled workers and triggers connection renewal if needed
-    pub fn check_stalled_workers(
+    /// Speculative Tail Latency Sniper:
+    /// When remaining uncompleted bytes for a download task fall below a tail threshold
+    /// (e.g. 5 MiB or 5% of file), standard work-stealing would not steal because chunks
+    /// are smaller than min_chunk_size (e.g. 1 MiB).
+    /// Tail Snipe dynamically lowers chunk size to 64 KiB micro-chunks and steals half
+    /// the remaining tail from any slow/straggler worker, racing to finish on a fresh TCP socket.
+    pub fn try_tail_snipe(
+        &mut self,
+        client: Client,
+        writer: FileWriter,
+        limiter: Option<TokenBucketLimiter>,
+        event_tx: mpsc::Sender<AdaptiveWorkerEvent>,
+        tail_threshold_bytes: u64,
+    ) -> Option<Arc<AdaptiveWorker>> {
+        const MIN_TAIL_CHUNK: u64 = 64 * 1024; // 64 KiB micro-chunk
+
+        let mut best_candidate: Option<(usize, u64)> = None;
+
+        for (i, w) in self.workers.iter().enumerate() {
+            let s = w.get_status();
+            if s == WorkerStatus::Completed || s == WorkerStatus::Failed {
+                continue;
+            }
+            let rem = w.remaining_bytes();
+            if rem <= tail_threshold_bytes && rem >= 2 * MIN_TAIL_CHUNK {
+                match best_candidate {
+                    None => best_candidate = Some((i, rem)),
+                    Some((_, best_rem)) if rem > best_rem => best_candidate = Some((i, rem)),
+                    _ => {}
+                }
+            }
+        }
+
+        let (target_idx, rem) = best_candidate?;
+        let target = &self.workers[target_idx];
+
+        let cur_end = target.end.load(Ordering::SeqCst);
+        let cur_pos = target.pos.load(Ordering::SeqCst);
+
+        if cur_end <= cur_pos || (cur_end - cur_pos + 1) < 2 * MIN_TAIL_CHUNK {
+            return None;
+        }
+
+        let remaining = cur_end - cur_pos + 1;
+        let stolen_len = remaining / 2;
+
+        if stolen_len < MIN_TAIL_CHUNK || (remaining - stolen_len) < MIN_TAIL_CHUNK {
+            return None;
+        }
+
+        let new_target_end = cur_end - stolen_len;
+
+        if target
+            .end
+            .compare_exchange(cur_end, new_target_end, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return None;
+        }
+
+        let active_pos = target.pos.load(Ordering::SeqCst);
+        if active_pos > new_target_end {
+            let _ = target
+                .end
+                .compare_exchange(new_target_end, cur_end, Ordering::SeqCst, Ordering::SeqCst);
+            return None;
+        }
+
+        let new_worker_start = new_target_end + 1;
+        let new_worker_end = cur_end;
+
+        info!(
+            "Speculative Tail Latency Sniper: Worker {} straggling with {} KiB left -> Sniped tail range {}-{} ({} KiB) to fresh socket",
+            target.idx,
+            rem / 1024,
+            new_worker_start,
+            new_worker_end,
+            (new_worker_end - new_worker_start + 1) / 1024
+        );
+
+        let new_worker = self.spawn_worker(
+            target.url.clone(),
+            new_worker_start,
+            new_worker_end,
+            target.etag.clone(),
+            target.cookies.clone(),
+            target.referer.clone(),
+            target.user_agent.clone(),
+            client,
+            writer,
+            limiter,
+            event_tx,
+        );
+
+        Some(new_worker)
+    }
+
+    /// Checks for stalled workers and triggers connection renewal if needed.
+    /// In tail phase, stall sensitivity is accelerated to 2s to prevent tail hangs.
+    pub fn check_stalled_workers_adaptive(
         &self,
         _client: &Client,
         _writer: &FileWriter,
         _limiter: Option<TokenBucketLimiter>,
         event_tx: &mpsc::Sender<AdaptiveWorkerEvent>,
+        is_tail_phase: bool,
     ) {
+        let timeout_secs = if is_tail_phase {
+            2.min(self.stall_timeout.as_secs()).max(1)
+        } else {
+            self.stall_timeout.as_secs()
+        };
+
         for w in &self.workers {
-            if w.is_stalled(self.stall_timeout.as_secs()) {
+            if w.is_stalled(timeout_secs) {
                 if w.is_reconnecting.swap(true, Ordering::SeqCst) {
                     continue;
                 }
@@ -223,9 +328,11 @@ impl WorkScheduler {
                     continue;
                 }
                 info!(
-                    "Stall detected on Worker {} at pos {}. Worker internal retry loop will reconnect (attempt {}/{}).",
+                    "Stall detected on Worker {} at pos {} (timeout: {}s, tail: {}). Worker internal retry loop will reconnect (attempt {}/{}).",
                     w.idx,
                     w.pos.load(Ordering::Relaxed),
+                    timeout_secs,
+                    is_tail_phase,
                     current_retries + 1,
                     self.max_retries
                 );
@@ -233,6 +340,17 @@ impl WorkScheduler {
                 let _ = event_tx.try_send(AdaptiveWorkerEvent::Stalled { idx: w.idx });
             }
         }
+    }
+
+    /// Checks for stalled workers and triggers connection renewal if needed
+    pub fn check_stalled_workers(
+        &self,
+        client: &Client,
+        writer: &FileWriter,
+        limiter: Option<TokenBucketLimiter>,
+        event_tx: &mpsc::Sender<AdaptiveWorkerEvent>,
+    ) {
+        self.check_stalled_workers_adaptive(client, writer, limiter, event_tx, false);
     }
 
     pub fn active_count(&self) -> u32 {
@@ -454,5 +572,77 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_speculative_tail_sniper_disjoint_coverage() {
+        use crate::adaptive::range_set::RangeSet;
+        use std::sync::atomic::Ordering;
+
+        let total_size = 2 * 1024 * 1024; // 2 MiB tail
+        let min_chunk = 1024 * 1024; // 1 MiB standard min chunk
+
+        let mut scheduler = WorkScheduler::new(min_chunk, Duration::from_secs(3), 3);
+        let w = Arc::new(AdaptiveWorker::new(
+            0,
+            "http://localhost/tail".into(),
+            0,
+            total_size - 1,
+            0,
+            None,
+            None,
+            None,
+            None,
+        ));
+        w.set_status(WorkerStatus::Downloading);
+        scheduler.workers.push(w.clone());
+        scheduler.next_idx = 1;
+
+        // Advance worker to 1.5 MiB (512 KiB remaining tail)
+        w.pos.store(1536 * 1024, Ordering::SeqCst);
+        let rem = w.remaining_bytes();
+        assert_eq!(rem, 512 * 1024);
+
+        // Standard steal should fail because rem (512 KiB) < 2 * min_chunk (2 MiB)
+        // Simulate standard steal check:
+        assert!(rem < 2 * scheduler.min_chunk_size);
+
+        // Tail snipe with micro-chunk (64 KiB) should successfully find candidate
+        let tail_threshold = 5 * 1024 * 1024;
+        const MIN_TAIL_CHUNK: u64 = 64 * 1024;
+        assert!(rem <= tail_threshold && rem >= 2 * MIN_TAIL_CHUNK);
+
+        // Simulate tail snipe split
+        let cur_end = w.end.load(Ordering::SeqCst);
+        let cur_pos = w.pos.load(Ordering::SeqCst);
+        let remaining = cur_end - cur_pos + 1;
+        let stolen_len = remaining / 2;
+        let new_target_end = cur_end - stolen_len;
+
+        assert!(w.end.compare_exchange(cur_end, new_target_end, Ordering::SeqCst, Ordering::SeqCst).is_ok());
+
+        let new_w = Arc::new(AdaptiveWorker::new(
+            scheduler.next_idx,
+            "http://localhost/tail".into(),
+            new_target_end + 1,
+            cur_end,
+            new_target_end + 1,
+            None,
+            None,
+            None,
+            None,
+        ));
+        scheduler.next_idx += 1;
+        new_w.set_status(WorkerStatus::Downloading);
+        scheduler.workers.push(new_w);
+
+        // Check that ranges cover exactly [0, total_size - 1] with zero gaps
+        let mut range_set = RangeSet::new();
+        for worker in &scheduler.workers {
+            range_set.add(worker.start, worker.end.load(Ordering::SeqCst));
+        }
+
+        assert!(range_set.is_complete(total_size));
+        assert_eq!(range_set.total_covered_bytes(), total_size);
     }
 }

@@ -6,71 +6,90 @@
   <title>EDM Extension — Settings</title>
   <style>
     :root {
-      --bg: #090d16;
-      --card: #0f172a;
-      --card-border: #1e293b;
+      --bg: #000000;
+      --card: #111111;
+      --card-border: #222222;
+      --border-strong: #333333;
       --accent: #2563eb;
-      --accent-hover: #1d4ed8;
-      --text: #f8fafc;
-      --text-muted: #94a3b8;
+      --accent-hover: #3b82f6;
+      --accent-glow: rgba(37, 99, 235, 0.35);
+      --text: #f4f4f5;
+      --text-muted: #71717a;
       --success: #10b981;
       --danger: #ef4444;
-      --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
     }
     * {
       box-sizing: border-box;
       margin: 0;
       padding: 0;
+      outline: none !important;
     }
     body {
-      background: var(--bg);
+      background: radial-gradient(120% 70% at 50% -15%, rgba(37, 99, 235, 0.08) 0%, transparent 65%), var(--bg);
       color: var(--text);
       font-family: var(--font);
-      padding: 24px;
+      padding: 32px 16px;
       display: flex;
       justify-content: center;
       align-items: center;
       min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
     }
     .container {
       width: 100%;
-      max-width: 520px;
-      background: var(--card);
-      border: 1px solid var(--card-border);
-      border-radius: 16px;
+      max-width: 540px;
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.04) 0%, rgba(255, 255, 255, 0.008) 50%, rgba(0, 0, 0, 0.3) 100%), var(--card);
+      border-top: 1px solid var(--card-border);
+      border-left: 1px solid var(--card-border);
+      border-right: 1px solid var(--card-border);
+      border-bottom: 1px solid rgba(0, 0, 0, 0.75);
+      border-radius: 14px;
       padding: 24px;
-      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+      box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.12), inset 0 -1px 0 0 rgba(0, 0, 0, 0.5), 0 16px 36px rgba(0, 0, 0, 0.85);
     }
     .header {
       display: flex;
       align-items: center;
       gap: 12px;
-      margin-bottom: 20px;
+      margin-bottom: 22px;
       padding-bottom: 16px;
       border-bottom: 1px solid var(--card-border);
     }
     .logo {
-      width: 32px;
-      height: 32px;
+      width: 36px;
+      height: 36px;
       border-radius: 8px;
+      filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.6));
     }
     .header-text h1 {
       font-size: 16px;
       font-weight: 700;
       color: var(--text);
+      letter-spacing: -0.2px;
     }
     .header-text p {
       font-size: 12px;
       color: var(--text-muted);
+      margin-top: 2px;
     }
     .section {
-      margin-bottom: 20px;
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.035) 0%, rgba(255, 255, 255, 0.008) 50%, rgba(0, 0, 0, 0.25) 100%), #141414;
+      border-top: 1px solid var(--card-border);
+      border-left: 1px solid var(--card-border);
+      border-right: 1px solid var(--card-border);
+      border-bottom: 1px solid rgba(0, 0, 0, 0.7);
+      box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.1), inset 0 -1px 0 0 rgba(0, 0, 0, 0.4), 0 4px 12px rgba(0, 0, 0, 0.4);
+      border-radius: 10px;
+      padding: 16px;
+      margin-bottom: 16px;
     }
     .section-title {
-      font-size: 13px;
-      font-weight: 600;
+      font-size: 12.5px;
+      font-weight: 700;
       color: var(--text);
       margin-bottom: 6px;
+      letter-spacing: 0.02em;
     }
     .section-desc {
       font-size: 11px;
@@ -83,28 +102,33 @@
       gap: 8px;
       margin-bottom: 10px;
     }
-    input[type="text"], input[type="password"] {
+    input[type="text"], input[type="password"], input[type="number"], textarea {
       flex: 1;
       height: 38px;
-      background: #020617;
+      background: #060606;
       border: 1px solid var(--card-border);
       border-radius: 8px;
       color: var(--text);
       padding: 0 12px;
       font-size: 12px;
-      font-family: monospace;
       outline: none;
-      transition: border-color 0.2s;
+      box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.6), 0 1px 0 rgba(255, 255, 255, 0.05);
+      transition: border-color 0.2s, box-shadow 0.2s;
     }
-    input[type="text"]:focus, input[type="password"]:focus {
-      border-color: var(--accent);
+    textarea {
+      height: auto;
+      padding: 8px 12px;
+    }
+    input[type="text"]:focus, input[type="password"]:focus, input[type="number"]:focus, textarea:focus {
+      border-color: var(--accent) !important;
+      box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.45), 0 0 0 1.5px var(--accent-glow) !important;
     }
     .btn {
       height: 38px;
       padding: 0 14px;
-      background: var(--accent);
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.28) 0%, rgba(255, 255, 255, 0.05) 55%, rgba(0, 0, 0, 0.2) 100%), var(--accent);
       color: #fff;
-      border: none;
+      border: 1px solid rgba(255, 255, 255, 0.28);
       border-radius: 8px;
       font-size: 12px;
       font-weight: 600;
@@ -112,42 +136,51 @@
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      transition: background 0.15s, transform 0.1s;
+      box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.5), inset 0 -1px 0 0 rgba(0, 0, 0, 0.45), 0 4px 14px -2px var(--accent-glow);
+      transition: transform 0.18s cubic-bezier(0.16, 1, 0.3, 1), filter 0.15s ease, box-shadow 0.18s cubic-bezier(0.16, 1, 0.3, 1);
     }
     .btn:hover {
-      background: var(--accent-hover);
+      filter: brightness(1.1);
+      transform: translateY(-1px) scale(1.01);
+      box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.65), 0 6px 18px -2px var(--accent-glow);
     }
     .btn:active {
-      transform: scale(0.97);
+      transform: translateY(1.5px) scale(0.96);
+      box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.55);
     }
     .btn-secondary {
-      background: #1e293b;
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.015) 100%), #181818;
+      border: 1px solid var(--card-border);
+      box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.14), inset 0 -1px 0 0 rgba(0, 0, 0, 0.4), 0 2px 4px rgba(0, 0, 0, 0.3);
       color: var(--text);
     }
     .btn-secondary:hover {
-      background: #334155;
+      background: #202020;
+      border-color: var(--border-strong);
     }
     .status-badge {
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      padding: 6px 12px;
-      border-radius: 20px;
+      padding: 5px 12px;
+      border-radius: 14px;
       font-size: 11px;
       font-weight: 600;
-      background: rgba(148, 163, 184, 0.1);
+      background: rgba(255, 255, 255, 0.05);
       color: var(--text-muted);
-      border: 1px solid rgba(148, 163, 184, 0.2);
+      border: 1px solid var(--card-border);
+      box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.5);
     }
     .status-badge.connected {
       background: rgba(16, 185, 129, 0.15);
       color: var(--success);
-      border-color: rgba(16, 185, 129, 0.3);
+      border-color: rgba(16, 185, 129, 0.35);
+      box-shadow: 0 0 10px -2px rgba(16, 185, 129, 0.4);
     }
     .status-badge.disconnected {
       background: rgba(239, 68, 68, 0.15);
       color: var(--danger);
-      border-color: rgba(239, 68, 68, 0.3);
+      border-color: rgba(239, 68, 68, 0.35);
     }
     .status-dot {
       width: 7px;
@@ -159,10 +192,10 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 12px;
-      background: #020617;
+      padding: 10px 12px;
+      background: #090909;
       border: 1px solid var(--card-border);
-      border-radius: 10px;
+      border-radius: 8px;
       margin-bottom: 10px;
     }
     .toggle-info h3 {
@@ -180,6 +213,7 @@
       display: inline-block;
       width: 38px;
       height: 20px;
+      flex-shrink: 0;
     }
     .switch input {
       opacity: 0;
@@ -189,30 +223,33 @@
     .slider {
       position: absolute;
       cursor: pointer;
-      top: 0;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      background-color: #334155;
-      transition: .3s;
+      inset: 0;
+      background-color: #242428;
+      border: 1px solid var(--card-border);
+      transition: .2s cubic-bezier(0.16, 1, 0.3, 1);
       border-radius: 20px;
+      box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.6);
     }
     .slider:before {
       position: absolute;
       content: "";
       height: 14px;
       width: 14px;
-      left: 3px;
-      bottom: 3px;
-      background-color: white;
-      transition: .3s;
+      left: 2px;
+      bottom: 2px;
+      background-color: #f4f4f5;
+      transition: .2s cubic-bezier(0.16, 1, 0.3, 1);
       border-radius: 50%;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
     }
     input:checked + .slider {
       background-color: var(--accent);
+      border-color: var(--accent-hover);
+      box-shadow: 0 0 10px -2px var(--accent-glow);
     }
     input:checked + .slider:before {
       transform: translateX(18px);
+      background-color: #ffffff;
     }
     .feedback-msg {
       margin-top: 8px;
@@ -275,6 +312,78 @@
       </div>
       <div class="section-desc" style="margin-top: 6px;">
         Tip: Hold <kbd style="background:#1e293b; padding:2px 5px; border-radius:4px; font-size:10px;">Shift</kbd> or <kbd style="background:#1e293b; padding:2px 5px; border-radius:4px; font-size:10px;">Alt</kbd> while clicking a link to bypass EDM and download directly in the browser.
+      </div>
+    </div>
+
+    <!-- Interception Rules & Filters -->
+    <div class="section">
+      <div class="section-title">Interception Rules &amp; Filters</div>
+      <div class="section-desc">
+        Fine-tune when browser downloads are intercepted versus left to the browser.
+      </div>
+      <div style="margin-bottom: 12px;">
+        <label style="font-size: 11.5px; font-weight: 600; display: block; margin-bottom: 4px; color: var(--text);">Minimum File Size (KB)</label>
+        <input type="number" id="inputMinSize" placeholder="0 (intercept all)" min="0" style="width: 100%; height: 38px; background: #020617; border: 1px solid var(--card-border); border-radius: 8px; color: var(--text); padding: 0 12px; font-size: 12px; outline: none;">
+      </div>
+      <div style="margin-bottom: 12px;">
+        <label style="font-size: 11.5px; font-weight: 600; display: block; margin-bottom: 4px; color: var(--text);">Excluded Domains (One per line)</label>
+        <textarea id="inputExcludedDomains" rows="3" placeholder="e.g. localhost&#10;example.com&#10;*.internal.net" style="width: 100%; background: #020617; border: 1px solid var(--card-border); border-radius: 8px; color: var(--text); padding: 8px 12px; font-size: 11.5px; font-family: monospace; outline: none;"></textarea>
+      </div>
+      <div style="margin-bottom: 12px;">
+        <label style="font-size: 11.5px; font-weight: 600; display: block; margin-bottom: 4px; color: var(--text);">File Extensions Filter (Comma-separated, leave blank for all)</label>
+        <input type="text" id="inputFileExtensions" placeholder="e.g. zip, iso, exe, mkv, mp4, tar.gz" style="width: 100%;">
+      </div>
+      <button id="btnSaveFilters" class="btn">Save Filters</button>
+      <div id="filterFeedback" class="feedback-msg"></div>
+    </div>
+
+    <!-- Notifications & Automation -->
+    <div class="section">
+      <div class="section-title">Notifications &amp; Automation</div>
+      <div class="toggle-row">
+        <div class="toggle-info">
+          <h3>Auto-Reconnect</h3>
+          <p>Automatically reconnect WebSocket on drop</p>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="toggleAutoReconnect" checked>
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div class="toggle-row">
+        <div class="toggle-info">
+          <h3>Completion Notifications</h3>
+          <p>Show desktop toast when a download completes</p>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="toggleNotifyComplete" checked>
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div class="toggle-row">
+        <div class="toggle-info">
+          <h3>Failure Notifications</h3>
+          <p>Show desktop toast on network error or task failure</p>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="toggleNotifyFail" checked>
+          <span class="slider"></span>
+        </label>
+      </div>
+    </div>
+
+    <!-- Platform Integrations -->
+    <div class="section">
+      <div class="section-title">Platform Integrations</div>
+      <div class="toggle-row">
+        <div class="toggle-info">
+          <h3>YouTube Quick Download Pill</h3>
+          <p>Inject download pill next to Subscribe on YouTube with quality selector and audio extractor</p>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="toggleYoutubePill" checked>
+          <span class="slider"></span>
+        </label>
       </div>
     </div>
 

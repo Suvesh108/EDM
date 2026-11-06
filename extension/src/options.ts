@@ -13,9 +13,31 @@ const saveFeedback = document.getElementById("saveFeedback") as HTMLDivElement;
 const updateFeedback = document.getElementById("updateFeedback") as HTMLDivElement;
 const toggleInterception = document.getElementById("toggleInterception") as HTMLInputElement;
 
+// Interception filters & notifications elements
+const inputMinSize = document.getElementById("inputMinSize") as HTMLInputElement;
+const inputExcludedDomains = document.getElementById("inputExcludedDomains") as HTMLTextAreaElement;
+const inputFileExtensions = document.getElementById("inputFileExtensions") as HTMLInputElement;
+const btnSaveFilters = document.getElementById("btnSaveFilters") as HTMLButtonElement;
+const filterFeedback = document.getElementById("filterFeedback") as HTMLDivElement;
+
+const toggleAutoReconnect = document.getElementById("toggleAutoReconnect") as HTMLInputElement;
+const toggleNotifyComplete = document.getElementById("toggleNotifyComplete") as HTMLInputElement;
+const toggleNotifyFail = document.getElementById("toggleNotifyFail") as HTMLInputElement;
+const toggleYoutubePill = document.getElementById("toggleYoutubePill") as HTMLInputElement;
+
 // Load stored values
 async function loadSettings() {
-  const stored = await chrome.storage.local.get(["edm_ws_token", "edm_interception_enabled"]);
+  const stored = await chrome.storage.local.get([
+    "edm_ws_token",
+    "edm_interception_enabled",
+    "edm_min_size",
+    "edm_excluded_domains",
+    "edm_file_extensions",
+    "edm_auto_reconnect",
+    "edm_notify_complete",
+    "edm_notify_fail",
+    "edm_youtube_pill_enabled",
+  ]);
   if (stored.edm_ws_token && stored.edm_ws_token.length >= 32 && !stored.edm_ws_token.startsWith("ed0000000000")) {
     inputToken.value = stored.edm_ws_token;
   } else {
@@ -23,6 +45,15 @@ async function loadSettings() {
     triggerAutoDetect(false);
   }
   toggleInterception.checked = stored.edm_interception_enabled !== false;
+  if (inputMinSize) inputMinSize.value = stored.edm_min_size ? String(stored.edm_min_size) : "";
+  if (inputExcludedDomains) inputExcludedDomains.value = stored.edm_excluded_domains || "";
+  if (inputFileExtensions) inputFileExtensions.value = stored.edm_file_extensions || "";
+
+  if (toggleAutoReconnect) toggleAutoReconnect.checked = stored.edm_auto_reconnect !== false;
+  if (toggleNotifyComplete) toggleNotifyComplete.checked = stored.edm_notify_complete !== false;
+  if (toggleNotifyFail) toggleNotifyFail.checked = stored.edm_notify_fail !== false;
+  if (toggleYoutubePill) toggleYoutubePill.checked = stored.edm_youtube_pill_enabled !== false;
+
   checkStatus();
 }
 
@@ -198,6 +229,54 @@ toggleInterception.addEventListener("change", () => {
   const enabled = toggleInterception.checked;
   chrome.storage.local.set({ edm_interception_enabled: enabled });
 });
+
+// Save Interception Filters
+if (btnSaveFilters) {
+  btnSaveFilters.addEventListener("click", async () => {
+    const minSize = inputMinSize ? parseInt(inputMinSize.value, 10) || 0 : 0;
+    const excludedDomains = inputExcludedDomains ? inputExcludedDomains.value.trim() : "";
+    const fileExtensions = inputFileExtensions ? inputFileExtensions.value.trim() : "";
+
+    await chrome.storage.local.set({
+      edm_min_size: minSize,
+      edm_excluded_domains: excludedDomains,
+      edm_file_extensions: fileExtensions,
+    });
+
+    if (filterFeedback) {
+      filterFeedback.className = "feedback-msg success";
+      filterFeedback.textContent = "Interception filters saved successfully!";
+      setTimeout(() => {
+        filterFeedback.textContent = "";
+      }, 3000);
+    }
+  });
+}
+
+// Notifications and Automation Toggles
+if (toggleAutoReconnect) {
+  toggleAutoReconnect.addEventListener("change", () => {
+    chrome.storage.local.set({ edm_auto_reconnect: toggleAutoReconnect.checked });
+  });
+}
+
+if (toggleNotifyComplete) {
+  toggleNotifyComplete.addEventListener("change", () => {
+    chrome.storage.local.set({ edm_notify_complete: toggleNotifyComplete.checked });
+  });
+}
+
+if (toggleNotifyFail) {
+  toggleNotifyFail.addEventListener("change", () => {
+    chrome.storage.local.set({ edm_notify_fail: toggleNotifyFail.checked });
+  });
+}
+
+if (toggleYoutubePill) {
+  toggleYoutubePill.addEventListener("change", () => {
+    chrome.storage.local.set({ edm_youtube_pill_enabled: toggleYoutubePill.checked });
+  });
+}
 
 loadSettings();
 setInterval(checkStatus, 2500);

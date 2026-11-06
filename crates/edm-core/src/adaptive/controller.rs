@@ -352,12 +352,24 @@ impl AdaptiveController {
                 self.current_connections = self.stable_target;
                 self.last_adjustment = now;
 
+                let conn_ratio = if self.stable_target > 0 {
+                    (from as f64 - self.stable_target as f64) / (self.stable_target as f64)
+                } else {
+                    1.0
+                };
+                let marginal_efficiency = if conn_ratio > 0.0 {
+                    delta / conn_ratio
+                } else {
+                    0.0
+                };
+
                 if self.consecutive_failed_probes >= 2 {
                     self.mode = AccelerationMode::Stable;
                     self.stable_locked_until = Some(now + Duration::from_secs(60));
                     let reason = format!(
-                        "Throughput plateaued at {:.2} Mbps after 2 failed probes. Locking concurrency at {} streams for 60s",
+                        "BBR Saturation Detected: Throughput plateaued at {:.2} Mbps (marginal stream efficiency {:.1}%). Concurrency locked at {} streams for 60s",
                         self.rolling_throughput_bps / 1_000_000.0,
+                        marginal_efficiency * 100.0,
                         self.stable_target
                     );
                     self.status_reason = reason.clone();
@@ -371,8 +383,8 @@ impl AdaptiveController {
                     };
                 } else {
                     let reason = format!(
-                        "Probe to {} streams yielded sub-10% gain ({:+.1}%). Reverted to stable target ({})",
-                        from, delta * 100.0, self.stable_target
+                        "BBR Probe: Concurrency {} yielded {:+.1}% gain (marginal efficiency {:.1}%). Reverted to stable target ({})",
+                        from, delta * 100.0, marginal_efficiency * 100.0, self.stable_target
                     );
                     self.status_reason = reason.clone();
                     debug!(

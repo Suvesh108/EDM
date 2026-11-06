@@ -128,7 +128,7 @@ const filesToHash = [
 ];
 
 const hashes = {
-  version: manifestData.version || '0.0.7',
+  version: manifestData.version || '0.0.8',
   generated_at: new Date().toISOString(),
   files: {}
 };
