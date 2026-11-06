@@ -47,6 +47,31 @@ fn parse_speed_str(s: &str) -> u64 {
     parse_size_str(clean).saturating_mul(8)
 }
 
+fn parse_eta_secs(s: &str) -> Option<u64> {
+    let s = s.trim();
+    if s.is_empty() || s == "NA" || s == "Unknown" || s == "N/A" {
+        return None;
+    }
+    if let Ok(secs) = s.parse::<u64>() {
+        return Some(secs);
+    }
+    let parts: Vec<&str> = s.split(':').collect();
+    match parts.len() {
+        2 => {
+            let m = parts[0].parse::<u64>().ok()?;
+            let sec = parts[1].parse::<u64>().ok()?;
+            Some(m * 60 + sec)
+        }
+        3 => {
+            let h = parts[0].parse::<u64>().ok()?;
+            let m = parts[1].parse::<u64>().ok()?;
+            let sec = parts[2].parse::<u64>().ok()?;
+            Some(h * 3600 + m * 60 + sec)
+        }
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MediaFormat {
     pub format_id: String,
@@ -151,6 +176,82 @@ impl YtDlpPack {
         None
     }
 
+    /// Detect ffmpeg binary location (prioritizing local EDM tools, WinGet, and PATH)
+    pub fn locate_ffmpeg() -> Option<PathBuf> {
+        if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+            let p = PathBuf::from(&local_app_data)
+                .join("EDM")
+                .join("tools")
+                .join("ffmpeg.exe");
+            if p.exists() {
+                return Some(p);
+            }
+
+            // Check WinGet Packages (e.g. Gyan.FFmpeg)
+            let winget_dir = PathBuf::from(&local_app_data)
+                .join("Microsoft")
+                .join("WinGet")
+                .join("Packages");
+            if winget_dir.exists() {
+                if let Ok(entries) = std::fs::read_dir(&winget_dir) {
+                    for entry in entries.flatten() {
+                        let name = entry.file_name().to_string_lossy().to_lowercase();
+                        if name.contains("ffmpeg") {
+                            let candidate_bin = entry.path().join("ffmpeg.exe");
+                            if candidate_bin.exists() {
+                                return Some(candidate_bin);
+                            }
+                            if let Ok(subentries) = std::fs::read_dir(entry.path()) {
+                                for sub in subentries.flatten() {
+                                    let c1 = sub.path().join("bin").join("ffmpeg.exe");
+                                    if c1.exists() {
+                                        return Some(c1);
+                                    }
+                                    let c2 = sub.path().join("ffmpeg.exe");
+                                    if c2.exists() {
+                                        return Some(c2);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Ok(path_var) = std::env::var("PATH") {
+            for entry in std::env::split_paths(&path_var) {
+                let candidate = entry.join("ffmpeg.exe");
+                if candidate.exists() {
+                    return Some(candidate);
+                }
+                #[cfg(not(windows))]
+                {
+                    let unix_candidate = entry.join("ffmpeg");
+                    if unix_candidate.exists() {
+                        return Some(unix_candidate);
+                    }
+                }
+            }
+        }
+
+        #[cfg(windows)]
+        {
+            let common_paths = [
+                r"C:\ffmpeg\bin\ffmpeg.exe",
+                r"C:\Program Files\ffmpeg\bin\ffmpeg.exe",
+            ];
+            for p in &common_paths {
+                let pb = PathBuf::from(p);
+                if pb.exists() {
+                    return Some(pb);
+                }
+            }
+        }
+
+        None
+    }
+
     /// Extract media metadata, title, thumbnail, and stream formats via JSON dump
     pub async fn extract_info(url: &str) -> Result<MediaMetadata, String> {
         let bin =
@@ -162,14 +263,26 @@ impl YtDlpPack {
             "--skip-download".to_string(),
         ];
 
-        if Self::locate_node().is_some() {
+        if let Some(node_path) = Self::locate_node() {
             args.push("--js-runtimes".to_string());
-            args.push("node".to_string());
+            args.push(format!("node:{}", node_path.to_string_lossy()));
+        }
+
+        if let Some(ffmpeg_path) = Self::locate_ffmpeg() {
+            args.push("--ffmpeg-location".to_string());
+            let loc = ffmpeg_path
+                .parent()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|| ffmpeg_path.to_string_lossy().to_string());
+            args.push(loc);
         }
 
         args.push(url.to_string());
 
-        let output = configure_hidden_command(bin, &args)
+        let mut cmd = configure_hidden_command(bin, &args);
+        cmd.env("PYTHONIOENCODING", "utf-8");
+        cmd.env("PYTHONUTF8", "1");
+        let output = cmd
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .output()
@@ -253,11 +366,12 @@ impl YtDlpPack {
             && task.filename != "download.bin"
         {
             let sanitized = crate::sanitizer::Sanitizer::sanitize_filename(&task.filename);
-            let ext = sanitized.rsplit('.').next().unwrap_or("mp4");
-            if ext == "mp4" || ext == "mkv" || ext == "webm" {
-                format!("{}.%(ext)s", sanitized.trim_end_matches(&format!(".{}", ext)))
+            let safe_name = sanitized.replace('%', "%%");
+            let ext = safe_name.rsplit('.').next().unwrap_or("mp4");
+            if ext == "mp4" || ext == "mkv" || ext == "webm" || ext == "mp3" || ext == "m4a" {
+                format!("{}.%(ext)s", safe_name.trim_end_matches(&format!(".{}", ext)))
             } else {
-                format!("{}.%(ext)s", sanitized)
+                format!("{}.%(ext)s", safe_name)
             }
         } else {
             "%(title)s.%(ext)s".to_string()
@@ -270,12 +384,22 @@ impl YtDlpPack {
             "--newline".to_string(),
             "--no-playlist".to_string(),
             "--progress-template".to_string(),
-            "EDM_PROG:%(progress._percent_str)s|%(progress._speed_str)s|%(progress._total_bytes_str)s|%(progress.eta)s".to_string(),
+            "download:EDM_PROG:%(progress._percent_str)s|%(progress._speed_str)s|%(progress._total_bytes_str)s|%(progress.eta)s".to_string(),
             "--print".to_string(),
             "after_move:EDM_FINAL:%(filepath)s".to_string(),
             "-o".to_string(),
             out_template_str,
         ];
+
+        let ffmpeg_opt = Self::locate_ffmpeg();
+        if let Some(ref ffmpeg_path) = ffmpeg_opt {
+            args.push("--ffmpeg-location".to_string());
+            let loc = ffmpeg_path
+                .parent()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|| ffmpeg_path.to_string_lossy().to_string());
+            args.push(loc);
+        }
 
         let clean_url = task.url.split('#').next().unwrap_or(&task.url).to_string();
         let is_audio = task.filename.ends_with(".mp3")
@@ -311,20 +435,28 @@ impl YtDlpPack {
 
             if let Some(h) = height_pref {
                 args.push("-f".to_string());
-                args.push(format!("bestvideo[height<={h}][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<={h}]+bestaudio/best[height<={h}]/best"));
-                args.push("--merge-output-format".to_string());
-                args.push("mp4".to_string());
+                if ffmpeg_opt.is_some() {
+                    args.push(format!("bestvideo[height<={h}][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<={h}]+bestaudio/best[height<={h}]/best"));
+                    args.push("--merge-output-format".to_string());
+                    args.push("mp4".to_string());
+                } else {
+                    args.push(format!("best[height<={h}][ext=mp4]/best[height<={h}]/best"));
+                }
             } else {
                 args.push("-f".to_string());
-                args.push("bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best".to_string());
-                args.push("--merge-output-format".to_string());
-                args.push("mp4".to_string());
+                if ffmpeg_opt.is_some() {
+                    args.push("bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best".to_string());
+                    args.push("--merge-output-format".to_string());
+                    args.push("mp4".to_string());
+                } else {
+                    args.push("best[ext=mp4]/best".to_string());
+                }
             }
         }
 
-        if Self::locate_node().is_some() {
+        if let Some(node_path) = Self::locate_node() {
             args.push("--js-runtimes".to_string());
-            args.push("node".to_string());
+            args.push(format!("node:{}", node_path.to_string_lossy()));
         }
 
         if let Some(ref cookies) = task.cookies {
@@ -340,6 +472,8 @@ impl YtDlpPack {
         args.push(clean_url);
 
         let mut cmd = configure_hidden_command(bin, &args);
+        cmd.env("PYTHONIOENCODING", "utf-8");
+        cmd.env("PYTHONUTF8", "1");
         cmd.stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
 
@@ -351,6 +485,35 @@ impl YtDlpPack {
         let download_id = task.id.to_string();
         let mut final_path: Option<PathBuf> = None;
         let mut stderr_lines = Vec::new();
+
+        if let Some(ref cb) = telemetry_cb {
+            cb(AdaptiveTelemetry {
+                download_id: download_id.clone(),
+                total_bytes: None,
+                downloaded_bytes: 0,
+                progress_pct: 0.0,
+                instant_throughput_bps: 0,
+                rolling_throughput_bps: 0,
+                active_connections: 1,
+                target_connections: 1,
+                live_workers: 1,
+                max_allowed_connections: 1,
+                mode: AccelerationMode::Stable,
+                eta_seconds: None,
+                decision_reason: "Resolving media streams...".to_string(),
+                workers: vec![WorkerTelemetry {
+                    idx: 0,
+                    start: 0,
+                    end: 0,
+                    pos: 0,
+                    bytes_downloaded: 0,
+                    speed_bps: 0,
+                    status: WorkerStatus::Connecting,
+                    retry_count: 0,
+                }],
+                updated_at: Utc::now(),
+            });
+        }
 
         use tokio::io::{AsyncBufReadExt, BufReader};
         let mut stdout_reader = BufReader::new(stdout).lines();
@@ -372,6 +535,11 @@ impl YtDlpPack {
                                 if !path_str.is_empty() {
                                     final_path = Some(PathBuf::from(path_str));
                                 }
+                            } else if line.starts_with("[download] Destination:") {
+                                let path_str = line.trim_start_matches("[download] Destination:").trim();
+                                if !path_str.is_empty() {
+                                    final_path = Some(PathBuf::from(path_str));
+                                }
                             } else if line.starts_with("EDM_PROG:") {
                                 let payload = line.trim_start_matches("EDM_PROG:").trim();
                                 let parts: Vec<&str> = payload.split('|').collect();
@@ -381,7 +549,7 @@ impl YtDlpPack {
                                     let speed_str = parts[1].trim();
                                     let total_str = parts[2].trim();
                                     let eta_str = parts.get(3).map(|s| s.trim()).unwrap_or("");
-                                    let eta_secs = eta_str.parse::<u64>().ok();
+                                    let eta_secs = parse_eta_secs(eta_str);
 
                                     let total_bytes = parse_size_str(total_str);
                                     let speed_bps = parse_speed_str(speed_str);
@@ -428,7 +596,14 @@ impl YtDlpPack {
                 }
                 err_res = stderr_reader.next_line() => {
                     if let Ok(Some(line)) = err_res {
-                        if !line.trim().is_empty() {
+                        let trimmed = line.trim();
+                        if trimmed.starts_with("[download] Destination:") {
+                            let path_str = trimmed.trim_start_matches("[download] Destination:").trim();
+                            if !path_str.is_empty() {
+                                final_path = Some(PathBuf::from(path_str));
+                            }
+                        }
+                        if !trimmed.is_empty() {
                             stderr_lines.push(line);
                         }
                     }

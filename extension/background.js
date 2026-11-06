@@ -1035,17 +1035,29 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
   if (msg.action === "create_task") {
     const req_id = crypto.randomUUID();
-    sendWsCreateTask({
-      type: "create_task",
-      req_id,
-      url: msg.url,
-      filename: msg.filename,
-      referrer: msg.referrer,
-      user_agent: navigator.userAgent,
-      cookies: []
-    }).then((res) => {
+    (async () => {
+      let cookies = [];
+      try {
+        const rawCookies = await chrome.cookies.getAll({ url: msg.url });
+        cookies = rawCookies.map((c) => ({
+          name: c.name,
+          value: c.value,
+          domain: c.domain,
+          path: c.path
+        }));
+      } catch {
+      }
+      const res = await sendWsCreateTask({
+        type: "create_task",
+        req_id,
+        url: msg.url,
+        filename: msg.filename,
+        referrer: msg.referrer,
+        user_agent: navigator.userAgent,
+        cookies
+      });
       sendResponse(res);
-    });
+    })();
     return true;
   }
   if (msg.action === "media_detected") {

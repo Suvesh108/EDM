@@ -120,8 +120,8 @@ function scanDOMForMedia() {
       }
     });
 
-    // Attach overlay badge to video player
-    attachVideoOverlay(video);
+    // Video element registered for media sniffer tab
+    // (Floating video player overlay removed per user preference)
   });
 
   // B. Scan <audio> elements
@@ -149,144 +149,11 @@ function scanDOMForMedia() {
   });
 }
 
-// 4. Floating 3D "Download with EDM" Overlay for Video Players
-const attachedVideos = new WeakSet<HTMLVideoElement>();
-
-function attachVideoOverlay(video: HTMLVideoElement) {
-  if (attachedVideos.has(video)) return;
-  attachedVideos.add(video);
-
-  let overlay: HTMLDivElement | null = null;
-  let hideTimeout: any = null;
-
-  function ensureOverlay(): HTMLDivElement {
-    if (overlay && document.body.contains(overlay)) return overlay;
-
-    overlay = document.createElement("div");
-    overlay.className = "edm-floating-media-badge";
-    overlay.style.position = "absolute";
-    overlay.style.zIndex = "2147483647";
-    overlay.style.display = "none";
-    overlay.style.alignItems = "center";
-    overlay.style.gap = "8px";
-    overlay.style.padding = "7px 12px";
-    overlay.style.background = "linear-gradient(180deg, #181c24 0%, #0d1017 100%)";
-    overlay.style.border = "1px solid rgba(255, 255, 255, 0.15)";
-    overlay.style.borderRadius = "8px";
-    overlay.style.boxShadow = "0 8px 24px rgba(0, 0, 0, 0.75), inset 0 1px 0 rgba(255, 255, 255, 0.15)";
-    overlay.style.color = "#ffffff";
-    overlay.style.fontFamily = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
-    overlay.style.fontSize = "12px";
-    overlay.style.fontWeight = "600";
-    overlay.style.cursor = "pointer";
-    overlay.style.userSelect = "none";
-    overlay.style.transition = "all 0.18s cubic-bezier(0.16, 1, 0.3, 1)";
-    overlay.style.pointerEvents = "auto";
-
-    overlay.innerHTML = `
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;">
-        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-        <polyline points="7 10 12 15 17 10"></polyline>
-        <line x1="12" y1="15" x2="12" y2="3"></line>
-      </svg>
-      <span class="edm-badge-label" style="letter-spacing: 0.02em;">Download with EDM</span>
-    `;
-
-    overlay.addEventListener("mouseenter", () => {
-      if (overlay) {
-        overlay.style.background = "linear-gradient(180deg, #222834 0%, #11151f 100%)";
-        overlay.style.borderColor = "#3b82f6";
-        overlay.style.transform = "scale(1.03)";
-      }
-    });
-
-    overlay.addEventListener("mouseleave", () => {
-      if (overlay) {
-        overlay.style.background = "linear-gradient(180deg, #181c24 0%, #0d1017 100%)";
-        overlay.style.borderColor = "rgba(255, 255, 255, 0.15)";
-        overlay.style.transform = "scale(1.0)";
-      }
-    });
-
-    overlay.addEventListener("click", (e) => {
-      e.stopPropagation();
-      e.preventDefault();
-
-      const targetSrc = video.currentSrc || video.src || window.location.href;
-      const label = overlay?.querySelector(".edm-badge-label") as HTMLSpanElement;
-      if (label) {
-        label.textContent = "Sending to EDM...";
-        label.style.color = "#60a5fa";
-      }
-
-      chrome.runtime.sendMessage(
-        {
-          action: "create_task",
-          url: targetSrc,
-          filename: cleanMediaTitle(video.getAttribute("title") || document.title, targetSrc),
-          referrer: window.location.href,
-        },
-        (resp) => {
-          if (label) {
-            if (resp && resp.ok) {
-              label.textContent = "Added to EDM ✓";
-              label.style.color = "#34d399";
-            } else {
-              label.textContent = resp?.error || "Error adding";
-              label.style.color = "#f87171";
-            }
-            setTimeout(() => {
-              if (label) {
-                label.textContent = "Download with EDM";
-                label.style.color = "#ffffff";
-              }
-            }, 2500);
-          }
-        }
-      );
-    });
-
-    document.body.appendChild(overlay);
-    return overlay;
-  }
-
-  function updatePosition() {
-    if (!overlay || !document.body.contains(video)) return;
-    const rect = video.getBoundingClientRect();
-    if (rect.width < 120 || rect.height < 80 || rect.top > window.innerHeight || rect.bottom < 0) {
-      overlay.style.display = "none";
-      return;
-    }
-    const top = Math.max(8, rect.top + window.scrollY + 12);
-    const left = rect.left + window.scrollX + rect.width - (overlay.offsetWidth || 170) - 14;
-    overlay.style.top = `${top}px`;
-    overlay.style.left = `${Math.max(10, left)}px`;
-    overlay.style.display = "inline-flex";
-  }
-
-  function showOverlay() {
-    ensureOverlay();
-    updatePosition();
-    if (hideTimeout) clearTimeout(hideTimeout);
-    hideTimeout = setTimeout(() => {
-      if (overlay && !overlay.matches(":hover")) {
-        overlay.style.display = "none";
-      }
-    }, 4000);
-  }
-
-  video.addEventListener("mouseenter", showOverlay);
-  video.addEventListener("play", showOverlay);
-  video.addEventListener("mousemove", showOverlay);
-  video.addEventListener("mouseleave", () => {
-    if (hideTimeout) clearTimeout(hideTimeout);
-    hideTimeout = setTimeout(() => {
-      if (overlay && !overlay.matches(":hover")) {
-        overlay.style.display = "none";
-      }
-    }, 1500);
-  });
+// 4. Clean up any legacy floating badges from page
+function cleanupFloatingBadges() {
+  document.querySelectorAll(".edm-floating-media-badge").forEach((el) => el.remove());
 }
+cleanupFloatingBadges();
 
 // 5. Observers & Lifecycle Triggers
 const mutationObserver = new MutationObserver(() => {
@@ -431,14 +298,16 @@ function injectYoutubePillIfNeeded() {
     btn.style.transform = "translateY(0)";
   });
 
-  // Dropdown menu
+  // Dropdown menu (Compact fixed width matching Image 4)
   const menu = document.createElement("div");
   menu.className = "edm-yt-dropdown-menu";
   menu.style.position = "absolute";
   menu.style.top = "44px";
   menu.style.left = "0";
   menu.style.zIndex = "2147483647";
-  menu.style.minWidth = "280px";
+  menu.style.width = "270px";
+  menu.style.maxWidth = "270px";
+  menu.style.boxSizing = "border-box";
   menu.style.background = "linear-gradient(180deg, #181c24 0%, #0d1017 100%)";
   menu.style.border = "1px solid rgba(255, 255, 255, 0.16)";
   menu.style.borderRadius = "12px";
@@ -449,6 +318,7 @@ function injectYoutubePillIfNeeded() {
   menu.style.gap = "6px";
   menu.style.color = "#f4f4f5";
   menu.style.backdropFilter = "blur(14px)";
+  menu.style.overflow = "hidden";
 
   function getCleanVideoTitle(): string {
     const titleEl =
@@ -510,6 +380,8 @@ function injectYoutubePillIfNeeded() {
     item.style.cursor = "pointer";
     item.style.transition = "background 0.15s ease, transform 0.1s ease";
     item.style.background = "transparent";
+    item.style.width = "100%";
+    item.style.boxSizing = "border-box";
 
     item.innerHTML = `
       <div style="width: 26px; height: 26px; border-radius: 6px; background: rgba(255,255,255,0.06); display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
@@ -547,6 +419,9 @@ function injectYoutubePillIfNeeded() {
     header.style.padding = "4px 8px 8px 8px";
     header.style.borderBottom = "1px solid rgba(255, 255, 255, 0.1)";
     header.style.marginBottom = "4px";
+    header.style.width = "100%";
+    header.style.boxSizing = "border-box";
+    header.style.overflow = "hidden";
 
     const titleEl = document.createElement("div");
     titleEl.style.fontSize = "12px";
@@ -555,6 +430,9 @@ function injectYoutubePillIfNeeded() {
     titleEl.style.whiteSpace = "nowrap";
     titleEl.style.overflow = "hidden";
     titleEl.style.textOverflow = "ellipsis";
+    titleEl.style.width = "100%";
+    titleEl.style.maxWidth = "250px";
+    titleEl.style.boxSizing = "border-box";
     titleEl.textContent = getCleanVideoTitle();
     header.appendChild(titleEl);
 

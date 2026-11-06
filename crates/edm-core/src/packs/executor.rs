@@ -325,6 +325,7 @@ impl PackExecutor {
 
         // 1. If yt-dlp is available on host system, prioritize it!
         // Solves YouTube JavaScript challenges and merges high-res video + audio streams cleanly.
+        let mut ytdlp_err: Option<String> = None;
         if YtDlpPack::locate_binary().is_some() {
             match YtDlpPack::download_media(task.clone(), telemetry_cb.clone()).await {
                 Ok(path) => return Ok(path),
@@ -333,6 +334,7 @@ impl PackExecutor {
                         "yt-dlp execution error: {}. Falling back to in-process extractors...",
                         err
                     );
+                    ytdlp_err = Some(err);
                 }
             }
         }
@@ -342,10 +344,31 @@ impl PackExecutor {
         let vimeo = VimeoExtractor;
 
         let extracted = if yt.can_extract(&task.url) {
-            yt.extract(&task.url, &client).await?
+            match yt.extract(&task.url, &client).await {
+                Ok(ext) => ext,
+                Err(ext_err) => {
+                    if let Some(err) = ytdlp_err {
+                        return Err(format!("Media extraction failed: {err}"));
+                    } else {
+                        return Err(format!("YouTube extraction error: {ext_err}"));
+                    }
+                }
+            }
         } else if vimeo.can_extract(&task.url) {
-            vimeo.extract(&task.url, &client).await?
+            match vimeo.extract(&task.url, &client).await {
+                Ok(ext) => ext,
+                Err(ext_err) => {
+                    if let Some(err) = ytdlp_err {
+                        return Err(format!("Media extraction failed: {err}"));
+                    } else {
+                        return Err(format!("Vimeo extraction error: {ext_err}"));
+                    }
+                }
+            }
         } else {
+            if let Some(err) = ytdlp_err {
+                return Err(format!("Media extraction failed: {err}"));
+            }
             return Err("Site not supported by EDM yet. Please install yt-dlp for universal media extraction.".to_string());
         };
 
