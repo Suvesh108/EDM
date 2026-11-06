@@ -176,6 +176,49 @@ impl YtDlpPack {
         None
     }
 
+    /// Ensure yt-dlp binary is available, auto-bootstrapping to %LOCALAPPDATA%\EDM\tools\yt-dlp.exe if missing
+    pub async fn ensure_binary() -> Option<PathBuf> {
+        if let Some(p) = Self::locate_binary() {
+            return Some(p);
+        }
+
+        #[cfg(windows)]
+        {
+            if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+                let tools_dir = PathBuf::from(&local_app_data).join("EDM").join("tools");
+                let target_exe = tools_dir.join("yt-dlp.exe");
+                if target_exe.exists() {
+                    return Some(target_exe);
+                }
+
+                if tokio::fs::create_dir_all(&tools_dir).await.is_ok() {
+                    let download_url = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe";
+                    let client = reqwest::Client::builder()
+                        .timeout(std::time::Duration::from_secs(45))
+                        .user_agent("EDM-Tools-Bootstrap/1.0")
+                        .build();
+                    if let Ok(client) = client {
+                        if let Ok(resp) = client.get(download_url).send().await {
+                            if resp.status().is_success() {
+                                if let Ok(bytes) = resp.bytes().await {
+                                    let tmp_exe = tools_dir.join("yt-dlp.tmp");
+                                    if tokio::fs::write(&tmp_exe, bytes).await.is_ok() {
+                                        let _ = tokio::fs::rename(&tmp_exe, &target_exe).await;
+                                        if target_exe.exists() {
+                                            return Some(target_exe);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Self::locate_binary()
+    }
+
     /// Detect ffmpeg binary location (prioritizing local EDM tools, WinGet, and PATH)
     pub fn locate_ffmpeg() -> Option<PathBuf> {
         if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
@@ -359,8 +402,8 @@ impl YtDlpPack {
         task: AdaptiveDownloadTask,
         telemetry_cb: Option<TelemetryCallback>,
     ) -> Result<PathBuf, String> {
-        let bin = Self::locate_binary()
-            .ok_or_else(|| "yt-dlp binary not found on system".to_string())?;
+        let bin = Self::ensure_binary().await
+            .ok_or_else(|| "yt-dlp binary could not be located or downloaded".to_string())?;
 
         let target_name = if !task.filename.is_empty()
             && task.filename != "download"

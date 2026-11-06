@@ -335,16 +335,103 @@ function injectYoutubePillIfNeeded() {
     return document.title.replace(" - YouTube", "").trim().replace(/[\\/:*?"<>|]/g, "_") || "YouTube_Video";
   }
 
-  function triggerDownload(formatTag: string, customTitleSuffix: string, isAudio = false) {
+  function requestPageStreamData(): Promise<any> {
+    return new Promise((resolve) => {
+      const handler = (event: MessageEvent) => {
+        if (event.source === window && event.data?.type === "EDM_STREAM_DATA_RESPONSE") {
+          window.removeEventListener("message", handler);
+          resolve(event.data.payload);
+        }
+      };
+      window.addEventListener("message", handler);
+      setTimeout(() => {
+        window.removeEventListener("message", handler);
+        resolve(null);
+      }, 800);
+
+      try {
+        const script = document.createElement("script");
+        script.textContent = `
+          (function() {
+            try {
+              const player = document.getElementById('movie_player');
+              let data = null;
+              if (player && typeof player.getStreamingData === 'function') {
+                data = player.getStreamingData();
+              } else if (player && typeof player.getPlayerResponse === 'function') {
+                data = player.getPlayerResponse()?.streamingData;
+              } else if (window.ytInitialPlayerResponse && window.ytInitialPlayerResponse.streamingData) {
+                data = window.ytInitialPlayerResponse.streamingData;
+              }
+              window.postMessage({ type: 'EDM_STREAM_DATA_RESPONSE', payload: data }, '*');
+            } catch (e) {
+              window.postMessage({ type: 'EDM_STREAM_DATA_RESPONSE', payload: null }, '*');
+            }
+          })();
+        `;
+        (document.head || document.documentElement).appendChild(script);
+        script.remove();
+      } catch {
+        resolve(null);
+      }
+    });
+  }
+
+  async function triggerDownload(formatTag: string, customTitleSuffix: string, isAudio = false) {
     const title = getCleanVideoTitle();
-    const downloadUrl = window.location.href + (formatTag ? "#" + formatTag : "");
     const ext = isAudio ? (formatTag.includes("m4a") ? "m4a" : "mp3") : "mp4";
     const filename = `${title}${customTitleSuffix}.${ext}`;
 
     const label = btn.querySelector(".edm-yt-btn-label") as HTMLSpanElement;
     if (label) {
-      label.textContent = "Sending...";
+      label.textContent = "Resolving...";
       label.style.color = "#60a5fa";
+    }
+
+    let downloadUrl = window.location.href + (formatTag ? "#" + formatTag : "");
+
+    try {
+      const streamData = await requestPageStreamData();
+      if (streamData) {
+        const formats: any[] = Array.isArray(streamData.formats) ? streamData.formats : [];
+        const adaptive: any[] = Array.isArray(streamData.adaptiveFormats) ? streamData.adaptiveFormats : [];
+        const all = [...formats, ...adaptive];
+
+        let targetStreamUrl: string | null = null;
+        if (isAudio) {
+          const audioFormats = all.filter((f) => f.mimeType && f.mimeType.startsWith("audio/") && f.url);
+          if (formatTag.includes("m4a")) {
+            const m4a = audioFormats.find((f) => f.mimeType && f.mimeType.includes("mp4a"));
+            targetStreamUrl = m4a?.url || audioFormats[0]?.url || null;
+          } else {
+            targetStreamUrl = audioFormats[0]?.url || null;
+          }
+        } else if (formatTag === "1080p") {
+          const f1080 = all.find((f) => (f.qualityLabel?.includes("1080") || f.height === 1080) && f.url);
+          targetStreamUrl = f1080?.url || null;
+        } else if (formatTag === "720p") {
+          const f720 = all.find((f) => (f.qualityLabel?.includes("720") || f.height === 720) && f.url);
+          targetStreamUrl = f720?.url || null;
+        } else if (formatTag === "480p") {
+          const f480 = all.find((f) => (f.qualityLabel?.includes("480") || f.qualityLabel?.includes("360") || f.height === 480 || f.height === 360) && f.url);
+          targetStreamUrl = f480?.url || null;
+        } else {
+          // Best available
+          const muxed = formats.find((f) => f.url && f.qualityLabel);
+          const bestAdaptive = adaptive.filter((f) => f.url && f.mimeType?.startsWith("video/")).pop();
+          targetStreamUrl = muxed?.url || bestAdaptive?.url || null;
+        }
+
+        if (targetStreamUrl) {
+          downloadUrl = targetStreamUrl;
+        }
+      }
+    } catch {
+      // Fall back to watch page url with format fragment
+    }
+
+    if (label) {
+      label.textContent = "Sending...";
     }
 
     chrome.runtime.sendMessage(

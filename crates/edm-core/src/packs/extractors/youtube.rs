@@ -57,15 +57,16 @@ impl SiteExtractor for YouTubeExtractor {
         let video_id = Self::extract_video_id(url)
             .ok_or_else(|| "Could not extract YouTube video ID from URL".to_string())?;
 
-        // Query InnerTube Android Client API endpoint (which serves direct cipher-free streaming URLs)
+        // Query InnerTube Android VR Client API endpoint (which serves direct cipher-free streaming URLs without HTTP 400 precondition blocks)
         let endpoint = "https://www.youtube.com/youtubei/v1/player";
         let body = serde_json::json!({
             "videoId": video_id,
             "context": {
                 "client": {
-                    "clientName": "ANDROID",
-                    "clientVersion": "19.09.37",
-                    "androidSdkVersion": 30,
+                    "clientName": "ANDROID_VR",
+                    "clientVersion": "1.56.21",
+                    "deviceMake": "Oculus",
+                    "deviceModel": "Quest 3",
                     "hl": "en",
                     "gl": "US"
                 }
@@ -79,7 +80,7 @@ impl SiteExtractor for YouTubeExtractor {
             .header("Content-Type", "application/json")
             .header(
                 "User-Agent",
-                "com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip",
+                "Mozilla/5.0 (Linux; Android 12; Quest 3) AppleWebKit/537.36 (KHTML, like Gecko) OculusBrowser/32.0.0.35.485 Chrome/120.0.6099.144 Mobile VR Safari/537.36",
             )
             .body(body_str)
             .send()

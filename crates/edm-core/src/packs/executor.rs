@@ -326,7 +326,7 @@ impl PackExecutor {
         // 1. If yt-dlp is available on host system, prioritize it!
         // Solves YouTube JavaScript challenges and merges high-res video + audio streams cleanly.
         let mut ytdlp_err: Option<String> = None;
-        if YtDlpPack::locate_binary().is_some() {
+        if YtDlpPack::ensure_binary().await.is_some() {
             match YtDlpPack::download_media(task.clone(), telemetry_cb.clone()).await {
                 Ok(path) => return Ok(path),
                 Err(err) => {
