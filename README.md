@@ -66,6 +66,8 @@ Catch downloads instantly from your favorite browser. Check live progress, pause
 - **One-Key Bypass**: Simply hold `Shift` or `Alt` while clicking any link to download directly through your browser instead.
 
 ### 🎬 Built-In Media & File Capabilities
+- **YouTube Quick-Download Integration**: Seamless download pill integrated directly into YouTube watch pages and shorts next to the Subscribe button. Auto-extracts stream details with instant quality selection (1080p Full HD, 720p HD, 480p/360p, or direct MP3/M4A audio extraction). Fully toggleable in extension settings.
+- **Smooth Progressive Telemetry**: Multi-phase real-time tracking for separate video and audio DASH streams with combined monotonic progress, live throughput, and FFmpeg remuxing indicators.
 - **Direct Video & Audio Downloads**: Download videos and audio streams directly without needing to install external converter programs.
 - **Torrent & Magnet Links**: Native support for magnet links and torrent files right within the app.
 - **Smart Category Sorting**: Automatically classifies files into Videos, Music, Documents, Compressed Archives, and Applications based on file types.
@@ -103,15 +105,17 @@ Get the latest installer from the [**Releases Page**](https://github.com/Suvesh1
 
 | Download | Description |
 | :--- | :--- |
-| **[`EDM_0.0.5_x64-setup.exe`](https://github.com/Suvesh108/EDM/releases/download/v0.0.5/EDM_0.0.5_x64-setup.exe)** | Official Standalone Windows Installer (Windows 10 / 11, 64-bit). |
-| **[`edm-extension.tar.gz`](https://github.com/Suvesh108/EDM/releases/download/v0.0.5/edm-extension.tar.gz)** | Browser extension package for Chrome, Edge, Brave, and Opera. |
+| **[`EDM_0.0.8_x64-setup.exe`](https://github.com/Suvesh108/EDM/releases/download/v0.0.8/EDM_0.0.8_x64-setup.exe)** | Official Standalone Windows Installer (Windows 10 / 11, 64-bit). |
+| **[`edm-extension-chromium.zip`](https://github.com/Suvesh108/EDM/releases/download/v0.0.8/edm-extension-chromium.zip)** | Pre-packaged Chromium extension for Chrome, Edge, Brave, and Opera. |
+| **[`edm-firefox.xpi`](https://github.com/Suvesh108/EDM/releases/download/v0.0.8/edm-firefox.xpi)** | Signed browser companion add-on for Mozilla Firefox. |
+| **[`edm-extension.tar.gz`](https://github.com/Suvesh108/EDM/releases/download/v0.0.8/edm-extension.tar.gz)** | Unpacked extension bundle source archive. |
 
 ### 2. Install the Browser Companion
-1. Download and unpack `edm-extension.tar.gz`.
+1. Download `edm-extension-chromium.zip` (or `edm-extension.tar.gz`) and extract it.
 2. Open your browser's extension page (`chrome://extensions`, `edge://extensions`, or `brave://extensions`).
 3. Turn on **Developer mode** (top-right toggle).
-4. Click **Load unpacked** and select the extension folder.
-5. The extension will automatically link to EDM and start capturing downloads!
+4. Click **Load unpacked** and select the extracted extension folder.
+5. The extension automatically links to EDM and is ready to capture downloads!
 
 ---
 
