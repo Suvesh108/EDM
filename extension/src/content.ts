@@ -120,12 +120,7 @@ function scanDOMForMedia() {
       }
     });
 
-    // Video player overlay: Strictly disabled on YouTube watch pages & SPA navigations
-    // Enabled on all other general websites
-    const isYouTube = window.location.hostname.includes("youtube.com");
-    if (!isYouTube) {
-      attachVideoOverlay(video);
-    }
+    // Floating video player overlay removed permanently per user request
   });
 
   // B. Scan <audio> elements
@@ -153,155 +148,12 @@ function scanDOMForMedia() {
   });
 }
 
-// 4. Floating "Download with EDM" Overlay for Non-YouTube Video Players
-const attachedVideos = new WeakSet<HTMLVideoElement>();
-
+// 4. Floating video overlay removed permanently per user request.
+// Clean up any lingering badges from DOM if present.
 function cleanupFloatingBadges() {
   document.querySelectorAll(".edm-floating-media-badge").forEach((el) => el.remove());
 }
 cleanupFloatingBadges();
-
-function attachVideoOverlay(video: HTMLVideoElement) {
-  // Absolute Invariant: Completely disabled on YouTube (overlay redundant with Subscribe pill)
-  if (window.location.hostname.includes("youtube.com")) {
-    cleanupFloatingBadges();
-    return;
-  }
-
-  if (attachedVideos.has(video)) return;
-  attachedVideos.add(video);
-
-  let overlay: HTMLDivElement | null = null;
-  let hideTimeout: any = null;
-
-  function ensureOverlay(): HTMLDivElement {
-    if (overlay && document.body.contains(overlay)) return overlay;
-
-    overlay = document.createElement("div");
-    overlay.className = "edm-floating-media-badge";
-    overlay.style.position = "absolute";
-    overlay.style.zIndex = "2147483647";
-    overlay.style.display = "none";
-    overlay.style.alignItems = "center";
-    overlay.style.gap = "8px";
-    overlay.style.padding = "7px 12px";
-    overlay.style.background = "linear-gradient(180deg, #181c24 0%, #0d1017 100%)";
-    overlay.style.border = "1px solid rgba(255, 255, 255, 0.15)";
-    overlay.style.borderRadius = "8px";
-    overlay.style.boxShadow = "0 8px 24px rgba(0, 0, 0, 0.75), inset 0 1px 0 rgba(255, 255, 255, 0.15)";
-    overlay.style.color = "#ffffff";
-    overlay.style.fontFamily = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
-    overlay.style.fontSize = "12px";
-    overlay.style.fontWeight = "600";
-    overlay.style.cursor = "pointer";
-    overlay.style.userSelect = "none";
-    overlay.style.transition = "all 0.18s cubic-bezier(0.16, 1, 0.3, 1)";
-    overlay.style.pointerEvents = "auto";
-
-    overlay.innerHTML = `
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;">
-        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-        <polyline points="7 10 12 15 17 10"></polyline>
-        <line x1="12" y1="15" x2="12" y2="3"></line>
-      </svg>
-      <span class="edm-badge-label" style="letter-spacing: 0.02em;">Download with EDM</span>
-    `;
-
-    overlay.addEventListener("mouseenter", () => {
-      if (overlay) {
-        overlay.style.background = "linear-gradient(180deg, #222834 0%, #11151f 100%)";
-        overlay.style.borderColor = "#3b82f6";
-        overlay.style.transform = "scale(1.03)";
-      }
-    });
-
-    overlay.addEventListener("mouseleave", () => {
-      if (overlay) {
-        overlay.style.background = "linear-gradient(180deg, #181c24 0%, #0d1017 100%)";
-        overlay.style.borderColor = "rgba(255, 255, 255, 0.15)";
-        overlay.style.transform = "scale(1.0)";
-      }
-    });
-
-    overlay.addEventListener("click", (e) => {
-      e.stopPropagation();
-      e.preventDefault();
-
-      const targetSrc = video.currentSrc || video.src || window.location.href;
-      const label = overlay?.querySelector(".edm-badge-label") as HTMLSpanElement;
-      if (label) {
-        label.textContent = "Sending to EDM...";
-        label.style.color = "#60a5fa";
-      }
-
-      chrome.runtime.sendMessage(
-        {
-          action: "create_task",
-          url: targetSrc,
-          filename: cleanMediaTitle(video.getAttribute("title") || document.title, targetSrc),
-          referrer: window.location.href,
-        },
-        (resp) => {
-          if (label) {
-            if (resp && resp.ok) {
-              label.textContent = "Added to EDM ✓";
-              label.style.color = "#34d399";
-            } else {
-              label.textContent = resp?.error || "Error adding";
-              label.style.color = "#f87171";
-            }
-            setTimeout(() => {
-              if (label) {
-                label.textContent = "Download with EDM";
-                label.style.color = "#ffffff";
-              }
-            }, 2500);
-          }
-        }
-      );
-    });
-
-    document.body.appendChild(overlay);
-    return overlay;
-  }
-
-  function updatePosition() {
-    if (!overlay || !document.body.contains(video)) return;
-    const rect = video.getBoundingClientRect();
-    if (rect.width < 120 || rect.height < 80 || rect.top > window.innerHeight || rect.bottom < 0) {
-      overlay.style.display = "none";
-      return;
-    }
-    const top = Math.max(8, rect.top + window.scrollY + 12);
-    const left = rect.left + window.scrollX + rect.width - (overlay.offsetWidth || 170) - 14;
-    overlay.style.top = `${top}px`;
-    overlay.style.left = `${Math.max(10, left)}px`;
-    overlay.style.display = "inline-flex";
-  }
-
-  function showOverlay() {
-    ensureOverlay();
-    updatePosition();
-    if (hideTimeout) clearTimeout(hideTimeout);
-    hideTimeout = setTimeout(() => {
-      if (overlay && !overlay.matches(":hover")) {
-        overlay.style.display = "none";
-      }
-    }, 4000);
-  }
-
-  video.addEventListener("mouseenter", showOverlay);
-  video.addEventListener("play", showOverlay);
-  video.addEventListener("mousemove", showOverlay);
-  video.addEventListener("mouseleave", () => {
-    if (hideTimeout) clearTimeout(hideTimeout);
-    hideTimeout = setTimeout(() => {
-      if (overlay && !overlay.matches(":hover")) {
-        overlay.style.display = "none";
-      }
-    }, 1500);
-  });
-}
 
 // 5. Observers & Lifecycle Triggers
 const mutationObserver = new MutationObserver(() => {
