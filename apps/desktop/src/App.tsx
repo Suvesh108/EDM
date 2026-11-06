@@ -1634,7 +1634,7 @@ export default function App() {
                         {sortField === "speed" && (sortDirection === "asc" ? <ChevronUp className="w-3 h-3 text-[var(--accent)]" /> : <ChevronDown className="w-3 h-3 text-[var(--accent)]" />)}
                       </div>
                     </th>
-                    <th className="py-2 px-3 w-36 min-w-[145px] text-right pr-4 whitespace-nowrap">Actions</th>
+                    <th className="py-2 px-3 w-44 min-w-[172px] text-right pr-5 whitespace-nowrap">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="text-xs">
@@ -1715,7 +1715,7 @@ export default function App() {
                         <td className="py-2.5 px-2 font-mono tabular-nums font-semibold text-[var(--accent)] text-center whitespace-nowrap text-[11px] sm:text-xs">
                           {item.speed}
                         </td>
-                        <td className="py-2.5 px-3 pr-4 w-36 min-w-[145px] text-right whitespace-nowrap">
+                        <td className="py-2.5 px-3 pr-5 w-44 min-w-[172px] text-right whitespace-nowrap">
                           <div className="flex items-center justify-end gap-1.5 opacity-70 group-hover:opacity-100 transition-opacity">
                             {item.state === "completed" ? (
                               <button
