@@ -280,6 +280,7 @@ impl YtDlpPack {
         args.push(url.to_string());
 
         let mut cmd = configure_hidden_command(bin, &args);
+        cmd.env("PYTHONUNBUFFERED", "1");
         cmd.env("PYTHONIOENCODING", "utf-8");
         cmd.env("PYTHONUTF8", "1");
         let output = cmd
@@ -384,7 +385,9 @@ impl YtDlpPack {
             "--newline".to_string(),
             "--no-playlist".to_string(),
             "--progress-template".to_string(),
-            "download:EDM_PROG:%(progress._percent_str)s|%(progress._speed_str)s|%(progress._total_bytes_str)s|%(progress.eta)s".to_string(),
+            "download:EDM_PROG:%(progress._percent_str)s|%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(progress._speed_str)s|%(progress.eta)s".to_string(),
+            "--progress-template".to_string(),
+            "post_process:EDM_POST:%(progress.status)s".to_string(),
             "--print".to_string(),
             "after_move:EDM_FINAL:%(filepath)s".to_string(),
             "-o".to_string(),
@@ -472,6 +475,7 @@ impl YtDlpPack {
         args.push(clean_url);
 
         let mut cmd = configure_hidden_command(bin, &args);
+        cmd.env("PYTHONUNBUFFERED", "1");
         cmd.env("PYTHONIOENCODING", "utf-8");
         cmd.env("PYTHONUTF8", "1");
         cmd.stdout(std::process::Stdio::piped())
@@ -519,6 +523,17 @@ impl YtDlpPack {
         let mut stdout_reader = BufReader::new(stdout).lines();
         let mut stderr_reader = BufReader::new(stderr).lines();
 
+        let mut highest_pct: f64 = 0.0;
+        let mut current_stream: usize = 0;
+        let mut stream0_total: u64 = 0;
+        let mut stream1_total: u64 = 0;
+        let mut stream0_done: u64 = 0;
+        let mut stream1_done: u64 = 0;
+        let is_dual_stream = !is_audio && ffmpeg_opt.is_some();
+        let mut merge_ticks: u32 = 0;
+        let mut combined_total_reported: u64 = 0;
+        let mut combined_done_reported: u64 = 0;
+
         loop {
             if cancelled.load(Ordering::Relaxed) {
                 let _ = child.kill().await;
@@ -540,31 +555,138 @@ impl YtDlpPack {
                                 if !path_str.is_empty() {
                                     final_path = Some(PathBuf::from(path_str));
                                 }
+                                if is_dual_stream && stream0_done > 0 {
+                                    current_stream = 1;
+                                }
+                            } else if line.starts_with("post_process:EDM_POST:") {
+                                let status_val = line.trim_start_matches("post_process:EDM_POST:").trim();
+                                if status_val == "finished" && is_dual_stream && current_stream == 0 {
+                                    current_stream = 1;
+                                }
+                            } else if line.contains("[Merger]") || line.contains("Merging formats") || line.contains("[ffmpeg]") {
+                                merge_ticks = merge_ticks.saturating_add(1);
+                                let merge_pct = (90.0 + (merge_ticks as f64 * 1.5).min(9.0)).clamp(90.0, 99.0);
+                                highest_pct = highest_pct.max(merge_pct);
+                                let combined_total = if stream0_total > 0 && stream1_total > 0 {
+                                    stream0_total + stream1_total
+                                } else if stream0_total > 0 {
+                                    stream0_total + (stream0_total as f64 * 0.12) as u64
+                                } else {
+                                    combined_total_reported
+                                };
+                                let combined_done = if combined_total > 0 {
+                                    (combined_total as f64 * (highest_pct / 100.0)) as u64
+                                } else {
+                                    stream0_done + stream1_done
+                                };
+                                combined_total_reported = combined_total;
+                                combined_done_reported = combined_done;
+
+                                if let Some(ref cb) = telemetry_cb {
+                                    cb(AdaptiveTelemetry {
+                                        download_id: download_id.clone(),
+                                        total_bytes: if combined_total > 0 { Some(combined_total) } else { None },
+                                        downloaded_bytes: combined_done,
+                                        progress_pct: highest_pct,
+                                        instant_throughput_bps: 0,
+                                        rolling_throughput_bps: 0,
+                                        active_connections: 1,
+                                        target_connections: 1,
+                                        live_workers: 1,
+                                        max_allowed_connections: 1,
+                                        mode: AccelerationMode::Stable,
+                                        eta_seconds: Some(2),
+                                        decision_reason: "Merging video and audio streams with FFmpeg...".to_string(),
+                                        workers: vec![WorkerTelemetry {
+                                            idx: 0,
+                                            start: 0,
+                                            end: combined_total,
+                                            pos: combined_done,
+                                            bytes_downloaded: combined_done,
+                                            speed_bps: 0,
+                                            status: WorkerStatus::Downloading,
+                                            retry_count: 0,
+                                        }],
+                                        updated_at: Utc::now(),
+                                    });
+                                }
                             } else if line.starts_with("EDM_PROG:") {
                                 let payload = line.trim_start_matches("EDM_PROG:").trim();
                                 let parts: Vec<&str> = payload.split('|').collect();
-                                if parts.len() >= 3 {
+                                if parts.len() >= 6 {
                                     let pct_str = parts[0].trim().trim_end_matches('%');
-                                    let pct = pct_str.parse::<f64>().unwrap_or(0.0);
-                                    let speed_str = parts[1].trim();
-                                    let total_str = parts[2].trim();
-                                    let eta_str = parts.get(3).map(|s| s.trim()).unwrap_or("");
-                                    let eta_secs = parse_eta_secs(eta_str);
-
-                                    let total_bytes = parse_size_str(total_str);
+                                    let raw_pct = pct_str.parse::<f64>().unwrap_or(0.0);
+                                    let parsed_done = parts[1].trim().parse::<u64>().unwrap_or(0);
+                                    let parsed_total = parts[2]
+                                        .trim()
+                                        .parse::<u64>()
+                                        .or_else(|_| parts[3].trim().parse::<u64>())
+                                        .unwrap_or(0);
+                                    let speed_str = parts[4].trim();
                                     let speed_bps = parse_speed_str(speed_str);
-                                    let downloaded_bytes = if total_bytes > 0 {
-                                        (total_bytes as f64 * (pct / 100.0)) as u64
+                                    let eta_str = parts[5].trim();
+                                    let raw_eta = parse_eta_secs(eta_str);
+
+                                    // Transition detection for dual streams (video stream complete -> audio stream start)
+                                    if is_dual_stream && current_stream == 0 && raw_pct < 10.0 && highest_pct > 35.0 {
+                                        current_stream = 1;
+                                    }
+
+                                    let (overall_pct, combined_done, combined_total, effective_eta, status_desc) = if is_dual_stream {
+                                        if current_stream == 0 {
+                                            stream0_done = parsed_done;
+                                            if parsed_total > 0 {
+                                                stream0_total = parsed_total;
+                                            }
+                                            let mapped = (raw_pct * 0.48).clamp(0.0, 48.0);
+                                            highest_pct = highest_pct.max(mapped);
+                                            let tot = if stream0_total > 0 {
+                                                stream0_total + (stream0_total as f64 * 0.12) as u64
+                                            } else {
+                                                0
+                                            };
+                                            let eta = raw_eta.map(|e| e + (e as f64 * 0.15) as u64 + 2);
+                                            let desc = format!("Downloading Video Stream: {:.1}% ({})", raw_pct, speed_str);
+                                            (highest_pct, stream0_done, tot, eta, desc)
+                                        } else {
+                                            stream1_done = parsed_done;
+                                            if parsed_total > 0 {
+                                                stream1_total = parsed_total;
+                                            }
+                                            let mapped = (48.0 + (raw_pct * 0.42)).clamp(48.0, 90.0);
+                                            highest_pct = highest_pct.max(mapped);
+                                            let tot = if stream0_total > 0 && stream1_total > 0 {
+                                                stream0_total + stream1_total
+                                            } else if stream0_total > 0 {
+                                                stream0_total + (stream0_total as f64 * 0.12) as u64
+                                            } else {
+                                                0
+                                            };
+                                            let done = stream0_total + stream1_done;
+                                            let eta = raw_eta.map(|e| e + 2);
+                                            let desc = format!("Downloading Audio Stream: {:.1}% ({})", raw_pct, speed_str);
+                                            (highest_pct, done, tot, eta, desc)
+                                        }
                                     } else {
-                                        0
+                                        stream0_done = parsed_done;
+                                        if parsed_total > 0 {
+                                            stream0_total = parsed_total;
+                                        }
+                                        let mapped = (raw_pct * 0.92).clamp(0.0, 92.0);
+                                        highest_pct = highest_pct.max(mapped);
+                                        let desc = format!("Downloading Media: {:.1}% ({})", raw_pct, speed_str);
+                                        (highest_pct, stream0_done, stream0_total, raw_eta, desc)
                                     };
+
+                                    combined_total_reported = combined_total;
+                                    combined_done_reported = combined_done;
 
                                     if let Some(ref cb) = telemetry_cb {
                                         cb(AdaptiveTelemetry {
                                             download_id: download_id.clone(),
-                                            total_bytes: if total_bytes > 0 { Some(total_bytes) } else { None },
-                                            downloaded_bytes,
-                                            progress_pct: pct,
+                                            total_bytes: if combined_total > 0 { Some(combined_total) } else { None },
+                                            downloaded_bytes: combined_done,
+                                            progress_pct: overall_pct,
                                             instant_throughput_bps: speed_bps,
                                             rolling_throughput_bps: speed_bps,
                                             active_connections: 1,
@@ -572,14 +694,14 @@ impl YtDlpPack {
                                             live_workers: 1,
                                             max_allowed_connections: 1,
                                             mode: AccelerationMode::Stable,
-                                            eta_seconds: eta_secs,
-                                            decision_reason: format!("Media Extraction: {:.1}% ({})", pct, speed_str),
+                                            eta_seconds: effective_eta,
+                                            decision_reason: status_desc,
                                             workers: vec![WorkerTelemetry {
                                                 idx: 0,
                                                 start: 0,
-                                                end: total_bytes,
-                                                pos: downloaded_bytes,
-                                                bytes_downloaded: downloaded_bytes,
+                                                end: combined_total,
+                                                pos: combined_done,
+                                                bytes_downloaded: combined_done,
                                                 speed_bps,
                                                 status: WorkerStatus::Downloading,
                                                 retry_count: 0,
@@ -602,6 +724,41 @@ impl YtDlpPack {
                             if !path_str.is_empty() {
                                 final_path = Some(PathBuf::from(path_str));
                             }
+                            if is_dual_stream && stream0_done > 0 {
+                                current_stream = 1;
+                            }
+                        } else if trimmed.contains("[Merger]") || trimmed.contains("Merging formats") || trimmed.contains("[ffmpeg]") {
+                            merge_ticks = merge_ticks.saturating_add(1);
+                            let merge_pct = (90.0 + (merge_ticks as f64 * 1.5).min(9.0)).clamp(90.0, 99.0);
+                            highest_pct = highest_pct.max(merge_pct);
+                            if let Some(ref cb) = telemetry_cb {
+                                cb(AdaptiveTelemetry {
+                                    download_id: download_id.clone(),
+                                    total_bytes: if combined_total_reported > 0 { Some(combined_total_reported) } else { None },
+                                    downloaded_bytes: combined_done_reported,
+                                    progress_pct: highest_pct,
+                                    instant_throughput_bps: 0,
+                                    rolling_throughput_bps: 0,
+                                    active_connections: 1,
+                                    target_connections: 1,
+                                    live_workers: 1,
+                                    max_allowed_connections: 1,
+                                    mode: AccelerationMode::Stable,
+                                    eta_seconds: Some(1),
+                                    decision_reason: "Merging video and audio streams with FFmpeg...".to_string(),
+                                    workers: vec![WorkerTelemetry {
+                                        idx: 0,
+                                        start: 0,
+                                        end: combined_total_reported,
+                                        pos: combined_done_reported,
+                                        bytes_downloaded: combined_done_reported,
+                                        speed_bps: 0,
+                                        status: WorkerStatus::Downloading,
+                                        retry_count: 0,
+                                    }],
+                                    updated_at: Utc::now(),
+                                });
+                            }
                         }
                         if !trimmed.is_empty() {
                             stderr_lines.push(line);
@@ -620,6 +777,27 @@ impl YtDlpPack {
                 }
             }
             return Err(format!("yt-dlp download failed: {}", last_errs));
+        }
+
+        // Final 100% completion telemetry notification
+        if let Some(ref cb) = telemetry_cb {
+            cb(AdaptiveTelemetry {
+                download_id: download_id.clone(),
+                total_bytes: if combined_total_reported > 0 { Some(combined_total_reported) } else { None },
+                downloaded_bytes: if combined_total_reported > 0 { combined_total_reported } else { combined_done_reported },
+                progress_pct: 100.0,
+                instant_throughput_bps: 0,
+                rolling_throughput_bps: 0,
+                active_connections: 0,
+                target_connections: 0,
+                live_workers: 0,
+                max_allowed_connections: 1,
+                mode: AccelerationMode::Stable,
+                eta_seconds: Some(0),
+                decision_reason: "Download & Processing Complete ✓".to_string(),
+                workers: vec![],
+                updated_at: Utc::now(),
+            });
         }
 
         if let Some(fp) = final_path {

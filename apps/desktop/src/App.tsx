@@ -793,9 +793,16 @@ export default function App() {
 
           if (telem) {
             const rawDone = telem.downloaded_bytes;
-            const sizeTotal = telem.total_bytes || task.sizeTotal;
-            const rawProgress = sizeTotal > 0 ? Math.min(100, Math.floor((rawDone / sizeTotal) * 100)) : 0;
-            const isFinished = rawProgress >= 100 || (sizeTotal > 0 && rawDone >= sizeTotal);
+            const effectiveTotal = telem.total_bytes || task.sizeTotal;
+            let calculatedPct = 0;
+            if (effectiveTotal > 0) {
+              calculatedPct = Math.min(100, Math.floor((rawDone / effectiveTotal) * 100));
+            }
+            const rawProgress = Math.max(calculatedPct, Math.min(100, Math.floor(telem.progress_pct || 0)));
+            const isFinished = rawProgress >= 100 || (effectiveTotal > 0 && rawDone >= effectiveTotal);
+            const sizeTotal = effectiveTotal > 0
+              ? effectiveTotal
+              : (rawDone > 0 && rawProgress > 0 ? Math.round((rawDone / (rawProgress / 100))) : 0);
             const sizeDone = isFinished && sizeTotal > 0 ? sizeTotal : rawDone;
             const progress = isFinished ? 100 : rawProgress;
             const now = Date.now();

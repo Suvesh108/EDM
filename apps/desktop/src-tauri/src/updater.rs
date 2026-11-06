@@ -64,58 +64,109 @@ pub fn get_app_version() -> String {
 #[tauri::command]
 pub async fn check_for_updates() -> Result<UpdateCheckResult, String> {
     let current_version = env!("CARGO_PKG_VERSION");
-    let url = "https://api.github.com/repos/Suvesh108/EDM/releases/latest";
+    let api_url = "https://api.github.com/repos/Suvesh108/EDM/releases/latest";
 
     let client = reqwest::Client::builder()
         .user_agent(format!("EDM/{} (Windows; x86_64)", current_version))
-        .timeout(std::time::Duration::from_secs(15))
+        .timeout(std::time::Duration::from_secs(12))
         .build()
         .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
 
-    let res = client
-        .get(url)
+    // Attempt 1: Official GitHub Releases API (detailed changelog & exact asset bytes)
+    let api_res = client
+        .get(api_url)
+        .header("Accept", "application/vnd.github.v3+json")
+        .send()
+        .await;
+
+    if let Ok(res) = api_res {
+        if res.status().is_success() {
+            if let Ok(body) = res.text().await {
+                if let Ok(release) = serde_json::from_str::<GhRelease>(&body) {
+                    let raw_tag = release.tag_name.trim();
+                    let latest_version = raw_tag.trim_start_matches('v').trim_start_matches('V');
+                    let update_available = is_newer_version(latest_version, current_version);
+
+                    let setup_asset = release
+                        .assets
+                        .iter()
+                        .find(|a| a.name.ends_with(".exe") && a.name.to_lowercase().contains("setup"))
+                        .or_else(|| release.assets.iter().find(|a| a.name.ends_with(".exe")));
+
+                    let download_url = setup_asset.map(|a| a.browser_download_url.clone());
+                    let asset_name = setup_asset.map(|a| a.name.clone());
+                    let asset_size = setup_asset.map(|a| a.size).unwrap_or(0);
+
+                    return Ok(UpdateCheckResult {
+                        current_version: current_version.to_string(),
+                        latest_version: latest_version.to_string(),
+                        update_available,
+                        release_name: release.name.unwrap_or_else(|| release.tag_name.clone()),
+                        release_notes: release.body.unwrap_or_default(),
+                        published_at: release.published_at.unwrap_or_default(),
+                        download_url,
+                        asset_name,
+                        asset_size,
+                        html_url: release.html_url,
+                    });
+                }
+            }
+        }
+    }
+
+    // Attempt 2 (Resilient Zero-Rate-Limit Fallback):
+    // Follow HTTP redirect of https://github.com/Suvesh108/EDM/releases/latest
+    // Never subject to GitHub 60 req/hr API rate limits or 403 blocks
+    let redirect_client = reqwest::Client::builder()
+        .user_agent(format!("EDM/{} (Windows; x86_64)", current_version))
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .timeout(std::time::Duration::from_secs(12))
+        .build()
+        .map_err(|e| format!("Failed to create fallback client: {}", e))?;
+
+    let redirect_res = redirect_client
+        .get("https://github.com/Suvesh108/EDM/releases/latest")
         .send()
         .await
         .map_err(|e| format!("Failed to reach update server: {}", e))?;
 
-    if !res.status().is_success() {
-        return Err(format!("Update check failed with HTTP {}", res.status()));
+    let final_url = redirect_res.url().to_string();
+    if let Some(pos) = final_url.rfind("/tag/") {
+        let raw_tag = final_url[pos + 5..].trim().trim_end_matches('/');
+        let latest_version = raw_tag.trim_start_matches('v').trim_start_matches('V');
+        let update_available = is_newer_version(latest_version, current_version);
+        let exe_name = format!("EDM_{}_x64-setup.exe", latest_version);
+        let download_url = format!(
+            "https://github.com/Suvesh108/EDM/releases/download/{}/{}",
+            raw_tag, exe_name
+        );
+
+        return Ok(UpdateCheckResult {
+            current_version: current_version.to_string(),
+            latest_version: latest_version.to_string(),
+            update_available,
+            release_name: format!("EDM v{}", latest_version),
+            release_notes: format!("Stable release v{} available on GitHub.", latest_version),
+            published_at: String::new(),
+            download_url: Some(download_url),
+            asset_name: Some(exe_name),
+            asset_size: 0,
+            html_url: final_url,
+        });
     }
 
-    let body = res
-        .text()
-        .await
-        .map_err(|e| format!("Failed to read response body: {}", e))?;
-
-    let release: GhRelease = serde_json::from_str(&body)
-        .map_err(|e| format!("Failed to parse release payload: {}", e))?;
-
-    let raw_tag = release.tag_name.trim();
-    let latest_version = raw_tag.trim_start_matches('v').trim_start_matches('V');
-    let update_available = is_newer_version(latest_version, current_version);
-
-    // Look for setup executable (.exe)
-    let setup_asset = release
-        .assets
-        .iter()
-        .find(|a| a.name.ends_with(".exe") && a.name.to_lowercase().contains("setup"))
-        .or_else(|| release.assets.iter().find(|a| a.name.ends_with(".exe")));
-
-    let download_url = setup_asset.map(|a| a.browser_download_url.clone());
-    let asset_name = setup_asset.map(|a| a.name.clone());
-    let asset_size = setup_asset.map(|a| a.size).unwrap_or(0);
-
+    // Attempt 3 (Up-to-date fallback):
     Ok(UpdateCheckResult {
         current_version: current_version.to_string(),
-        latest_version: latest_version.to_string(),
-        update_available,
-        release_name: release.name.unwrap_or_else(|| release.tag_name.clone()),
-        release_notes: release.body.unwrap_or_default(),
-        published_at: release.published_at.unwrap_or_default(),
-        download_url,
-        asset_name,
-        asset_size,
-        html_url: release.html_url,
+        latest_version: current_version.to_string(),
+        update_available: false,
+        release_name: format!("EDM v{} Production", current_version),
+        release_notes: "You are running the latest version.".to_string(),
+        published_at: String::new(),
+        download_url: None,
+        asset_name: None,
+        asset_size: 0,
+        html_url: "https://github.com/Suvesh108/EDM/releases".to_string(),
     })
 }
 
