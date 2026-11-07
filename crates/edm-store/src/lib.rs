@@ -286,6 +286,40 @@ impl Store {
         Ok(())
     }
 
+    pub fn update_download_total_size(
+        &self,
+        id: Uuid,
+        size_total: u64,
+    ) -> std::result::Result<(), StoreError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE downloads SET size_total = ?1 WHERE id = ?2",
+            params![size_total as i64, id.to_string()],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_download_size_and_progress(
+        &self,
+        id: Uuid,
+        size_done: u64,
+        size_total: Option<u64>,
+    ) -> std::result::Result<(), StoreError> {
+        let conn = self.conn.lock().unwrap();
+        if let Some(total) = size_total {
+            conn.execute(
+                "UPDATE downloads SET size_done = ?1, size_total = ?2 WHERE id = ?3",
+                params![size_done, total as i64, id.to_string()],
+            )?;
+        } else {
+            conn.execute(
+                "UPDATE downloads SET size_done = ?1 WHERE id = ?2",
+                params![size_done, id.to_string()],
+            )?;
+        }
+        Ok(())
+    }
+
     pub fn save_segment_positions(
         &self,
         segments: &[SegmentRecord],

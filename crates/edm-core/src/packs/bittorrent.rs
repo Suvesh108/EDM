@@ -128,6 +128,7 @@ impl BitTorrentPack {
                         None
                     },
                     decision_reason: format!("BitTorrent Swarm ({} peers)", live_conns),
+                    phase: None,
                     workers: vec![WorkerTelemetry {
                         idx: 0,
                         start: 0,

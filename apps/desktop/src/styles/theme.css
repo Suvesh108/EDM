@@ -537,6 +537,15 @@ input[type="checkbox"]:focus-visible {
   }
 }
 
+@keyframes shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
 @keyframes edmShimmer {
   0% {
     background-position: -200% 0;

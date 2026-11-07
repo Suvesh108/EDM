@@ -263,6 +263,7 @@ impl PackExecutor {
                     mode: AccelerationMode::Stable,
                     eta_seconds: Some((total_segments - i - 1) as u64 * 2),
                     decision_reason: format!("M3U8 Chunk {}/{}", i + 1, total_segments),
+                    phase: Some("Downloading".to_string()),
                     workers: vec![WorkerTelemetry {
                         idx: 0,
                         start: 0,
@@ -489,6 +490,7 @@ impl PackExecutor {
                     mode: AccelerationMode::Stable,
                     eta_seconds: None,
                     decision_reason: "FTP Stream Transfer".into(),
+                    phase: Some("Downloading".to_string()),
                     workers: vec![],
                     updated_at: Utc::now(),
                 });

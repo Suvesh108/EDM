@@ -96,6 +96,8 @@ pub struct AdaptiveTelemetry {
     pub mode: AccelerationMode,
     pub eta_seconds: Option<u64>,
     pub decision_reason: String,
+    #[serde(default)]
+    pub phase: Option<String>,
     pub workers: Vec<WorkerTelemetry>,
     pub updated_at: DateTime<Utc>,
 }

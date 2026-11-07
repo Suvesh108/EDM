@@ -1484,6 +1484,19 @@ export default function SettingsPage({
 
                   <div className="py-3 flex items-center justify-between gap-4">
                     <div>
+                      <span className="font-medium text-xs text-[var(--text-primary)] block">YouTube Quick Download Button</span>
+                      <span className="text-[11px] text-[var(--text-muted)]">Show quick download button next to Subscribe on YouTube watch pages.</span>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={settings.browser.youtubeDownloadButtonEnabled ?? true}
+                      onChange={(e) => update("browser", { youtubeDownloadButtonEnabled: e.target.checked })}
+                      className="edm-checkbox"
+                    />
+                  </div>
+
+                  <div className="py-3 flex items-center justify-between gap-4">
+                    <div>
                       <span className="font-medium text-xs text-[var(--text-primary)] block">Clipboard URL Monitoring</span>
                       <span className="text-[11px] text-[var(--text-muted)]">Automatically prompt to download when copying media or file URLs.</span>
                     </div>

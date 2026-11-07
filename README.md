@@ -66,8 +66,8 @@ Catch downloads instantly from your favorite browser. Check live progress, pause
 - **One-Key Bypass**: Simply hold `Shift` or `Alt` while clicking any link to download directly through your browser instead.
 
 ### 🎬 Built-In Media & File Capabilities
-- **YouTube Quick-Download Integration**: Seamless download pill integrated directly into YouTube watch pages and shorts next to the Subscribe button. Auto-extracts stream details with instant quality selection (1080p Full HD, 720p HD, 480p/360p, or direct MP3/M4A audio extraction). Fully toggleable in extension settings.
-- **Smooth Progressive Telemetry**: Multi-phase real-time tracking for separate video and audio DASH streams with combined monotonic progress, live throughput, and FFmpeg remuxing indicators.
+- **YouTube Quick-Download Integration**: Seamless download pill integrated directly into YouTube watch pages and shorts next to the Subscribe button with permanent 310px compact layout. Auto-extracts stream details with instant quality selection (4K/2K, 1080p Full HD, 720p HD, 480p/360p, or direct MP3/M4A audio extraction). Fully toggleable in desktop and extension settings.
+- **Structured Progressive Telemetry**: Multi-phase real-time tracking across discrete stages (`Resolving` → `DownloadingVideo` → `DownloadingAudio` → `Merging` → `Completed`) with pre-extracted content lengths, combined monotonic progress, and strict completion gates preventing 0-byte tasks.
 - **Direct Video & Audio Downloads**: Download videos and audio streams directly without needing to install external converter programs.
 - **Torrent & Magnet Links**: Native support for magnet links and torrent files right within the app.
 - **Smart Category Sorting**: Automatically classifies files into Videos, Music, Documents, Compressed Archives, and Applications based on file types.

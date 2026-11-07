@@ -721,7 +721,7 @@ fn execute_download(
             };
             if should_update_db {
                 last_db_bytes.store(telem.downloaded_bytes, Ordering::Relaxed);
-                let _ = store_cb.update_download_progress(id, telem.downloaded_bytes);
+                let _ = store_cb.update_download_size_and_progress(id, telem.downloaded_bytes, telem.total_bytes);
             }
 
             // Low-overhead throttled WebSocket progress broadcast (at most every 250ms)
@@ -761,9 +761,16 @@ fn execute_download(
         }
         let client = client_builder.build().unwrap_or_default();
         let result = edm_core::PackExecutor::execute(task, engine, client, Some(cb)).await;
-        let (final_state, error_msg) = match result {
-            Ok(_) => (DownloadState::Completed, None),
-            Err(ref e) if e.contains("cancelled") => (DownloadState::Paused, None),
+        let (final_state, error_msg, verified_size) = match result {
+            Ok(ref final_path) => {
+                let s = std::fs::metadata(final_path).map(|m| m.len()).unwrap_or(0);
+                if s > 0 {
+                    (DownloadState::Completed, None, Some(s))
+                } else {
+                    (DownloadState::Failed, Some("Download failed: 0 bytes received or merge failed"), None)
+                }
+            }
+            Err(ref e) if e.contains("cancelled") => (DownloadState::Paused, None, None),
             Err(ref e)
                 if e.contains("401")
                     || e.contains("403")
@@ -773,17 +780,21 @@ fn execute_download(
                 (
                     DownloadState::LinkExpired,
                     Some("Download link expired (HTTP 401/403/410). Refresh link to resume."),
+                    None,
                 )
             }
             Err(ref e) if e.contains("429") => {
-                (DownloadState::Failed, Some("HTTP 429 Rate Limited"))
+                (DownloadState::Failed, Some("HTTP 429 Rate Limited"), None)
             }
             Err(ref e) if e.contains("stalled") => {
-                (DownloadState::Failed, Some("Connection Stalled"))
+                (DownloadState::Failed, Some("Connection Stalled"), None)
             }
-            Err(ref e) => (DownloadState::Failed, Some(e.as_str())),
+            Err(ref e) => (DownloadState::Failed, Some(e.as_str()), None),
         };
         let _ = store_clone.update_download_state(id, final_state, error_msg);
+        if let Some(vs) = verified_size {
+            let _ = store_clone.update_download_size_and_progress(id, vs, Some(vs));
+        }
 
         if final_state == DownloadState::Completed {
             let full_path = save_path_fin.join(&final_clean_name_fin);
@@ -834,6 +845,8 @@ fn execute_download(
                 .unwrap_or((0, effective_size)),
             Err(_) => (0, effective_size),
         };
+        let final_total = verified_size.or(final_total);
+        let final_done = verified_size.unwrap_or(final_done);
         // Evict active task handle and telemetry buffers from live memory
         tasks_map.lock().unwrap().remove(&ws_id_cb);
 

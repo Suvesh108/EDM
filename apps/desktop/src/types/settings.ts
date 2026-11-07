@@ -63,6 +63,7 @@ export interface EdmSettings {
     clipboardMonitoringEnabled: boolean;
     confirmCapturedUrls: boolean;
     interceptMediaStreams: boolean;
+    youtubeDownloadButtonEnabled: boolean;
     excludedDomains: string[];
   };
   network: {
@@ -203,6 +204,7 @@ export const defaultSettings: EdmSettings = {
     clipboardMonitoringEnabled: false,
     confirmCapturedUrls: true,
     interceptMediaStreams: true,
+    youtubeDownloadButtonEnabled: true,
     excludedDomains: ["localhost", "127.0.0.1", "bank.example.com"],
   },
   network: {

@@ -116,14 +116,17 @@ function scanDOMForMedia() {
 }
 function cleanupFloatingBadges() {
   document.querySelectorAll(".edm-floating-media-badge, #edm-floating-overlay, [class*='floating-media-badge'], [class*='edm-floating']").forEach((el) => el.remove());
-  const player = document.getElementById("movie_player") || document.querySelector(".html5-video-player") || document.querySelector("ytd-player");
-  if (player) {
-    player.querySelectorAll("div, button").forEach((el) => {
-      if (el.textContent && el.textContent.trim().includes("Download with EDM")) {
-        el.remove();
+  document.querySelectorAll("div, button, a, span").forEach((el) => {
+    if (el.id !== "edm-yt-download-pill" && !el.closest("#edm-yt-download-pill")) {
+      const text = el.textContent || "";
+      if (text.includes("Download with EDM")) {
+        const target = el.closest(".edm-floating-media-badge, [class*='floating'], div") || el;
+        if (target && target !== document.body && target !== document.documentElement && !target.contains(document.getElementById("edm-yt-download-pill") || document.body)) {
+          target.remove();
+        }
       }
-    });
-  }
+    }
+  });
 }
 cleanupFloatingBadges();
 const mutationObserver = new MutationObserver(() => {

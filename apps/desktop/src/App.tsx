@@ -792,6 +792,7 @@ export default function App() {
           }
 
           if (telem) {
+            const phase = (telem as any).phase;
             const rawDone = telem.downloaded_bytes;
             const effectiveTotal = telem.total_bytes || task.sizeTotal;
             let calculatedPct = 0;
@@ -799,12 +800,12 @@ export default function App() {
               calculatedPct = Math.min(100, Math.floor((rawDone / effectiveTotal) * 100));
             }
             const rawProgress = Math.max(calculatedPct, Math.min(100, Math.floor(telem.progress_pct || 0)));
-            const isFinished = rawProgress >= 100 || (effectiveTotal > 0 && rawDone >= effectiveTotal);
+            const isFinished = ((rawProgress >= 100 || (effectiveTotal > 0 && rawDone >= effectiveTotal)) && phase !== "Merging" && phase !== "Resolving") || phase === "Completed";
             const sizeTotal = effectiveTotal > 0
               ? effectiveTotal
               : (rawDone > 0 && rawProgress > 0 ? Math.round((rawDone / (rawProgress / 100))) : 0);
             const sizeDone = isFinished && sizeTotal > 0 ? sizeTotal : rawDone;
-            const progress = isFinished ? 100 : rawProgress;
+            const progress = isFinished ? 100 : (phase === "Merging" ? 95 : rawProgress);
             const now = Date.now();
 
             smooth.elapsedSeconds += 0.25;
@@ -819,14 +820,19 @@ export default function App() {
               smooth.speedSamples.reduce((a, b) => a + b, 0) / smooth.speedSamples.length
             );
 
-            // Bug 3: ETA stability logic (AdaptiveTelemetry is single source of truth)
-            // Warmup gate: only first 3s and < 1 MiB can be "Calculating..."
+            // Phase and ETA stability logic (AdaptiveTelemetry is single source of truth)
             const isWarmup = smooth.elapsedSeconds < 3 && sizeDone < 1024 * 1024;
             let currentEta = smooth.lastValidEta || "Calculating...";
 
             if (isFinished) {
               currentEta = "Finished";
               smooth.lastValidEta = "Finished";
+            } else if (phase === "Resolving" || telem.decision_reason?.toLowerCase().includes("fetching video info")) {
+              currentEta = "Fetching video info...";
+              smooth.lastValidEta = "Fetching video info...";
+            } else if (phase === "Merging" || telem.decision_reason?.toLowerCase().includes("merg")) {
+              currentEta = "Merging...";
+              smooth.lastValidEta = "Merging...";
             } else if (isWarmup) {
               currentEta = "Calculating...";
             } else if (telem.eta_seconds !== null && telem.eta_seconds !== undefined && telem.eta_seconds > 0) {
@@ -837,11 +843,15 @@ export default function App() {
               currentEta = formatEta(rawSec);
               smooth.lastValidEta = currentEta;
             } else {
-              // Speed is zero: hold last valid ETA for 10s before showing Stalled
+              // Speed is zero: only show Stalled if zero bytes for >= 10s during active download
               const stalledMs = now - smooth.lastProgressTime;
-              if (stalledMs < 10000 && smooth.lastValidEta && smooth.lastValidEta !== "Calculating...") {
+              if (phase === "Resolving") {
+                currentEta = "Fetching video info...";
+              } else if (phase === "Merging") {
+                currentEta = "Merging...";
+              } else if (stalledMs < 10000 && smooth.lastValidEta && smooth.lastValidEta !== "Calculating...") {
                 currentEta = smooth.lastValidEta;
-              } else if (stalledMs >= 10000) {
+              } else if (stalledMs >= 10000 && (phase === "DownloadingVideo" || phase === "DownloadingAudio" || phase === "Downloading" || !phase)) {
                 currentEta = "Stalled";
               }
             }
@@ -1579,7 +1589,7 @@ export default function App() {
           {viewMode === "table" ? (
             /* Table View with responsive auto-fitting layout (Zero clipping on resize) */
             <div className="flex-1 flex flex-col min-h-0 overflow-y-auto overflow-x-auto px-2.5 sm:px-3 pt-1 pb-2">
-              <table className="w-full table-fixed text-left border-separate border-spacing-y-1.5 min-w-[700px]">
+              <table className="w-full table-fixed text-left border-separate border-spacing-y-1.5 min-w-[720px]">
                 <thead className="sticky top-0 bg-[var(--bg-chassis)] border-b border-[var(--border-subtle)] text-[11px] font-semibold text-[var(--text-muted)] z-10 shadow-sm">
                   <tr>
                     <th className="py-2 px-2 w-10 text-center whitespace-nowrap">
@@ -1600,7 +1610,7 @@ export default function App() {
                     </th>
                     <th
                       onClick={() => handleSort("name")}
-                      className="py-2 px-3 w-[38%] xl:w-[42%] min-w-[180px] whitespace-nowrap cursor-pointer select-none hover:text-[var(--text-primary)]"
+                      className="py-2 px-3 w-[36%] xl:w-[40%] min-w-[170px] whitespace-nowrap cursor-pointer select-none hover:text-[var(--text-primary)]"
                     >
                       <div className="flex items-center gap-1">
                         <span>File Name</span>
@@ -1618,7 +1628,7 @@ export default function App() {
                     </th>
                     <th
                       onClick={() => handleSort("progress")}
-                      className="py-2 px-3 w-[28%] md:w-[26%] xl:w-[24%] min-w-[200px] whitespace-nowrap cursor-pointer select-none hover:text-[var(--text-primary)]"
+                      className="py-2 px-3 w-[26%] md:w-[24%] xl:w-[22%] min-w-[180px] whitespace-nowrap cursor-pointer select-none hover:text-[var(--text-primary)]"
                     >
                       <div className="flex items-center gap-1">
                         <span>Progress</span>
@@ -1634,7 +1644,7 @@ export default function App() {
                         {sortField === "speed" && (sortDirection === "asc" ? <ChevronUp className="w-3 h-3 text-[var(--accent)]" /> : <ChevronDown className="w-3 h-3 text-[var(--accent)]" />)}
                       </div>
                     </th>
-                    <th className="py-2 px-3 w-44 min-w-[172px] text-right pr-5 whitespace-nowrap">Actions</th>
+                    <th className="py-2 px-3 w-48 min-w-[188px] text-right pr-3 sm:pr-4 whitespace-nowrap">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="text-xs">
@@ -1706,17 +1716,19 @@ export default function App() {
                                   opacity: item.state === "paused" ? 0.6 : 1,
                                 }}
                               />
-                              {item.state === "downloading" && (
+                              {item.state === "downloading" && (item.eta?.includes("Merging") || item.eta?.includes("Fetching") || !item.sizeTotal || item.sizeTotal === 0) ? (
+                                <div className="absolute inset-0 bg-gradient-to-r from-transparent via-[var(--accent)]/50 to-transparent pointer-events-none animate-[shimmer_1.5s_infinite]" />
+                              ) : item.state === "downloading" ? (
                                 <div className="absolute inset-0 bg-white/10 pointer-events-none animate-[pulse_1.5s_infinite]" />
-                              )}
+                              ) : null}
                             </div>
                           </div>
                         </td>
                         <td className="py-2.5 px-2 font-mono tabular-nums font-semibold text-[var(--accent)] text-center whitespace-nowrap text-[11px] sm:text-xs">
                           {item.speed}
                         </td>
-                        <td className="py-2.5 px-3 pr-5 w-44 min-w-[172px] text-right whitespace-nowrap">
-                          <div className="flex items-center justify-end gap-1.5 opacity-70 group-hover:opacity-100 transition-opacity">
+                        <td className="py-2.5 px-3 pr-3 sm:pr-4 w-48 min-w-[188px] text-right whitespace-nowrap overflow-hidden">
+                          <div className="flex items-center justify-end gap-1.5 opacity-80 group-hover:opacity-100 transition-opacity">
                             {item.state === "completed" ? (
                               <button
                                 onClick={(e) => {
@@ -1934,9 +1946,11 @@ export default function App() {
                             opacity: item.state === "paused" ? 0.6 : 1,
                           }}
                         />
-                        {item.state === "downloading" && (
+                        {item.state === "downloading" && (item.eta?.includes("Merging") || item.eta?.includes("Fetching") || !item.sizeTotal || item.sizeTotal === 0) ? (
+                          <div className="absolute inset-0 bg-gradient-to-r from-transparent via-[var(--accent)]/50 to-transparent pointer-events-none animate-[shimmer_1.5s_infinite]" />
+                        ) : item.state === "downloading" ? (
                           <div className="absolute inset-0 bg-white/10 pointer-events-none animate-[pulse_1.5s_infinite]" />
-                        )}
+                        ) : null}
                       </div>
                     </div>
 

@@ -672,6 +672,7 @@ impl AdaptiveEngine {
                             mode: controller.mode(),
                             eta_seconds: eta,
                             decision_reason: controller.status_reason().to_string(),
+                            phase: None,
                             workers: scheduler.get_telemetry_snapshot(),
                             updated_at: Utc::now(),
                         };
