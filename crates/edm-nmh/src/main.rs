@@ -203,11 +203,12 @@ fn ensure_webview2_loader(exe: &Path) {
     }
 
     for src in candidate_sources {
-        if src.exists() && src.metadata().map(|m| m.len()).unwrap_or(0) > 1000 {
-            if let Ok(_) = fs::copy(&src, &target_dll) {
-                tracing::info!("Co-located WebView2Loader.dll to {}", target_dll.display());
-                return;
-            }
+        if src.exists()
+            && src.metadata().map(|m| m.len()).unwrap_or(0) > 1000
+            && fs::copy(&src, &target_dll).is_ok()
+        {
+            tracing::info!("Co-located WebView2Loader.dll to {}", target_dll.display());
+            return;
         }
     }
 }
@@ -338,7 +339,7 @@ fn launch_detached(exe: &PathBuf, show_window: bool) {
 
         // Fallback: spawn via cmd /c start "" "exe" arg
         let mut fallback = std::process::Command::new("cmd.exe");
-        fallback.args(&["/c", "start", "", &exe.to_string_lossy(), arg])
+        fallback.args(["/c", "start", "", &exe.to_string_lossy(), arg])
             .current_dir(dir)
             .creation_flags(CREATE_NO_WINDOW);
         match fallback.spawn() {

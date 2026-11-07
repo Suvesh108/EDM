@@ -40,12 +40,23 @@ if (Test-Path $nmhBuilt) {
 
 # 4. Ensure WebView2Loader.dll is in target/release
 Write-Host "`n[4/6] Verifying WebView2Loader.dll..." -ForegroundColor Yellow
-$wv2Source = Get-ChildItem -Path "$RootDir/target" -Recurse -Filter "WebView2Loader.dll" | Select-Object -First 1
+$wv2Source = Get-ChildItem -Path "$RootDir/target" -Recurse -Filter "WebView2Loader.dll" -ErrorAction SilentlyContinue | Where-Object { $_.FullName -notmatch "target[\\/]release[\\/]WebView2Loader\.dll" -and $_.Length -gt 1000 -and $_.FullName -match "x64" } | Select-Object -First 1
+
+if (-not $wv2Source) {
+    $cargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { "$env:USERPROFILE/.cargo" }
+    $wv2Source = Get-ChildItem -Path "$cargoHome/registry" -Recurse -Filter "WebView2Loader.dll" -ErrorAction SilentlyContinue | Where-Object { $_.Length -gt 1000 -and $_.FullName -match "x64" } | Select-Object -First 1
+}
+
 if ($wv2Source) {
     Copy-Item -Path $wv2Source.FullName -Destination "$RootDir/target/release/WebView2Loader.dll" -Force
-    Write-Host "Copied WebView2Loader.dll to target/release/" -ForegroundColor Green
+    Write-Host "Copied valid WebView2Loader.dll ($($wv2Source.Length) bytes) to target/release/ from $($wv2Source.FullName)" -ForegroundColor Green
 } else {
-    Write-Warning "WebView2Loader.dll not found in target. Cargo build will generate it."
+    Write-Warning "WebView2Loader.dll not found in target or cargo cache."
+}
+
+$destWv2 = "$RootDir/target/release/WebView2Loader.dll"
+if ((Test-Path $destWv2) -and (Get-Item $destWv2).Length -lt 1000) {
+    throw "CRITICAL BUILD ERROR: $destWv2 is corrupt or 0-bytes! Cannot build release installer."
 }
 
 # 5. Build Desktop Tauri Application & NSIS Installer

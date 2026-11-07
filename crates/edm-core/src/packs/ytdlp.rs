@@ -620,7 +620,7 @@ impl YtDlpPack {
                             } else if line.starts_with("EDM_INFO:") {
                                 let payload = line.trim_start_matches("EDM_INFO:").trim();
                                 let parts: Vec<&str> = payload.split('|').collect();
-                                let tot_val = parts.get(0).and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+                                let tot_val = parts.first().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
                                 let vid_val = parts.get(1).and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
                                 let aud_val = parts.get(2).and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
 
