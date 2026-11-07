@@ -474,9 +474,10 @@ export default function App() {
 
         const updated: DownloadItem[] = backendItems.map((b) => {
           const existing = existingMap.get(b.id);
-          const total = b.size_total || existing?.sizeTotal || 0;
-          const done = b.size_done || existing?.sizeDone || 0;
-          const pct = total > 0 ? Math.min(100, Math.floor((done / total) * 100)) : (existing?.progress || 0);
+          const total = Math.max(b.size_total || 0, existing?.sizeTotal || 0);
+          const done = Math.max(b.size_done || 0, existing?.sizeDone || 0);
+          const calculatedPct = total > 0 ? Math.min(100, Math.floor((done / total) * 100)) : 0;
+          const pct = Math.max(calculatedPct, existing?.progress || 0);
           const speedVal = b.speed_bytes_per_sec || 0;
 
           const category = validCategories.includes(b.category as any)
@@ -492,7 +493,7 @@ export default function App() {
           })();
 
           const rawState = stateMap[b.state] || (existing?.state || "downloading");
-          const isCompleted = rawState === "completed" || pct >= 100 || (total > 0 && done >= total);
+          const isCompleted = b.state === "completed" || (rawState === "completed" && pct >= 100);
           if (existing && existing.state !== "completed" && isCompleted) {
             triggerCompletionNotification(b.filename, b.id);
           }

@@ -426,13 +426,12 @@ impl YtDlpPack {
 
         let mut args = vec![
             "--newline".to_string(),
+            "--progress".to_string(),
             "--no-playlist".to_string(),
             "--print".to_string(),
-            "pre_process:EDM_INFO:%(filesize,filesize_approx)s|%(requested_formats.0.filesize,requested_formats.0.filesize_approx)s|%(requested_formats.1.filesize,requested_formats.1.filesize_approx)s".to_string(),
+            "before_dl:EDM_INFO:%(filesize,filesize_approx)s|%(requested_formats.0.filesize,requested_formats.0.filesize_approx)s|%(requested_formats.1.filesize,requested_formats.1.filesize_approx)s".to_string(),
             "--progress-template".to_string(),
             "download:EDM_PROG:%(progress._percent_str)s|%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(progress._speed_str)s|%(progress.eta)s".to_string(),
-            "--progress-template".to_string(),
-            "post_process:EDM_POST:%(progress.status)s".to_string(),
             "--print".to_string(),
             "after_move:EDM_FINAL:%(filepath)s".to_string(),
             "-o".to_string(),
@@ -734,8 +733,6 @@ impl YtDlpPack {
                                             if parsed_total > 0 {
                                                 stream0_total = parsed_total;
                                             }
-                                            let mapped = (raw_pct * 0.48).clamp(0.0, 48.0);
-                                            highest_pct = highest_pct.max(mapped);
                                             let tot = if stream0_total > 0 && stream1_total > 0 {
                                                 stream0_total + stream1_total
                                             } else if stream0_total > 0 {
@@ -743,16 +740,21 @@ impl YtDlpPack {
                                             } else {
                                                 combined_total_reported
                                             };
+                                            let done = stream0_done;
+                                            let mapped = if tot > 0 {
+                                                (done as f64 / tot as f64 * 90.0).clamp(0.0, 90.0)
+                                            } else {
+                                                (raw_pct * 0.48).clamp(0.0, 48.0)
+                                            };
+                                            highest_pct = highest_pct.max(mapped);
                                             let eta = raw_eta.map(|e| e + (e as f64 * 0.15) as u64 + 2);
                                             let desc = format!("Downloading Video Stream: {:.1}% ({})", raw_pct, speed_str);
-                                            ("DownloadingVideo", highest_pct, stream0_done, tot, eta, desc)
+                                            ("DownloadingVideo", highest_pct, done, tot, eta, desc)
                                         } else {
                                             stream1_done = parsed_done;
                                             if parsed_total > 0 {
                                                 stream1_total = parsed_total;
                                             }
-                                            let mapped = (48.0 + (raw_pct * 0.42)).clamp(48.0, 90.0);
-                                            highest_pct = highest_pct.max(mapped);
                                             let tot = if stream0_total > 0 && stream1_total > 0 {
                                                 stream0_total + stream1_total
                                             } else if stream0_total > 0 {
@@ -761,6 +763,12 @@ impl YtDlpPack {
                                                 combined_total_reported
                                             };
                                             let done = stream0_total + stream1_done;
+                                            let mapped = if tot > 0 {
+                                                (done as f64 / tot as f64 * 90.0).clamp(0.0, 90.0)
+                                            } else {
+                                                (48.0 + (raw_pct * 0.42)).clamp(48.0, 90.0)
+                                            };
+                                            highest_pct = highest_pct.max(mapped);
                                             let eta = raw_eta.map(|e| e + 2);
                                             let desc = format!("Downloading Audio Stream: {:.1}% ({})", raw_pct, speed_str);
                                             ("DownloadingAudio", highest_pct, done, tot, eta, desc)
