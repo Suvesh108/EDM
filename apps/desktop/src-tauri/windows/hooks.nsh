@@ -8,9 +8,6 @@
   nsExec::Exec 'taskkill /F /IM edm-desktop-app.exe /T'
   nsExec::Exec 'taskkill /F /IM edm-nmh.exe /T'
   Sleep 300
-  ; Clean up stray executables from data directory
-  Delete "$LOCALAPPDATA\EDM\EDM.exe"
-  Delete "$LOCALAPPDATA\EDM\edm-desktop-app.exe"
 !macroend
 
 !macro NSIS_HOOK_POSTINSTALL
@@ -19,6 +16,10 @@
     Goto found_nmh
   IfFileExists "$INSTDIR\resources\edm-nmh.exe" 0 +3
     CopyFiles /SILENT "$INSTDIR\resources\edm-nmh.exe" "$INSTDIR\edm-nmh.exe"
+    StrCpy $0 "$INSTDIR\edm-nmh.exe"
+    Goto found_nmh
+  IfFileExists "$INSTDIR\resources\target\release\edm-nmh.exe" 0 +3
+    CopyFiles /SILENT "$INSTDIR\resources\target\release\edm-nmh.exe" "$INSTDIR\edm-nmh.exe"
     StrCpy $0 "$INSTDIR\edm-nmh.exe"
     Goto found_nmh
   IfFileExists "$INSTDIR\_up_\_up_\_up_\target\release\edm-nmh.exe" 0 +3
@@ -33,7 +34,7 @@ found_nmh:
   CreateDirectory "$APPDATA\EDM"
   CopyFiles /SILENT "$0" "$LOCALAPPDATA\EDM\edm-nmh.exe"
 
-  ; Ensure WebView2Loader.dll is co-located next to EDM.exe in $INSTDIR
+  ; Ensure WebView2Loader.dll is co-located next to the executables in $INSTDIR
   IfFileExists "$INSTDIR\WebView2Loader.dll" done_webview2 0
   IfFileExists "$INSTDIR\_up_\_up_\_up_\target\release\WebView2Loader.dll" 0 +3
     CopyFiles /SILENT "$INSTDIR\_up_\_up_\_up_\target\release\WebView2Loader.dll" "$INSTDIR\WebView2Loader.dll"
@@ -41,12 +42,21 @@ found_nmh:
   IfFileExists "$INSTDIR\resources\WebView2Loader.dll" 0 +3
     CopyFiles /SILENT "$INSTDIR\resources\WebView2Loader.dll" "$INSTDIR\WebView2Loader.dll"
     Goto done_webview2
+  IfFileExists "$INSTDIR\resources\target\release\WebView2Loader.dll" 0 +3
+    CopyFiles /SILENT "$INSTDIR\resources\target\release\WebView2Loader.dll" "$INSTDIR\WebView2Loader.dll"
+    Goto done_webview2
 done_webview2:
 
-  ; Purge any stray executables from %LOCALAPPDATA%\EDM
-  Delete "$LOCALAPPDATA\EDM\EDM.exe"
-  Delete "$LOCALAPPDATA\EDM\edm-desktop-app.exe"
-  ; Mirror WebView2Loader.dll into %LOCALAPPDATA%\EDM for safety
+  ; Ensure BOTH edm-desktop-app.exe and EDM.exe exist in $INSTDIR for seamless compatibility
+  IfFileExists "$INSTDIR\edm-desktop-app.exe" 0 +3
+    IfFileExists "$INSTDIR\EDM.exe" +2 0
+      CopyFiles /SILENT "$INSTDIR\edm-desktop-app.exe" "$INSTDIR\EDM.exe"
+
+  IfFileExists "$INSTDIR\EDM.exe" 0 +3
+    IfFileExists "$INSTDIR\edm-desktop-app.exe" +2 0
+      CopyFiles /SILENT "$INSTDIR\EDM.exe" "$INSTDIR\edm-desktop-app.exe"
+
+  ; Mirror WebView2Loader.dll into %LOCALAPPDATA%\EDM if INSTDIR is different
   IfFileExists "$INSTDIR\WebView2Loader.dll" 0 +2
     CopyFiles /SILENT "$INSTDIR\WebView2Loader.dll" "$LOCALAPPDATA\EDM\WebView2Loader.dll"
 
