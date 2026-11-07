@@ -115,10 +115,19 @@ function scanDOMForMedia() {
   });
 }
 function cleanupFloatingBadges() {
-  document.querySelectorAll(".edm-floating-media-badge").forEach((el) => el.remove());
+  document.querySelectorAll(".edm-floating-media-badge, #edm-floating-overlay, [class*='floating-media-badge'], [class*='edm-floating']").forEach((el) => el.remove());
+  const player = document.getElementById("movie_player") || document.querySelector(".html5-video-player") || document.querySelector("ytd-player");
+  if (player) {
+    player.querySelectorAll("div, button").forEach((el) => {
+      if (el.textContent && el.textContent.trim().includes("Download with EDM")) {
+        el.remove();
+      }
+    });
+  }
 }
 cleanupFloatingBadges();
 const mutationObserver = new MutationObserver(() => {
+  cleanupFloatingBadges();
   scanDOMForMedia();
   injectYoutubePillIfNeeded();
 });
@@ -147,17 +156,20 @@ chrome.storage.onChanged.addListener((changes, area) => {
   }
 });
 window.addEventListener("DOMContentLoaded", () => {
+  cleanupFloatingBadges();
   scanDOMForMedia();
   injectYoutubePillIfNeeded();
 });
 window.addEventListener("load", () => {
+  cleanupFloatingBadges();
   scanDOMForMedia();
   injectYoutubePillIfNeeded();
 });
 setInterval(() => {
+  cleanupFloatingBadges();
   scanDOMForMedia();
   injectYoutubePillIfNeeded();
-}, 2500);
+}, 1e3);
 function removeYoutubePill() {
   document.querySelectorAll(".edm-yt-pill-wrapper").forEach((el) => el.remove());
 }
@@ -166,6 +178,23 @@ function ensureYoutubeCustomStyles() {
   const style = document.createElement("style");
   style.id = "edm-yt-styles";
   style.textContent = `
+    /* Permanent suppression of any floating video overlay badges */
+    .edm-floating-media-badge,
+    #edm-floating-overlay,
+    [class*="edm-floating"],
+    .html5-video-player .edm-floating-media-badge,
+    ytd-player .edm-floating-media-badge {
+      display: none !important;
+      opacity: 0 !important;
+      pointer-events: none !important;
+      visibility: hidden !important;
+      width: 0 !important;
+      height: 0 !important;
+      position: absolute !important;
+      left: -9999px !important;
+      z-index: -9999 !important;
+    }
+
     #edm-yt-download-pill {
       position: relative !important;
       display: inline-flex !important;
@@ -173,9 +202,12 @@ function ensureYoutubeCustomStyles() {
       vertical-align: middle !important;
       margin-left: 10px !important;
       max-width: none !important;
+      flex-shrink: 0 !important;
+      min-width: 0 !important;
     }
 
-    #edm-yt-download-pill .edm-yt-dropdown-menu {
+    #edm-yt-download-pill .edm-yt-dropdown-menu,
+    .edm-yt-dropdown-menu {
       position: absolute !important;
       top: 44px !important;
       left: 0 !important;
@@ -184,7 +216,7 @@ function ensureYoutubeCustomStyles() {
       min-width: 310px !important;
       max-width: 310px !important;
       box-sizing: border-box !important;
-      contain: paint layout !important;
+      contain: layout paint size !important;
       overflow-x: hidden !important;
       overflow-y: auto !important;
       max-height: 460px !important;
@@ -204,9 +236,11 @@ function ensureYoutubeCustomStyles() {
       border-radius: 4px !important;
     }
 
-    #edm-yt-download-pill .edm-yt-header {
-      width: 100% !important;
+    #edm-yt-download-pill .edm-yt-header,
+    .edm-yt-header {
+      width: 288px !important;
       max-width: 288px !important;
+      min-width: 0 !important;
       box-sizing: border-box !important;
       overflow: hidden !important;
       padding: 4px 8px 8px 8px !important;
@@ -214,10 +248,11 @@ function ensureYoutubeCustomStyles() {
       margin-bottom: 4px !important;
     }
 
-    #edm-yt-download-pill .edm-yt-title-text {
+    #edm-yt-download-pill .edm-yt-title-text,
+    .edm-yt-title-text {
       display: block !important;
-      width: 100% !important;
-      max-width: 284px !important;
+      width: 272px !important;
+      max-width: 272px !important;
       min-width: 0 !important;
       white-space: nowrap !important;
       overflow: hidden !important;
@@ -230,7 +265,8 @@ function ensureYoutubeCustomStyles() {
       cursor: default !important;
     }
 
-    #edm-yt-download-pill .edm-yt-subtitle {
+    #edm-yt-download-pill .edm-yt-subtitle,
+    .edm-yt-subtitle {
       font-size: 10px !important;
       color: #3b82f6 !important;
       font-weight: 600 !important;
@@ -241,7 +277,8 @@ function ensureYoutubeCustomStyles() {
       text-overflow: ellipsis !important;
     }
 
-    #edm-yt-download-pill .edm-yt-sec-header {
+    #edm-yt-download-pill .edm-yt-sec-header,
+    .edm-yt-sec-header {
       font-size: 9.5px !important;
       font-weight: 700 !important;
       text-transform: uppercase !important;
@@ -252,7 +289,8 @@ function ensureYoutubeCustomStyles() {
       box-sizing: border-box !important;
     }
 
-    #edm-yt-download-pill .edm-yt-menu-item {
+    #edm-yt-download-pill .edm-yt-menu-item,
+    .edm-yt-menu-item {
       display: flex !important;
       align-items: center !important;
       gap: 10px !important;
@@ -260,7 +298,7 @@ function ensureYoutubeCustomStyles() {
       border-radius: 7px !important;
       cursor: pointer !important;
       background: transparent !important;
-      width: 100% !important;
+      width: 288px !important;
       max-width: 288px !important;
       box-sizing: border-box !important;
       min-width: 0 !important;
@@ -268,12 +306,14 @@ function ensureYoutubeCustomStyles() {
       transition: background 0.15s ease, transform 0.1s ease !important;
     }
 
-    #edm-yt-download-pill .edm-yt-menu-item:hover {
+    #edm-yt-download-pill .edm-yt-menu-item:hover,
+    .edm-yt-menu-item:hover {
       background: rgba(59, 130, 246, 0.15) !important;
       transform: translateX(2px) !important;
     }
 
-    #edm-yt-download-pill .edm-yt-item-text {
+    #edm-yt-download-pill .edm-yt-item-text,
+    .edm-yt-item-text {
       flex: 1 1 0% !important;
       min-width: 0 !important;
       max-width: 228px !important;
@@ -281,7 +321,8 @@ function ensureYoutubeCustomStyles() {
       box-sizing: border-box !important;
     }
 
-    #edm-yt-download-pill .edm-yt-item-title {
+    #edm-yt-download-pill .edm-yt-item-title,
+    .edm-yt-item-title {
       font-size: 12px !important;
       font-weight: 600 !important;
       color: #f4f4f5 !important;
@@ -293,7 +334,8 @@ function ensureYoutubeCustomStyles() {
       line-height: 1.3 !important;
     }
 
-    #edm-yt-download-pill .edm-yt-item-subtitle {
+    #edm-yt-download-pill .edm-yt-item-subtitle,
+    .edm-yt-item-subtitle {
       font-size: 10px !important;
       color: #8fa0be !important;
       white-space: nowrap !important;
@@ -558,8 +600,9 @@ function injectYoutubePillIfNeeded() {
     const rawTitle = getCleanVideoTitle();
     const titleEl = document.createElement("div");
     titleEl.className = "edm-yt-title-text";
-    titleEl.style.setProperty("width", "100%", "important");
-    titleEl.style.setProperty("max-width", "284px", "important");
+    titleEl.style.setProperty("display", "block", "important");
+    titleEl.style.setProperty("width", "272px", "important");
+    titleEl.style.setProperty("max-width", "272px", "important");
     titleEl.style.setProperty("min-width", "0", "important");
     titleEl.style.setProperty("white-space", "nowrap", "important");
     titleEl.style.setProperty("overflow", "hidden", "important");

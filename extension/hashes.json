@@ -1,10 +1,10 @@
 {
   "version": "0.0.8",
-  "generated_at": "2026-11-06T21:04:57.543Z",
+  "generated_at": "2026-11-07T06:03:08.711Z",
   "files": {
     "manifest.json": "sha256:e0a61ea31e12738967cbd80ca31f99150e2ef6549d6ddb29174ca0e55574ad78",
     "background.js": "sha256:005d02f89503d6c62703712af1861141902ddf30f72bc20b8ff60a1d7f3272c9",
-    "content.js": "sha256:d771aacf6553ddc57dbc898d15b70613e4a5d62981d42b8f059b0886a991f11d",
+    "content.js": "sha256:d62218b23ca87dd6e475c85a292996302924c5c2bfa1527945bdbbd218f9972d",
     "popup.html": "sha256:7de556a1f94b4836e659f978d7250e913b78640c7efe545e1d35a36f984e5800",
     "popup.css": "sha256:5ddad1523fd2e2d2ece87f58c3b52ff9fe87dbe65b0221e05a20b233e71a674b",
     "popup.js": "sha256:a0ba06de48d486fa66f149524a680071600046bfb9da804e2b1ed439a55058b0",

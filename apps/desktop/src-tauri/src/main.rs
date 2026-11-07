@@ -2284,21 +2284,17 @@ fn prepare_extension_files() -> Result<String, String> {
         }
 
         for sync_target in dirs_to_sync {
-            if sync_target != target_dir {
-                let _ = std::fs::create_dir_all(&sync_target);
-                for (filename, bytes) in EMBEDDED_EXTENSION_FILES {
-                    let dest = sync_target.join(filename);
-                    if !dest.exists() || dest.file_name().is_some_and(|n| n == "manifest.json") {
-                        let _ = std::fs::write(&dest, bytes);
-                    }
-                }
-                if let Ok(entries) = std::fs::read_dir(&target_dir) {
-                    for entry in entries.flatten() {
-                        let src = entry.path();
-                        if src.is_file() {
-                            if let Some(name) = src.file_name() {
-                                let _ = std::fs::copy(&src, sync_target.join(name));
-                            }
+            let _ = std::fs::create_dir_all(&sync_target);
+            for (filename, bytes) in EMBEDDED_EXTENSION_FILES {
+                let dest = sync_target.join(filename);
+                let _ = std::fs::write(&dest, bytes);
+            }
+            if let Ok(entries) = std::fs::read_dir(&target_dir) {
+                for entry in entries.flatten() {
+                    let src = entry.path();
+                    if src.is_file() {
+                        if let Some(name) = src.file_name() {
+                            let _ = std::fs::copy(&src, sync_target.join(name));
                         }
                     }
                 }
