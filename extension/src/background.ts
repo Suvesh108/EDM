@@ -248,80 +248,90 @@ async function checkNmhHealth(): Promise<{ ok: boolean; reason?: string; report?
   });
 }
 
+let inFlightWakePromise: Promise<{ ok: boolean; token?: string; error?: string }> | null = null;
+
 // 2b. Complete Wake Routine via Native Messaging Host
 async function wakeDesktop(showWindow = false): Promise<{ ok: boolean; token?: string; error?: string }> {
-  isWaking = true;
-  connectionStatus = "waking";
-  notifyPopupPorts();
-  try {
-    const res = await new Promise<any>((resolve) => {
-      chrome.runtime.sendNativeMessage(
-        "com.edm.nmh",
-        { type: "wake", show_window: showWindow },
-        async (response) => {
-          if (chrome.runtime.lastError) {
-            const err = chrome.runtime.lastError.message || "Failed to communicate with NMH";
-            // Check if EDM is already alive via loopback before surfacing a wake error
-            const runningCheck = await checkIfEdmRunning();
-            if (runningCheck.running) {
-              nmhHealth = { ok: true };
-              return resolve({ ok: true, token: runningCheck.token });
+  if (inFlightWakePromise) {
+    return inFlightWakePromise;
+  }
+  inFlightWakePromise = (async () => {
+    isWaking = true;
+    connectionStatus = "waking";
+    notifyPopupPorts();
+    try {
+      const res = await new Promise<any>((resolve) => {
+        chrome.runtime.sendNativeMessage(
+          "com.edm.nmh",
+          { type: "wake", show_window: showWindow },
+          async (response) => {
+            if (chrome.runtime.lastError) {
+              const err = chrome.runtime.lastError.message || "Failed to communicate with NMH";
+              // Check if EDM is already alive via loopback before surfacing a wake error
+              const runningCheck = await checkIfEdmRunning();
+              if (runningCheck.running) {
+                nmhHealth = { ok: true };
+                return resolve({ ok: true, token: runningCheck.token });
+              }
+              nmhHealth = { ok: false, reason: err };
+              return resolve({ ok: false, error: err });
             }
-            nmhHealth = { ok: false, reason: err };
-            return resolve({ ok: false, error: err });
+            nmhHealth = { ok: true };
+            resolve(response || { ok: false, error: "No response from NMH" });
           }
-          nmhHealth = { ok: true };
-          resolve(response || { ok: false, error: "No response from NMH" });
-        }
-      );
-    });
+        );
+      });
 
-    if (res && res.ok) {
-      nmhHealth = { ok: true };
-      if (res.token && typeof res.token === "string" && res.token.length >= 32) {
-        await chrome.storage.local.set({ edm_ws_token: res.token });
-      }
-      const connected = await connectWebSocketPromise(20000);
-      if (connected) {
-        connectionStatus = "connected";
-        notifyPopupPorts();
-        return { ok: true, token: res.token };
-      } else {
-        connectionStatus = "asleep";
-        notifyPopupPorts();
-        return { ok: false, error: "Wake succeeded but WebSocket failed to connect within timeout" };
-      }
-    } else {
-      // Secondary check: Did EDM start anyway?
-      const runningCheck = await checkIfEdmRunning();
-      if (runningCheck.running) {
+      if (res && res.ok) {
         nmhHealth = { ok: true };
-        if (runningCheck.token) {
-          await chrome.storage.local.set({ edm_ws_token: runningCheck.token });
+        if (res.token && typeof res.token === "string" && res.token.length >= 32) {
+          await chrome.storage.local.set({ edm_ws_token: res.token });
         }
-        const connected = await connectWebSocketPromise(5000);
+        const connected = await connectWebSocketPromise(20000);
         if (connected) {
           connectionStatus = "connected";
           notifyPopupPorts();
-          return { ok: true, token: runningCheck.token };
+          return { ok: true, token: res.token };
+        } else {
+          connectionStatus = "asleep";
+          notifyPopupPorts();
+          return { ok: false, error: "Wake succeeded but WebSocket failed to connect within timeout" };
         }
+      } else {
+        // Secondary check: Did EDM start anyway?
+        const runningCheck = await checkIfEdmRunning();
+        if (runningCheck.running) {
+          nmhHealth = { ok: true };
+          if (runningCheck.token) {
+            await chrome.storage.local.set({ edm_ws_token: runningCheck.token });
+          }
+          const connected = await connectWebSocketPromise(5000);
+          if (connected) {
+            connectionStatus = "connected";
+            notifyPopupPorts();
+            return { ok: true, token: runningCheck.token };
+          }
+        }
+        connectionStatus = "asleep";
+        if (res && res.error) {
+          nmhHealth = { ok: false, reason: res.error };
+        }
+        notifyPopupPorts();
+        return { ok: false, error: res?.error || "Wake failed" };
       }
+    } catch (err: any) {
       connectionStatus = "asleep";
-      if (res && res.error) {
-        nmhHealth = { ok: false, reason: res.error };
-      }
+      nmhHealth = { ok: false, reason: err?.message || String(err) };
       notifyPopupPorts();
-      return { ok: false, error: res?.error || "Wake failed" };
+      return { ok: false, error: err?.message || String(err) };
+    } finally {
+      isWaking = false;
+      inFlightWakePromise = null;
+      onHandoffSettle();
     }
-  } catch (err: any) {
-    connectionStatus = "asleep";
-    nmhHealth = { ok: false, reason: err?.message || String(err) };
-    notifyPopupPorts();
-    return { ok: false, error: err?.message || String(err) };
-  } finally {
-    isWaking = false;
-    onHandoffSettle();
-  }
+  })();
+
+  return inFlightWakePromise;
 }
 
 async function connectWebSocketPromise(timeoutMs = 8000): Promise<boolean> {
@@ -670,7 +680,12 @@ async function sendWsCreateTask(payload: {
   referrer?: string;
   user_agent?: string;
   filename?: string;
-}, timeoutMs = 3000): Promise<{ ok: boolean; id?: string; error?: string }> {
+}, timeoutMs = 5000): Promise<{ ok: boolean; id?: string; error?: string }> {
+  if (connectionStatus === "asleep" || !socket || socket.readyState !== WebSocket.OPEN) {
+    const wake = await wakeDesktop(false);
+    if (!wake.ok) return { ok: false, error: wake.error || "EDM Desktop is not running" };
+  }
+
   return new Promise((resolve) => {
     if (!socket || socket.readyState !== WebSocket.OPEN) {
       return resolve({ ok: false, error: "WebSocket not connected to EDM Desktop" });

@@ -508,42 +508,11 @@ function injectYoutubePillIfNeeded() {
     const filename = `${title}${customTitleSuffix}.${ext}`;
     const label = btn.querySelector(".edm-yt-btn-label");
     if (label) {
-      label.textContent = "Resolving...";
+      label.textContent = "Adding...";
       label.style.color = "#60a5fa";
     }
-    let downloadUrl = window.location.href.split("#")[0] + (formatTag ? "#" + formatTag : "");
-    try {
-      const streamData = cachedStreamData || await requestPageStreamData();
-      if (streamData) {
-        cachedStreamData = streamData;
-        const formats = Array.isArray(streamData.formats) ? streamData.formats : [];
-        const adaptive = Array.isArray(streamData.adaptiveFormats) ? streamData.adaptiveFormats : [];
-        const all = [...formats, ...adaptive];
-        if (isAudio) {
-          const audioFormats = all.filter((f) => f.mimeType && f.mimeType.startsWith("audio/") && f.url);
-          if (formatTag.includes("m4a")) {
-            const m4a = audioFormats.find((f) => f.mimeType && f.mimeType.includes("mp4a"));
-            if (m4a?.url) downloadUrl = m4a.url;
-            else if (audioFormats[0]?.url) downloadUrl = audioFormats[0].url;
-          } else if (audioFormats[0]?.url) {
-            downloadUrl = audioFormats[0].url;
-          }
-        } else {
-          if (formatTag === "720p" || formatTag === "480p" || !formatTag) {
-            const muxed = formats.find(
-              (f) => f.url && f.qualityLabel && (!formatTag || f.qualityLabel.includes(formatTag.replace("p", "")))
-            );
-            if (muxed?.url && !formatTag) {
-              downloadUrl = muxed.url;
-            }
-          }
-        }
-      }
-    } catch {
-    }
-    if (label) {
-      label.textContent = "Sending...";
-    }
+    const cleanWatchUrl = window.location.href.split("#")[0];
+    const downloadUrl = isAudio ? `${cleanWatchUrl}#${formatTag || "audio"}` : formatTag ? `${cleanWatchUrl}#${formatTag}` : cleanWatchUrl;
     chrome.runtime.sendMessage(
       {
         action: "create_task",

@@ -320,6 +320,11 @@ impl YtDlpPack {
             args.push(loc);
         }
 
+        if url.contains("youtube.com") || url.contains("youtu.be") {
+            args.push("--extractor-args".to_string());
+            args.push("youtube:player_client=android_vr,android,web".to_string());
+        }
+
         args.push(url.to_string());
 
         let mut cmd = configure_hidden_command(bin, &args);
@@ -434,6 +439,8 @@ impl YtDlpPack {
             "download:EDM_PROG:%(progress._percent_str)s|%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(progress._speed_str)s|%(progress.eta)s".to_string(),
             "--print".to_string(),
             "after_move:EDM_FINAL:%(filepath)s".to_string(),
+            "--print".to_string(),
+            "after_video:EDM_FINAL:%(filepath)s".to_string(),
             "-o".to_string(),
             out_template_str,
         ];
@@ -514,6 +521,13 @@ impl YtDlpPack {
         if let Some(ref ua) = task.user_agent {
             args.push("--user-agent".to_string());
             args.push(ua.clone());
+        }
+
+        if clean_url.contains("youtube.com") || clean_url.contains("youtu.be") {
+            args.push("--extractor-args".to_string());
+            args.push("youtube:player_client=android_vr,android,web".to_string());
+            args.push("--http-chunk-size".to_string());
+            args.push("10M".to_string());
         }
 
         args.push(clean_url);

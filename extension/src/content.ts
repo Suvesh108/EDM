@@ -593,53 +593,18 @@ function injectYoutubePillIfNeeded() {
 
     const label = btn.querySelector(".edm-yt-btn-label") as HTMLSpanElement;
     if (label) {
-      label.textContent = "Resolving...";
+      label.textContent = "Adding...";
       label.style.color = "#60a5fa";
     }
 
-    let downloadUrl = window.location.href.split("#")[0] + (formatTag ? "#" + formatTag : "");
-
-    try {
-      const streamData = cachedStreamData || (await requestPageStreamData());
-      if (streamData) {
-        cachedStreamData = streamData;
-        const formats: any[] = Array.isArray(streamData.formats) ? streamData.formats : [];
-        const adaptive: any[] = Array.isArray(streamData.adaptiveFormats) ? streamData.adaptiveFormats : [];
-        const all = [...formats, ...adaptive];
-
-        if (isAudio) {
-          const audioFormats = all.filter((f) => f.mimeType && f.mimeType.startsWith("audio/") && f.url);
-          if (formatTag.includes("m4a")) {
-            const m4a = audioFormats.find((f) => f.mimeType && f.mimeType.includes("mp4a"));
-            if (m4a?.url) downloadUrl = m4a.url;
-            else if (audioFormats[0]?.url) downloadUrl = audioFormats[0].url;
-          } else if (audioFormats[0]?.url) {
-            downloadUrl = audioFormats[0].url;
-          }
-        } else {
-          // For video: if muxed format matches tag, direct stream is complete (has audio).
-          // Otherwise, keeping the watch URL with hashtag (#2160p, #1440p, #1080p, #720p)
-          // allows EDM engine to download both high-res video + audio streams and merge them cleanly.
-          if (formatTag === "720p" || formatTag === "480p" || !formatTag) {
-            const muxed = formats.find(
-              (f) =>
-                f.url &&
-                f.qualityLabel &&
-                (!formatTag || f.qualityLabel.includes(formatTag.replace("p", "")))
-            );
-            if (muxed?.url && !formatTag) {
-              downloadUrl = muxed.url;
-            }
-          }
-        }
-      }
-    } catch {
-      // Fall back safely to watch page url with format fragment
-    }
-
-    if (label) {
-      label.textContent = "Sending...";
-    }
+    // Always use canonical YouTube watch URL with quality fragment for EDM's YtDlp pack
+    // Raw googlevideo.com URLs are throttled by YouTube to 64KB/s and lack merged audio
+    const cleanWatchUrl = window.location.href.split("#")[0];
+    const downloadUrl = isAudio
+      ? `${cleanWatchUrl}#${formatTag || "audio"}`
+      : formatTag
+      ? `${cleanWatchUrl}#${formatTag}`
+      : cleanWatchUrl;
 
     chrome.runtime.sendMessage(
       {
