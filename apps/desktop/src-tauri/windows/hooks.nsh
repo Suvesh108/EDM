@@ -8,6 +8,9 @@
   nsExec::Exec 'taskkill /F /IM edm-desktop-app.exe /T'
   nsExec::Exec 'taskkill /F /IM edm-nmh.exe /T'
   Sleep 300
+  ; Clean up stray executables from data directory
+  Delete "$LOCALAPPDATA\EDM\EDM.exe"
+  Delete "$LOCALAPPDATA\EDM\edm-desktop-app.exe"
 !macroend
 
 !macro NSIS_HOOK_POSTINSTALL
@@ -29,6 +32,23 @@ found_nmh:
   CreateDirectory "$LOCALAPPDATA\EDM"
   CreateDirectory "$APPDATA\EDM"
   CopyFiles /SILENT "$0" "$LOCALAPPDATA\EDM\edm-nmh.exe"
+
+  ; Ensure WebView2Loader.dll is co-located next to EDM.exe in $INSTDIR
+  IfFileExists "$INSTDIR\WebView2Loader.dll" done_webview2 0
+  IfFileExists "$INSTDIR\_up_\_up_\_up_\target\release\WebView2Loader.dll" 0 +3
+    CopyFiles /SILENT "$INSTDIR\_up_\_up_\_up_\target\release\WebView2Loader.dll" "$INSTDIR\WebView2Loader.dll"
+    Goto done_webview2
+  IfFileExists "$INSTDIR\resources\WebView2Loader.dll" 0 +3
+    CopyFiles /SILENT "$INSTDIR\resources\WebView2Loader.dll" "$INSTDIR\WebView2Loader.dll"
+    Goto done_webview2
+done_webview2:
+
+  ; Purge any stray executables from %LOCALAPPDATA%\EDM
+  Delete "$LOCALAPPDATA\EDM\EDM.exe"
+  Delete "$LOCALAPPDATA\EDM\edm-desktop-app.exe"
+  ; Mirror WebView2Loader.dll into %LOCALAPPDATA%\EDM for safety
+  IfFileExists "$INSTDIR\WebView2Loader.dll" 0 +2
+    CopyFiles /SILENT "$INSTDIR\WebView2Loader.dll" "$LOCALAPPDATA\EDM\WebView2Loader.dll"
 
   ; 1. Write Chromium manifest in $INSTDIR and $LOCALAPPDATA\EDM with relative path
   FileOpen $1 "$INSTDIR\com.edm.nmh.json" w

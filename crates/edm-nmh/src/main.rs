@@ -8,7 +8,7 @@ use edm_store::{DownloadRecord, Store};
 use std::env;
 use std::fs;
 use std::io::{self, Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
@@ -156,40 +156,91 @@ mod win_lock {
     }
 }
 
+/// Ensure WebView2Loader.dll is co-located with the target executable.
+/// Tauri/wry on Windows dynamically loads this DLL; without it, Windows PE loader
+/// displays "System Error: The code execution cannot proceed because WebView2Loader.dll was not found."
+fn ensure_webview2_loader(exe: &Path) {
+    let parent = match exe.parent() {
+        Some(p) => p,
+        None => return,
+    };
+    let target_dll = parent.join("WebView2Loader.dll");
+    if target_dll.exists() && target_dll.metadata().map(|m| m.len()).unwrap_or(0) > 1000 {
+        return;
+    }
+
+    let mut candidate_sources = Vec::new();
+
+    // 1. Check nested Tauri release bundle in exe's parent tree
+    candidate_sources.push(parent.join(r"_up_\_up_\_up_\target\release\WebView2Loader.dll"));
+    candidate_sources.push(parent.join(r"resources\WebView2Loader.dll"));
+
+    // 2. Check %LOCALAPPDATA%\EDM\_up_... and %LOCALAPPDATA%\EDM
+    if let Ok(local) = env::var("LOCALAPPDATA") {
+        candidate_sources.push(
+            PathBuf::from(&local)
+                .join("EDM")
+                .join("_up_")
+                .join("_up_")
+                .join("_up_")
+                .join("target")
+                .join("release")
+                .join("WebView2Loader.dll"),
+        );
+        candidate_sources.push(PathBuf::from(&local).join("EDM").join("WebView2Loader.dll"));
+    }
+
+    // 3. Check HKCU\Software\EDM InstallDir
+    #[cfg(windows)]
+    {
+        use windows_registry::CURRENT_USER;
+        if let Ok(key) = CURRENT_USER.open(r"Software\EDM") {
+            if let Ok(idir) = key.get_string("InstallDir") {
+                candidate_sources.push(PathBuf::from(&idir).join("WebView2Loader.dll"));
+                candidate_sources.push(PathBuf::from(&idir).join(r"_up_\_up_\_up_\target\release\WebView2Loader.dll"));
+            }
+        }
+    }
+
+    for src in candidate_sources {
+        if src.exists() && src.metadata().map(|m| m.len()).unwrap_or(0) > 1000 {
+            if let Ok(_) = fs::copy(&src, &target_dll) {
+                tracing::info!("Co-located WebView2Loader.dll to {}", target_dll.display());
+                return;
+            }
+        }
+    }
+}
+
 fn find_edm_exe() -> Option<PathBuf> {
     let current_exe = env::current_exe().ok()?;
     let dir = current_exe.parent()?;
 
     let exe_names = ["EDM.exe", "edm-desktop-app.exe", "edm.exe"];
 
-    // 1. Same directory as helper
-    for name in &exe_names {
-        let p = dir.join(name);
-        if p.exists() && p.is_file() {
-            return Some(p);
-        }
-    }
-
-    // 2. Parent directory (e.g. if helper is in resources/ or bin/)
-    if let Some(parent) = dir.parent() {
-        for name in &exe_names {
-            let p = parent.join(name);
-            if p.exists() && p.is_file() {
-                return Some(p);
-            }
-        }
-    }
-
-    // 3. Registry HKCU\Software\EDM -> InstallDir only (strictly joining known EDM executable names to prevent binary injection)
+    // 1. Registry HKCU\Software\EDM (authoritative installation record)
     #[cfg(windows)]
     {
         use windows_registry::CURRENT_USER;
         if let Ok(key) = CURRENT_USER.open(r"Software\EDM") {
+            // First check AppPath
+            if let Ok(app_path) = key.get_string("AppPath") {
+                let p = PathBuf::from(&app_path);
+                if p.exists() && p.is_file() {
+                    let fname = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                    if exe_names.iter().any(|name| name.eq_ignore_ascii_case(fname)) {
+                        ensure_webview2_loader(&p);
+                        return Some(p);
+                    }
+                }
+            }
+            // Next check InstallDir
             if let Ok(install_dir) = key.get_string("InstallDir") {
                 let idir = PathBuf::from(install_dir);
                 for name in &exe_names {
                     let p = idir.join(name);
                     if p.exists() && p.is_file() {
+                        ensure_webview2_loader(&p);
                         return Some(p);
                     }
                 }
@@ -197,33 +248,52 @@ fn find_edm_exe() -> Option<PathBuf> {
         }
     }
 
-    // 4. Standard Tauri current-user install folder (%LOCALAPPDATA%\Programs\EDM\EDM.exe)
+    // 2. Standard Tauri user install folder (%LOCALAPPDATA%\Programs\EDM\EDM.exe)
     if let Ok(local_app_data) = env::var("LOCALAPPDATA") {
         let p = PathBuf::from(&local_app_data).join("Programs").join("EDM").join("EDM.exe");
         if p.exists() && p.is_file() {
+            ensure_webview2_loader(&p);
             return Some(p);
-        }
-        let p2 = PathBuf::from(&local_app_data).join("EDM").join("EDM.exe");
-        if p2.exists() && p2.is_file() {
-            return Some(p2);
-        }
-        let p3 = PathBuf::from(&local_app_data).join("EDM").join("edm-desktop-app.exe");
-        if p3.exists() && p3.is_file() {
-            return Some(p3);
         }
     }
 
-    // 5. Per-machine install (%ProgramFiles%\EDM\EDM.exe, %ProgramFiles(x86)%\EDM\EDM.exe)
+    // 3. Per-machine install (%ProgramFiles%\EDM\EDM.exe, %ProgramFiles(x86)%\EDM\EDM.exe)
     if let Ok(prog_files) = env::var("ProgramFiles") {
         let p = PathBuf::from(prog_files).join("EDM").join("EDM.exe");
         if p.exists() && p.is_file() {
+            ensure_webview2_loader(&p);
             return Some(p);
         }
     }
     if let Ok(prog_files_x86) = env::var("ProgramFiles(x86)") {
         let p = PathBuf::from(prog_files_x86).join("EDM").join("EDM.exe");
         if p.exists() && p.is_file() {
+            ensure_webview2_loader(&p);
             return Some(p);
+        }
+    }
+
+    // 4. Same directory or parent directory as helper, UNLESS helper is in %LOCALAPPDATA%\EDM (data dir)
+    let is_data_dir = env::var("LOCALAPPDATA")
+        .map(|l| dir == PathBuf::from(l).join("EDM"))
+        .unwrap_or(false);
+
+    if !is_data_dir {
+        for name in &exe_names {
+            let p = dir.join(name);
+            if p.exists() && p.is_file() {
+                ensure_webview2_loader(&p);
+                return Some(p);
+            }
+        }
+        if let Some(parent) = dir.parent() {
+            for name in &exe_names {
+                let p = parent.join(name);
+                if p.exists() && p.is_file() {
+                    ensure_webview2_loader(&p);
+                    return Some(p);
+                }
+            }
         }
     }
 
@@ -231,6 +301,7 @@ fn find_edm_exe() -> Option<PathBuf> {
 }
 
 fn launch_detached(exe: &PathBuf, show_window: bool) {
+    ensure_webview2_loader(exe);
     let dir = exe.parent().unwrap_or(exe.as_path());
     let arg = if show_window { "--show-window" } else { "--background" };
 
@@ -419,13 +490,19 @@ fn repair_registration() -> Result<String, String> {
         .map_err(|e| format!("Failed to write {}: {}", ff_subkey, e))?;
 
     if let Some(app_exe) = find_edm_exe() {
-        if let Ok(edm_key) = CURRENT_USER.create(r"Software\EDM") {
-            let _ = edm_key.set_string("AppPath", app_exe.to_string_lossy());
-            if let Some(parent) = app_exe.parent() {
-                let _ = edm_key.set_string("InstallDir", parent.to_string_lossy());
+        let is_data_dir = env::var("LOCALAPPDATA")
+            .map(|l| app_exe.starts_with(PathBuf::from(l).join("EDM")))
+            .unwrap_or(false);
+
+        if !is_data_dir {
+            if let Ok(edm_key) = CURRENT_USER.create(r"Software\EDM") {
+                let _ = edm_key.set_string("AppPath", app_exe.to_string_lossy());
+                if let Some(parent) = app_exe.parent() {
+                    let _ = edm_key.set_string("InstallDir", parent.to_string_lossy());
+                }
+                let _ = edm_key.set_string("NmhPath", nmh_path.to_string_lossy());
+                let _ = edm_key.set_string("Version", env!("CARGO_PKG_VERSION"));
             }
-            let _ = edm_key.set_string("NmhPath", nmh_path.to_string_lossy());
-            let _ = edm_key.set_string("Version", env!("CARGO_PKG_VERSION"));
         }
     }
 
