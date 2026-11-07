@@ -18,6 +18,10 @@
     CopyFiles /SILENT "$INSTDIR\resources\edm-nmh.exe" "$INSTDIR\edm-nmh.exe"
     StrCpy $0 "$INSTDIR\edm-nmh.exe"
     Goto found_nmh
+  IfFileExists "$INSTDIR\_up_\_up_\_up_\target\release\edm-nmh.exe" 0 +3
+    CopyFiles /SILENT "$INSTDIR\_up_\_up_\_up_\target\release\edm-nmh.exe" "$INSTDIR\edm-nmh.exe"
+    StrCpy $0 "$INSTDIR\edm-nmh.exe"
+    Goto found_nmh
   StrCpy $0 "$INSTDIR\edm-nmh.exe"
 
 found_nmh:

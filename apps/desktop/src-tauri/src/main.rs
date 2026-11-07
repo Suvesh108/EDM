@@ -64,8 +64,15 @@ fn init_logging() {
 
     // Register panic hook
     std::panic::set_hook(Box::new(|info| {
-        tracing::error!("PANIC DETECTED: {:?}", info);
-        eprintln!("PANIC: {:?}", info);
+        let msg = if let Some(s) = info.payload().downcast_ref::<&str>() {
+            s.to_string()
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            format!("{:?}", info)
+        };
+        tracing::error!("PANIC DETECTED: {} at {:?}", msg, info.location());
+        eprintln!("PANIC DETECTED: {} at {:?}", msg, info.location());
     }));
 }
 
@@ -97,19 +104,39 @@ fn register_native_messaging_host() {
     let current_exe = std::env::current_exe().unwrap_or_default();
     let current_dir = current_exe.parent().unwrap_or(&app_dir);
 
-    // Look for edm-nmh in current_dir, resources subfolder, target directories, or app_dir
+    // Look for edm-nmh in current_dir, resources, _up_ bundle structure, or target directories
     let mut candidates = vec![
         current_dir.join("edm-nmh.exe"),
         current_dir.join("resources").join("edm-nmh.exe"),
+        current_dir.join("_up_").join("_up_").join("_up_").join("target").join("release").join("edm-nmh.exe"),
+        app_dir.join("resources").join("edm-nmh.exe"),
+        app_dir.join("_up_").join("_up_").join("_up_").join("target").join("release").join("edm-nmh.exe"),
     ];
 
-    if let Some(parent) = current_dir.parent() {
-        candidates.push(parent.join("edm-nmh.exe"));
-        candidates.push(parent.join("release").join("edm-nmh.exe"));
-        candidates.push(parent.join("debug").join("edm-nmh.exe"));
-        if let Some(grandparent) = parent.parent() {
-            candidates.push(grandparent.join("target").join("release").join("edm-nmh.exe"));
-            candidates.push(grandparent.join("target").join("debug").join("edm-nmh.exe"));
+    // Read registry for previously recorded paths
+    if let Ok(key) = CURRENT_USER.open(r"Software\EDM") {
+        if let Ok(np) = key.get_string("NmhPath") {
+            candidates.push(PathBuf::from(np));
+        }
+        if let Ok(idir) = key.get_string("InstallDir") {
+            let idir_p = PathBuf::from(idir);
+            candidates.push(idir_p.join("edm-nmh.exe"));
+            candidates.push(idir_p.join("resources").join("edm-nmh.exe"));
+            candidates.push(idir_p.join("_up_").join("_up_").join("_up_").join("target").join("release").join("edm-nmh.exe"));
+        }
+    }
+
+    // Check up to 6 levels of parent directories
+    let mut walk_dir = current_dir.to_path_buf();
+    for _ in 0..6 {
+        candidates.push(walk_dir.join("edm-nmh.exe"));
+        candidates.push(walk_dir.join("target").join("release").join("edm-nmh.exe"));
+        candidates.push(walk_dir.join("target").join("debug").join("edm-nmh.exe"));
+        candidates.push(walk_dir.join("resources").join("edm-nmh.exe"));
+        if let Some(p) = walk_dir.parent() {
+            walk_dir = p.to_path_buf();
+        } else {
+            break;
         }
     }
 

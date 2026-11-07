@@ -30,6 +30,14 @@ Set-Location $RootDir
 cargo build --release -p edm-nmh
 if ($LASTEXITCODE -ne 0) { throw "edm-nmh build failed" }
 
+$nmhBuilt = "$RootDir/target/release/edm-nmh.exe"
+if (Test-Path $nmhBuilt) {
+    if (Test-Path "$env:LOCALAPPDATA/EDM") {
+        Copy-Item -Path $nmhBuilt -Destination "$env:LOCALAPPDATA/EDM/edm-nmh.exe" -Force
+        Write-Host "Provisioned updated edm-nmh.exe to $env:LOCALAPPDATA/EDM/" -ForegroundColor Green
+    }
+}
+
 # 4. Ensure WebView2Loader.dll is in target/release
 Write-Host "`n[4/6] Verifying WebView2Loader.dll..." -ForegroundColor Yellow
 $wv2Source = Get-ChildItem -Path "$RootDir/target" -Recurse -Filter "WebView2Loader.dll" | Select-Object -First 1

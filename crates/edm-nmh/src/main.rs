@@ -231,43 +231,63 @@ fn find_edm_exe() -> Option<PathBuf> {
 }
 
 fn launch_detached(exe: &PathBuf, show_window: bool) {
+    let dir = exe.parent().unwrap_or(exe.as_path());
+    let arg = if show_window { "--show-window" } else { "--background" };
+
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x08000000;
         const DETACHED_PROCESS: u32 = 0x00000008;
-        const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x01000000;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
 
         let mut cmd = std::process::Command::new(exe);
-        if show_window {
-            cmd.arg("--show-window");
-        } else {
-            cmd.arg("--background");
-        }
-        cmd.stdin(std::process::Stdio::null())
+        cmd.arg(arg)
+            .current_dir(dir)
+            .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
+
         let flags = if show_window {
-            DETACHED_PROCESS | CREATE_BREAKAWAY_FROM_JOB
+            DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
         } else {
-            DETACHED_PROCESS | CREATE_BREAKAWAY_FROM_JOB | CREATE_NO_WINDOW
+            DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
         };
         cmd.creation_flags(flags);
-        let _ = cmd.spawn();
+
+        match cmd.spawn() {
+            Ok(child) => {
+                tracing::info!("Successfully spawned EDM desktop detached (PID: {}) at {}", child.id(), exe.display());
+                return;
+            }
+            Err(e) => {
+                tracing::warn!("Direct detached spawn of {} failed: {}. Falling back to cmd start...", exe.display(), e);
+            }
+        }
+
+        // Fallback: spawn via cmd /c start "" "exe" arg
+        let mut fallback = std::process::Command::new("cmd.exe");
+        fallback.args(&["/c", "start", "", &exe.to_string_lossy(), arg])
+            .current_dir(dir)
+            .creation_flags(CREATE_NO_WINDOW);
+        match fallback.spawn() {
+            Ok(_) => tracing::info!("Spawned EDM desktop via cmd start fallback at {}", exe.display()),
+            Err(e) => tracing::error!("Cmd start fallback failed for {}: {}", exe.display(), e),
+        }
     }
 
     #[cfg(not(windows))]
     {
         let mut cmd = std::process::Command::new(exe);
-        if show_window {
-            cmd.arg("--show-window");
-        } else {
-            cmd.arg("--background");
-        }
-        cmd.stdin(std::process::Stdio::null())
+        cmd.arg(arg)
+            .current_dir(dir)
+            .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
-        let _ = cmd.spawn();
+        match cmd.spawn() {
+            Ok(child) => tracing::info!("Spawned EDM desktop (PID: {})", child.id()),
+            Err(e) => tracing::error!("Failed to spawn EDM desktop: {}", e),
+        }
     }
 }
 
